@@ -1,6 +1,8 @@
 //! Application service orchestrating news ingestion, ranking, and discovery use cases.
 //!
-//! Follows Clean Architecture Application Layer principles.
+//! Follows Clean Architecture Application Layer principles:
+//! Implements 3-tier cascade discovery (Tier 1 Curated -> Tier 2 Automated -> Tier 3 Safety Fallback),
+//! cross-source deduplication, and persistent candidate consumption.
 
 use crate::domain::{
     canonicalize_url, classify_topic_family, compute_sha256, DiscoveryResult, ModuleConfig,
@@ -9,7 +11,10 @@ use crate::domain::{
 use crate::ports::{FeedFetcherPort, StoragePort};
 use crate::scoring::CandidateScorer;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::Arc;
+
+const OFFICIAL_SOURCES_RAW: &str = include_str!("../data/official_sources.json");
 
 pub struct DailyNewsService {
     fetcher: Arc<dyn FeedFetcherPort>,
@@ -73,6 +78,10 @@ impl DailyNewsService {
         ranked
     }
 
+    /// Tiered Cascading Discovery:
+    /// - Tier 1: Curated Queue from official sources (verified documentation & standards).
+    /// - Tier 2: Automated Feed from Hacker News / NewsNow with deduplication.
+    /// - Tier 3: Fail-Closed Safety Fallback when no fresh eligible items match criteria.
     pub fn discover(
         &self,
         limit: usize,
@@ -80,12 +89,104 @@ impl DailyNewsService {
         _to_date: Option<&str>,
         topics: Option<&[String]>,
     ) -> DiscoveryResult {
+        // --- 1. Tier 1: Curated Queue ---
+        let curated_raw: Vec<serde_json::Value> =
+            serde_json::from_str(OFFICIAL_SOURCES_RAW).unwrap_or_default();
+        let mut tier_1_candidates = Vec::new();
+        for val in curated_raw {
+            let cid = val["candidate_id"]
+                .as_str()
+                .or_else(|| val["id"].as_str())
+                .unwrap_or("")
+                .to_string();
+            if cid.is_empty() || self.storage.is_consumed(&cid) {
+                continue;
+            }
+            let topic = val["topic_family"]
+                .as_str()
+                .unwrap_or("agent_architecture")
+                .to_string();
+            if let Some(topic_filter) = topics {
+                if !topic_filter.iter().any(|t| t == &topic) {
+                    continue;
+                }
+            }
+            let title = val["title"].as_str().unwrap_or("").to_string();
+            let canonical = val["canonical_url"]
+                .as_str()
+                .or_else(|| val["url"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let pub_name = val["publisher"].as_str().unwrap_or("Official").to_string();
+            let pub_utc = val["published_at_utc"]
+                .as_str()
+                .or_else(|| val["published_at"].as_str())
+                .unwrap_or("2026-11-02T11:00:00Z")
+                .to_string();
+            let body = val["body"].as_str().map(str::to_string);
+            let chash = compute_sha256(&format!("{title}:{canonical}"));
+            let thash = compute_sha256(&title);
+
+            let mut cand = NormalizedCandidate {
+                candidate_id: cid,
+                canonical_url: canonical.clone(),
+                original_url: canonical,
+                title,
+                publisher: pub_name.clone(),
+                normalized_publisher: pub_name,
+                published_at_utc: pub_utc,
+                content_hash: chash,
+                title_hash: thash,
+                description: body.clone(),
+                body,
+                summary: None,
+                discussion_url: None,
+                topic_family: topic,
+                tags: vec!["official".to_string(), "documentation".to_string()],
+                scoring: None,
+            };
+            cand.scoring = Some(self.scorer.score_candidate(&cand));
+            tier_1_candidates.push(cand);
+        }
+
+        if !tier_1_candidates.is_empty() {
+            tier_1_candidates.sort_by(|a, b| {
+                let sa = a.scoring.as_ref().map(|s| s.total_score).unwrap_or(0.0);
+                let sb = b.scoring.as_ref().map(|s| s.total_score).unwrap_or(0.0);
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            tier_1_candidates.truncate(limit);
+            let count = tier_1_candidates.len();
+            self.storage.cache_candidates(&tier_1_candidates);
+            return DiscoveryResult {
+                tier: "tier_1_curated".to_string(),
+                status: "ELIGIBLE".to_string(),
+                count,
+                candidates: tier_1_candidates,
+                source_file: Some("data/official_sources.json".to_string()),
+                reason: None,
+                diagnostics: json!({
+                    "tier_1_checked": true,
+                    "engine": "rust-native"
+                }),
+            };
+        }
+
+        // --- 2. Tier 2: Automated Feed ---
         let raw = self.get_feed(limit.max(30));
-        let mut candidates = Vec::new();
+        let mut seen_content_hashes = HashSet::new();
+        let mut seen_title_hashes = HashSet::new();
+        let mut tier_2_candidates = Vec::new();
 
         for r in &raw {
             let cand = self.normalize_item(r);
             if self.storage.is_consumed(&cand.candidate_id) {
+                continue;
+            }
+            if !seen_content_hashes.insert(cand.content_hash.clone()) {
+                continue;
+            }
+            if !seen_title_hashes.insert(cand.title_hash.clone()) {
                 continue;
             }
             if let Some(topic_filter) = topics {
@@ -93,22 +194,42 @@ impl DailyNewsService {
                     continue;
                 }
             }
-            candidates.push(cand);
+            tier_2_candidates.push(cand);
         }
 
-        let ranked = self.scorer.rank_candidates(candidates, limit);
-        self.storage.cache_candidates(&ranked);
-        let count = ranked.len();
+        let ranked = self.scorer.rank_candidates(tier_2_candidates, limit);
+        if !ranked.is_empty() {
+            self.storage.cache_candidates(&ranked);
+            let count = ranked.len();
+            return DiscoveryResult {
+                tier: "tier_2_automated".to_string(),
+                status: "ELIGIBLE".to_string(),
+                count,
+                candidates: ranked,
+                source_file: Some("live:hackernews".to_string()),
+                reason: None,
+                diagnostics: json!({
+                    "tier_1_checked": true,
+                    "tier_2_checked": true,
+                    "engine": "rust-native"
+                }),
+            };
+        }
 
+        // --- 3. Tier 3: Safety Fallback ---
         DiscoveryResult {
-            tier: "tier_2_automated".to_string(),
-            status: "ELIGIBLE".to_string(),
-            count,
-            candidates: ranked,
-            source_file: Some("live:hackernews".to_string()),
-            reason: None,
+            tier: "tier_3_safety_fallback".to_string(),
+            status: "FAIL_CLOSED".to_string(),
+            count: 0,
+            candidates: vec![],
+            source_file: None,
+            reason: Some(
+                "No fresh candidates found matching topic or window criteria".to_string(),
+            ),
             diagnostics: json!({
+                "tier_1_checked": true,
                 "tier_2_checked": true,
+                "tier_3_triggered": true,
                 "engine": "rust-native"
             }),
         }
@@ -215,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_service_discover_and_consume() {
+    fn test_tiered_discovery_cascade() {
         let fetcher = Arc::new(MockFetcher);
         let storage = Arc::new(MockStorage {
             consumed: RwLock::new(std::collections::HashSet::new()),
@@ -223,21 +344,30 @@ mod tests {
         let scorer = CandidateScorer::default();
         let service = DailyNewsService::new(fetcher, storage.clone(), scorer);
 
-        let res = service.discover(5, None, None, None);
-        assert_eq!(res.count, 1);
-        assert_eq!(res.tier, "tier_2_automated");
-        assert_eq!(res.candidates[0].canonical_url, "https://example.com/item1");
-        assert_eq!(
-            res.candidates[0].discussion_url.as_deref(),
-            Some("https://news.ycombinator.com/item?id=123")
-        );
+        // 1. Initial discover returns Tier 1 curated items
+        let res1 = service.discover(2, None, None, Some(&["context_memory".to_string()]));
+        assert_eq!(res1.tier, "tier_1_curated");
+        assert_eq!(res1.status, "ELIGIBLE");
+        assert!(res1.count > 0);
 
-        let cand_id = &res.candidates[0].candidate_id;
-        let consumed = service.consume(&[cand_id.clone()]).unwrap();
-        assert_eq!(consumed, 1);
+        // 2. Consume all items in official_sources.json
+        let all_curated: Vec<serde_json::Value> =
+            serde_json::from_str(OFFICIAL_SOURCES_RAW).unwrap_or_default();
+        let all_ids: Vec<String> = all_curated
+            .iter()
+            .filter_map(|v| {
+                v["candidate_id"]
+                    .as_str()
+                    .or_else(|| v["id"].as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        service.consume(&all_ids).unwrap();
 
-        // After consumption, item is excluded
-        let res2 = service.discover(5, None, None, None);
-        assert_eq!(res2.count, 0);
+        // 3. Next discover has no curated items left, so it cascades to Tier 2 automated
+        let res2 = service.discover(2, None, None, None);
+        assert_eq!(res2.tier, "tier_2_automated");
+        assert_eq!(res2.status, "ELIGIBLE");
+        assert_eq!(res2.candidates[0].canonical_url, "https://example.com/item1");
     }
 }
