@@ -2,6 +2,7 @@
 
 Clean Architecture Layer: Application Business Rules (Use Cases).
 Tier 1 (Curated Queue & Official Specs) -> Tier 2 (Automated Live Feeds) -> Tier 3 (Fail-Closed).
+Depends strictly on abstract Outbound Ports via typing.Protocol (DIP).
 """
 
 from __future__ import annotations
@@ -13,8 +14,13 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from .domain import DiscoveryResult, NormalizedCandidate
 from .fetcher import DEFAULT_SOURCES, FeedFetcher
 from .normalizer import NewsNormalizer
+from .ports import (
+    CandidateScorerPort,
+    FeedFetcherPort,
+    NewsNormalizerPort,
+    NewsStateStorePort,
+)
 from .scoring import CandidateScorer
-from .storage import NewsStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +30,10 @@ class TieredContentDiscovery:
 
     def __init__(
         self,
-        store: NewsStateStore,
-        fetcher: Optional[FeedFetcher] = None,
-        normalizer: Optional[NewsNormalizer] = None,
-        scorer: Optional[CandidateScorer] = None,
+        store: NewsStateStorePort,
+        fetcher: Optional[FeedFetcherPort] = None,
+        normalizer: Optional[NewsNormalizerPort] = None,
+        scorer: Optional[CandidateScorerPort] = None,
         max_age_days: int = 7,
         require_latest_news: bool = True,
     ) -> None:
