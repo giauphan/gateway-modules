@@ -1,8 +1,77 @@
 //! Domain models, value objects, and sanitization for Daily News.
+//!
+//! Pure domain logic with zero external framework or transport dependencies.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+fn default_newsnow_url() -> String {
+    "http://127.0.0.1:4444".to_string()
+}
+fn default_freshness() -> f64 {
+    48.0
+}
+fn default_max_age_days() -> u32 {
+    7
+}
+fn default_require_latest() -> bool {
+    true
+}
+fn default_sources() -> Vec<String> {
+    vec![
+        "hackernews".to_string(),
+        "github".to_string(),
+        "producthunt".to_string(),
+    ]
+}
+fn default_redis_url() -> String {
+    "redis://localhost:6379/0".to_string()
+}
+fn default_redis_key() -> String {
+    "news:incoming".to_string()
+}
+fn default_redis_type() -> String {
+    "stream".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleConfig {
+    #[serde(default = "default_newsnow_url")]
+    pub newsnow_url: String,
+    #[serde(default = "default_freshness")]
+    pub freshness_window_hours: f64,
+    #[serde(default = "default_max_age_days")]
+    pub max_age_days: u32,
+    #[serde(default = "default_require_latest")]
+    pub require_latest_news: bool,
+    #[serde(default = "default_sources")]
+    pub default_sources: Vec<String>,
+    #[serde(default)]
+    pub redis_enabled: bool,
+    #[serde(default = "default_redis_url")]
+    pub redis_url: String,
+    #[serde(default = "default_redis_key")]
+    pub redis_key: String,
+    #[serde(default = "default_redis_type")]
+    pub redis_type: String,
+}
+
+impl Default for ModuleConfig {
+    fn default() -> Self {
+        Self {
+            newsnow_url: default_newsnow_url(),
+            freshness_window_hours: default_freshness(),
+            max_age_days: default_max_age_days(),
+            require_latest_news: default_require_latest(),
+            default_sources: default_sources(),
+            redis_enabled: false,
+            redis_url: default_redis_url(),
+            redis_key: default_redis_key(),
+            redis_type: default_redis_type(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoringAxes {

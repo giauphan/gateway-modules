@@ -1,0 +1,35 @@
+//! Outbound Port interfaces for Daily News.
+//!
+//! Follows Clean Architecture Dependency Inversion Principle (DIP):
+//! Core application services depend on these traits, while external
+//! HTTP fetchers and storage adapters implement them.
+
+use crate::domain::{ModuleConfig, NormalizedCandidate, RawNewsItem};
+
+pub trait FeedFetcherPort: Send + Sync {
+    /// Ingest raw news items from external feeds (Hacker News, NewsNow, etc.).
+    fn fetch_raw_items(&self, limit: usize) -> Result<Vec<RawNewsItem>, String>;
+}
+
+pub trait StoragePort: Send + Sync {
+    /// Check if a candidate ID has already been consumed/processed.
+    fn is_consumed(&self, candidate_id: &str) -> bool;
+
+    /// Mark a batch of candidate IDs as consumed.
+    fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String>;
+
+    /// Count how many items have been marked consumed.
+    fn consumed_count(&self) -> usize;
+
+    /// Load the active module configuration.
+    fn load_config(&self) -> ModuleConfig;
+
+    /// Save updated module configuration.
+    fn save_config(&self, config: &ModuleConfig) -> Result<(), String>;
+
+    /// Cache normalized candidates for quick access.
+    fn cache_candidates(&self, candidates: &[NormalizedCandidate]);
+
+    /// Retrieve cached candidates.
+    fn get_cached_candidates(&self) -> Vec<NormalizedCandidate>;
+}
