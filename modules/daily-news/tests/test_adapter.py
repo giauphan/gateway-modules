@@ -68,6 +68,57 @@ class TestAdapter(unittest.TestCase):
         body = json.loads(resp["body"])
         self.assertEqual(body["status"], "ok")
 
+    def test_discover_endpoint_topic_filtering(self):
+        curated = [
+            {
+                "id": "c_tool",
+                "url": "https://mcp.io/tool-spec",
+                "title": "Model Context Protocol Tool Schema Spec",
+                "publisher": "MCP",
+                "published_at": self.recent_ts,
+                "body": "Tool call schemas and function parameters.",
+            },
+            {
+                "id": "c_debug",
+                "url": "https://debug.io/trace",
+                "title": "Debugging Flaky Test Retries in CI",
+                "publisher": "DebugIO",
+                "published_at": self.recent_ts,
+                "body": "Crash traces and retry loops.",
+            },
+        ]
+
+        # 1. Singular topic filter
+        req_single = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({
+                "curated_candidates": curated,
+                "topic": "agent_tool_use",
+            }),
+        }
+        resp = handle_request(req_single)
+        self.assertEqual(resp["status"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["status"], "ELIGIBLE")
+        self.assertEqual(len(body["candidates"]), 1)
+        self.assertEqual(body["candidates"][0]["topic_family"], "agent_tool_use")
+
+        # 2. Plural topics filter
+        req_multi = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({
+                "curated_candidates": curated,
+                "topics": ["agent_tool_use", "debugging_reliability"],
+            }),
+        }
+        resp = handle_request(req_multi)
+        self.assertEqual(resp["status"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["status"], "ELIGIBLE")
+        self.assertEqual(len(body["candidates"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

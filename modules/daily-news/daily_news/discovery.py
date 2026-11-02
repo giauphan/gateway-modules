@@ -53,6 +53,7 @@ class TieredContentDiscovery:
         consumed_ids: Set[str],
         reference_time: datetime,
         limit: int,
+        topics: Optional[Sequence[str]] = None,
     ) -> List[Dict[str, Any]]:
         normalized, _ = self.normalizer.ingest_and_normalize(
             raw_items,
@@ -62,6 +63,19 @@ class TieredContentDiscovery:
         unconsumed: List[NormalizedCandidate] = [
             c for c in normalized if c.candidate_id not in consumed_ids
         ]
+
+        if topics:
+            targets = {t.strip().lower() for t in topics if t and str(t).strip()}
+            if targets:
+                unconsumed = [
+                    c for c in unconsumed
+                    if (
+                        c.topic_family.lower() in targets
+                        or any(tag.lower() in targets for tag in c.tags)
+                        or any(tgt in c.topic_family.lower() for tgt in targets)
+                        or any(tgt in c.title.lower() for tgt in targets)
+                    )
+                ]
 
         if not unconsumed:
             return []
@@ -81,15 +95,18 @@ class TieredContentDiscovery:
         curated_feed: Optional[List[Dict[str, Any]]] = None,
         feed_sources: Optional[Sequence[str]] = None,
         official_only: bool = False,
+        topics: Optional[Sequence[str]] = None,
     ) -> DiscoveryResult:
-        """Execute tiered discovery with fallback and deterministic outcome."""
+        """Execute tiered discovery with fallback, deterministic outcome, and topic filtering."""
         ref_time = datetime.now(timezone.utc)
         consumed_ids = self.store.get_consumed_ids()
+        norm_topics = [str(t).strip() for t in topics if str(t).strip()] if topics else None
         diagnostics: Dict[str, Any] = {
             "consumed_ids_count": len(consumed_ids),
             "tier_1_checked": False,
             "tier_2_checked": False,
             "official_only": official_only,
+            "topics_filter": norm_topics,
             "require_latest_news": self.require_latest_news,
             "max_age_days": self.max_age_days,
             "reference_time": ref_time.isoformat(),
@@ -98,7 +115,9 @@ class TieredContentDiscovery:
         # --- Tier 1 Explicit: Caller-provided curated feed OR explicit official_only request ---
         if curated_feed is not None and len(curated_feed) > 0:
             diagnostics["tier_1_checked"] = True
-            t1_ranked = self._filter_and_score(curated_feed, consumed_ids, ref_time, count)
+            t1_ranked = self._filter_and_score(
+                curated_feed, consumed_ids, ref_time, count, topics=norm_topics
+            )
             diagnostics["tier_1_valid_count"] = len(t1_ranked)
             if t1_ranked:
                 self.store.save_cached_candidates(t1_ranked)
@@ -113,14 +132,16 @@ class TieredContentDiscovery:
                 tier="none",
                 status="NO_ELIGIBLE_TOPIC",
                 candidates=[],
-                reason="All candidates in curated feed were consumed or dropped",
+                reason="All candidates in curated feed were consumed, stale, or dropped by topic filter",
                 diagnostics=diagnostics,
             )
 
         if official_only or (feed_sources is not None and list(feed_sources) == ["official"]):
             diagnostics["tier_1_checked"] = True
             official_pool = self.fetcher.fetch_official_sources()
-            t1_ranked = self._filter_and_score(official_pool, consumed_ids, ref_time, count)
+            t1_ranked = self._filter_and_score(
+                official_pool, consumed_ids, ref_time, count, topics=norm_topics
+            )
             diagnostics["tier_1_valid_count"] = len(t1_ranked)
             if t1_ranked:
                 self.store.save_cached_candidates(t1_ranked)
@@ -135,7 +156,7 @@ class TieredContentDiscovery:
                 tier="none",
                 status="NO_ELIGIBLE_TOPIC",
                 candidates=[],
-                reason="No fresh unconsumed candidates found in official documentation sources",
+                reason="No fresh unconsumed candidates found in official documentation sources matching criteria",
                 diagnostics=diagnostics,
             )
 
@@ -150,7 +171,9 @@ class TieredContentDiscovery:
         diagnostics["tier_2_raw_count"] = len(live_raw)
 
         if live_raw:
-            t2_ranked = self._filter_and_score(live_raw, consumed_ids, ref_time, count)
+            t2_ranked = self._filter_and_score(
+                live_raw, consumed_ids, ref_time, count, topics=norm_topics
+            )
             diagnostics["tier_2_valid_count"] = len(t2_ranked)
             if t2_ranked:
                 self.store.save_cached_candidates(t2_ranked)
@@ -166,7 +189,9 @@ class TieredContentDiscovery:
         diagnostics["tier_1_fallback_checked"] = True
         official_pool = self.fetcher.fetch_official_sources()
         if official_pool:
-            t1_fallback_ranked = self._filter_and_score(official_pool, consumed_ids, ref_time, count)
+            t1_fallback_ranked = self._filter_and_score(
+                official_pool, consumed_ids, ref_time, count, topics=norm_topics
+            )
             diagnostics["tier_1_fallback_valid_count"] = len(t1_fallback_ranked)
             if t1_fallback_ranked:
                 self.store.save_cached_candidates(t1_fallback_ranked)
@@ -194,6 +219,18 @@ class TieredContentDiscovery:
                         pass
             cached_unconsumed = fresh_cached
 
+        if cached_unconsumed and norm_topics:
+            target_set = {t.lower() for t in norm_topics}
+            cached_unconsumed = [
+                c for c in cached_unconsumed
+                if (
+                    str(c.get("topic_family") or "").lower() in target_set
+                    or any(str(tag).lower() in target_set for tag in c.get("tags", []))
+                    or any(tgt in str(c.get("topic_family") or "").lower() for tgt in target_set)
+                    or any(tgt in str(c.get("title") or "").lower() for tgt in target_set)
+                )
+            ]
+
         if cached_unconsumed:
             return DiscoveryResult(
                 tier="tier_2_cache",
@@ -204,10 +241,15 @@ class TieredContentDiscovery:
             )
 
         # --- Tier 3: Clean Fail-Closed ---
+        fail_reason = (
+            f"No eligible candidates matched the requested topic filter(s): {norm_topics}"
+            if norm_topics
+            else "All candidates were consumed, stale, or dropped by safety/domain policies"
+        )
         return DiscoveryResult(
             tier="none",
             status="NO_ELIGIBLE_TOPIC",
             candidates=[],
-            reason="All candidates were consumed, stale, or dropped by safety/domain policies",
+            reason=fail_reason,
             diagnostics=diagnostics,
         )

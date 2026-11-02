@@ -119,6 +119,53 @@ class TestTieredDiscovery(unittest.TestCase):
         self.assertEqual(res.status, "NO_ELIGIBLE_TOPIC")
         self.assertEqual(len(res.candidates), 0)
 
+    def test_topic_filter_matching_and_fail_closed(self):
+        class MultiTopicFetcher:
+            def __init__(self, recent_ts):
+                self.recent_ts = recent_ts
+
+            def fetch_official_sources(self):
+                return []
+
+            def fetch_newsnow_feed(self, sources):
+                return [
+                    {
+                        "id": "t1",
+                        "url": "https://mcp.io/spec",
+                        "title": "Model Context Protocol Tool Schema Update",
+                        "published_at": self.recent_ts,
+                        "description": "MCP function calls and tool schemas",
+                    },
+                    {
+                        "id": "t2",
+                        "url": "https://ci.dev/flaky",
+                        "title": "Debugging Flaky Test Retries in CI",
+                        "published_at": self.recent_ts,
+                        "description": "Flaky CI loop debug and crash traces",
+                    },
+                ]
+
+        mock_fetcher = MultiTopicFetcher(self.recent_ts)
+        disc = TieredContentDiscovery(store=self.store, fetcher=mock_fetcher, require_latest_news=True)
+
+        # 1. Filter by "agent_tool_use"
+        res_tool = disc.discover_candidates(count=5, topics=["agent_tool_use"])
+        self.assertTrue(res_tool.is_eligible)
+        self.assertEqual(len(res_tool.candidates), 1)
+        self.assertEqual(res_tool.candidates[0]["topic_family"], "agent_tool_use")
+        self.assertEqual(res_tool.diagnostics["topics_filter"], ["agent_tool_use"])
+
+        # 2. Filter by multiple topics
+        res_multi = disc.discover_candidates(count=5, topics=["agent_tool_use", "debugging_reliability"])
+        self.assertTrue(res_multi.is_eligible)
+        self.assertEqual(len(res_multi.candidates), 2)
+
+        # 3. Filter by non-existent topic fails closed
+        res_none = disc.discover_candidates(count=5, topics=["crypto_blockchain_unknown"])
+        self.assertFalse(res_none.is_eligible)
+        self.assertEqual(res_none.status, "NO_ELIGIBLE_TOPIC")
+        self.assertIn("crypto_blockchain_unknown", res_none.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

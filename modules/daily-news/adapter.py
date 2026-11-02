@@ -63,6 +63,18 @@ def html_resp(status: int, content: str) -> Dict[str, Any]:
     }
 
 
+def extract_topics(payload: Dict[str, Any]) -> Optional[List[str]]:
+    """Extract topic or list of topics from request payload."""
+    raw = payload.get("topics") or payload.get("topic")
+    if isinstance(raw, list):
+        items = [str(t).strip() for t in raw if str(t).strip()]
+        return items if items else None
+    if isinstance(raw, str) and raw.strip():
+        items = [t.strip() for t in raw.split(",") if t.strip()]
+        return items if items else None
+    return None
+
+
 def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     path = str(req.get("path") or "").rstrip("/")
     method = str(req.get("method") or "GET").upper()
@@ -129,7 +141,8 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     # 4. Chat Completions (News Summary)
     if path.endswith("/chat/completions"):
         limit = body.get("limit", 3)
-        res = discovery.discover_candidates(count=limit)
+        topics = extract_topics(body)
+        res = discovery.discover_candidates(count=limit, topics=topics)
         items = res.candidates
         if items:
             lines = [f"### Daily News Briefing ({len(items)} items):\n"]
@@ -174,6 +187,16 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             raw_items = fetcher.fetch_newsnow_feed(sources=sources)
 
         normalized, diagnostics = normalizer.ingest_and_normalize(raw_items)
+        topics = extract_topics(body)
+        if topics:
+            norm_targets = {t.lower() for t in topics}
+            normalized = [
+                c for c in normalized
+                if c.topic_family.lower() in norm_targets
+                or any(t.lower() in norm_targets for t in c.tags)
+                or any(nt in c.topic_family.lower() for nt in norm_targets)
+                or any(nt in c.title.lower() for nt in norm_targets)
+            ]
         limit = int(body.get("limit") or 10)
         ranked = scorer.rank_candidates(normalized, limit=limit)
         return json_resp(200, {
@@ -189,11 +212,13 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         curated = body.get("curated_candidates")
         sources = body.get("sources")
         official_only = bool(body.get("official_only", False) or (isinstance(sources, list) and sources == ["official"]))
+        topics = extract_topics(body)
         res = discovery.discover_candidates(
             count=count,
             curated_feed=curated,
             feed_sources=sources,
             official_only=official_only,
+            topics=topics,
         )
         return json_resp(200, res.to_dict())
 
