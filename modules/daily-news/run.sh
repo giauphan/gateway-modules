@@ -24,5 +24,5 @@ if command -v cargo >/dev/null 2>&1; then
     exec cargo run --release --manifest-path "$SCRIPT_DIR/Cargo.toml" -- "$@"
 fi
 
-echo '{"status": 500, "body": "{\"error\": \"Daily News native Rust binary (daily-news) not found and cargo is not installed\"}"}'
+echo '{"status": 500, "body": "{\"error\": \"Daily News native Rust binary (daily-news) not found and cargo is not installed\"}"}' >&2
 exit 1

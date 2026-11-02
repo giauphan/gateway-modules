@@ -25,7 +25,10 @@ fn test_parse_raw_entry_formats() {
     assert_eq!(item1.title, "Autonomous Coding Agent Benchmark Matrix");
     assert_eq!(item1.url, "https://example.com/benchmark");
     assert_eq!(item1.publisher.as_deref(), Some("AgentBench"));
-    assert_eq!(item1.discussion_url.as_deref(), Some("https://news.ycombinator.com/item?id=99999"));
+    assert_eq!(
+        item1.discussion_url.as_deref(),
+        Some("https://news.ycombinator.com/item?id=99999")
+    );
 
     // 2. Stream message ID timestamp fallback (<epoch_ms>-<seq>)
     // 1730541600000 ms = 1730541600 seconds (2024-11-02 10:00:00 UTC)

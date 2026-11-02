@@ -21,7 +21,11 @@ impl RedisFeedProvider {
     pub fn new(redis_url: &str, key: &str, channel_type: &str) -> Self {
         Self {
             redis_url: redis_url.to_string(),
-            key: if key.is_empty() { "news:incoming".to_string() } else { key.to_string() },
+            key: if key.is_empty() {
+                "news:incoming".to_string()
+            } else {
+                key.to_string()
+            },
             channel_type: channel_type.to_lowercase(),
             timeout: Duration::from_secs(2),
         }
@@ -32,9 +36,23 @@ impl RedisFeedProvider {
         let host_port = clean.split('/').next().unwrap_or(clean);
         if let Some((h, p)) = host_port.split_once(':') {
             let port = p.parse().unwrap_or(6379);
-            (if h.is_empty() { "127.0.0.1".to_string() } else { h.to_string() }, port)
+            (
+                if h.is_empty() {
+                    "127.0.0.1".to_string()
+                } else {
+                    h.to_string()
+                },
+                port,
+            )
         } else {
-            (if host_port.is_empty() { "127.0.0.1".to_string() } else { host_port.to_string() }, 6379)
+            (
+                if host_port.is_empty() {
+                    "127.0.0.1".to_string()
+                } else {
+                    host_port.to_string()
+                },
+                6379,
+            )
         }
     }
 
@@ -47,7 +65,9 @@ impl RedisFeedProvider {
         };
 
         let stream = match TcpStream::connect_timeout(
-            socket_addrs.first().unwrap_or(&"127.0.0.1:6379".parse().unwrap()),
+            socket_addrs
+                .first()
+                .unwrap_or(&"127.0.0.1:6379".parse().unwrap()),
             self.timeout,
         ) {
             Ok(s) => s,
@@ -174,7 +194,10 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         .map(str::to_string);
 
     let mut extra = HashMap::new();
-    extra.insert("channel_type".to_string(), Value::String(ch_type.to_string()));
+    extra.insert(
+        "channel_type".to_string(),
+        Value::String(ch_type.to_string()),
+    );
     extra.insert("redis_key".to_string(), Value::String(key.to_string()));
     extra.insert("msg_id".to_string(), Value::String(msg_id.to_string()));
 
@@ -183,8 +206,14 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         url: effective_url,
         title,
         published_at: pub_at,
-        publisher: obj.get("publisher").and_then(|v| v.as_str()).map(str::to_string),
-        author: obj.get("author").and_then(|v| v.as_str()).map(str::to_string),
+        publisher: obj
+            .get("publisher")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        author: obj
+            .get("author")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         description: body.clone(),
         body,
         discussion_url: disc_url,
@@ -193,13 +222,34 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         content_kind: Some("news".to_string()),
         updated_at: None,
         hook: obj.get("hook").and_then(|v| v.as_str()).map(str::to_string),
-        viewer_question: obj.get("viewer_question").and_then(|v| v.as_str()).map(str::to_string),
-        symptom: obj.get("symptom").and_then(|v| v.as_str()).map(str::to_string),
-        root_cause: obj.get("root_cause").and_then(|v| v.as_str()).map(str::to_string),
-        remedy: obj.get("remedy").and_then(|v| v.as_str()).map(str::to_string),
-        evidence_excerpt: obj.get("evidence_excerpt").and_then(|v| v.as_str()).map(str::to_string),
-        source_snapshot: obj.get("source_snapshot").and_then(|v| v.as_str()).map(str::to_string),
-        snapshot_sha256: obj.get("snapshot_sha256").and_then(|v| v.as_str()).map(str::to_string),
+        viewer_question: obj
+            .get("viewer_question")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        symptom: obj
+            .get("symptom")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        root_cause: obj
+            .get("root_cause")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        remedy: obj
+            .get("remedy")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        evidence_excerpt: obj
+            .get("evidence_excerpt")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        source_snapshot: obj
+            .get("source_snapshot")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        snapshot_sha256: obj
+            .get("snapshot_sha256")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         extra,
     })
 }
@@ -209,7 +259,11 @@ fn read_line<R: BufRead>(reader: &mut R) -> Option<String> {
     if reader.read_line(&mut line).ok()? == 0 {
         return None;
     }
-    Some(line.trim_end_matches("\r\n").trim_end_matches('\n').to_string())
+    Some(
+        line.trim_end_matches("\r\n")
+            .trim_end_matches('\n')
+            .to_string(),
+    )
 }
 
 fn read_resp_bulk_string<R: BufRead>(reader: &mut R) -> Option<String> {
@@ -258,8 +312,8 @@ fn read_resp_stream_entries<R: BufRead>(reader: &mut R) -> Option<Vec<(String, S
         }
         let msg_id = read_resp_bulk_string(reader).unwrap_or_default();
         let fields_line = read_line(reader)?;
-        let num_fields: usize = if fields_line.starts_with('*') {
-            fields_line[1..].parse().unwrap_or(0)
+        let num_fields: usize = if let Some(stripped) = fields_line.strip_prefix('*') {
+            stripped.parse().unwrap_or(0)
         } else {
             0
         };

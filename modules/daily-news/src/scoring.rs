@@ -4,42 +4,107 @@ use crate::date::parse_iso_to_epoch;
 use crate::domain::{CandidateScoring, NormalizedCandidate, ScoringAxes};
 
 pub const TIER_1_PUBLISHERS: &[&str] = &[
-    "reuters", "ap", "bloomberg", "wsj", "ft", "nytimes", "washingtonpost", "anthropic", "openai",
+    "reuters",
+    "ap",
+    "bloomberg",
+    "wsj",
+    "ft",
+    "nytimes",
+    "washingtonpost",
+    "anthropic",
+    "openai",
 ];
 
 pub const TIER_2_PUBLISHERS: &[&str] = &[
-    "theverge", "techcrunch", "wired", "arstechnica", "bbc", "npr", "cnbc", "guardian",
-    "github", "hackernews", "ycombinator", "producthunt",
+    "theverge",
+    "techcrunch",
+    "wired",
+    "arstechnica",
+    "bbc",
+    "npr",
+    "cnbc",
+    "guardian",
+    "github",
+    "hackernews",
+    "ycombinator",
+    "producthunt",
 ];
 
 pub const VISUAL_KEYWORDS: &[&str] = &[
-    "chart", "graph", "photo", "video", "announced", "design", "prototype",
-    "revealed", "leaked", "interface", "hardware", "demo", "release",
+    "chart",
+    "graph",
+    "photo",
+    "video",
+    "announced",
+    "design",
+    "prototype",
+    "revealed",
+    "leaked",
+    "interface",
+    "hardware",
+    "demo",
+    "release",
 ];
 
 pub const INTEREST_KEYWORDS: &[&str] = &[
-    "ai", "artificial intelligence", "tech", "technology", "software", "hardware",
-    "robot", "robotics", "machine learning", "deep learning", "llm", "model",
-    "gpt", "claude", "gemini", "openai", "google", "microsoft", "apple", "nvidia",
-    "chip", "semiconductor", "cyber", "security", "code", "coding", "developer",
-    "app", "application", "data", "computing", "algorithm", "startup", "web",
-    "digital", "cloud", "quantum", "browser", "linux", "open-source", "git", "api",
-    "rust", "python", "agent", "agents",
+    "ai",
+    "artificial intelligence",
+    "tech",
+    "technology",
+    "software",
+    "hardware",
+    "robot",
+    "robotics",
+    "machine learning",
+    "deep learning",
+    "llm",
+    "model",
+    "gpt",
+    "claude",
+    "gemini",
+    "openai",
+    "google",
+    "microsoft",
+    "apple",
+    "nvidia",
+    "chip",
+    "semiconductor",
+    "cyber",
+    "security",
+    "code",
+    "coding",
+    "developer",
+    "app",
+    "application",
+    "data",
+    "computing",
+    "algorithm",
+    "startup",
+    "web",
+    "digital",
+    "cloud",
+    "quantum",
+    "browser",
+    "linux",
+    "open-source",
+    "git",
+    "api",
+    "rust",
+    "python",
+    "agent",
+    "agents",
 ];
 
+#[derive(Default)]
 pub struct CandidateScorer {
     pub reference_time_epoch: Option<u64>,
 }
 
-impl Default for CandidateScorer {
-    fn default() -> Self {
-        Self { reference_time_epoch: None }
-    }
-}
-
 impl CandidateScorer {
     pub fn new(reference_epoch: Option<u64>) -> Self {
-        Self { reference_time_epoch: reference_epoch }
+        Self {
+            reference_time_epoch: reference_epoch,
+        }
     }
 
     fn current_epoch(&self) -> u64 {
@@ -74,9 +139,15 @@ impl CandidateScorer {
         let p = norm_pub.to_lowercase();
         let p_trimmed = p.trim();
         let p_compact = p_trimmed.replace(' ', "");
-        if TIER_1_PUBLISHERS.iter().any(|&t| p_trimmed == t || p_compact == t) {
+        if TIER_1_PUBLISHERS
+            .iter()
+            .any(|&t| p_trimmed == t || p_compact == t)
+        {
             1.0
-        } else if TIER_2_PUBLISHERS.iter().any(|&t| p_trimmed == t || p_compact == t) {
+        } else if TIER_2_PUBLISHERS
+            .iter()
+            .any(|&t| p_trimmed == t || p_compact == t)
+        {
             0.8
         } else if !p_trimmed.is_empty() && p_trimmed != "unknown" {
             0.5
@@ -100,14 +171,18 @@ impl CandidateScorer {
 
         let has_quotes = text.contains('"') || text.contains('\'');
         let has_numbers = text.chars().any(|c| c.is_ascii_digit());
-        let bonus: f64 = (if has_quotes { 0.1 } else { 0.0 }) + (if has_numbers { 0.1 } else { 0.0 });
+        let bonus: f64 =
+            (if has_quotes { 0.1 } else { 0.0 }) + (if has_numbers { 0.1 } else { 0.0 });
         (base + bonus).min(1.0)
     }
 
     pub fn score_visualizability(&self, title: &str, body: &str, has_image: bool) -> f64 {
         let text = format!("{title} {body}").to_lowercase();
         let mut score: f64 = 0.3 + if has_image { 0.3 } else { 0.0 };
-        let matches = VISUAL_KEYWORDS.iter().filter(|&&kw| text.contains(kw)).count();
+        let matches = VISUAL_KEYWORDS
+            .iter()
+            .filter(|&&kw| text.contains(kw))
+            .count();
         if matches >= 2 {
             score += 0.4;
         } else if matches == 1 {
@@ -118,7 +193,10 @@ impl CandidateScorer {
 
     pub fn score_audience_interest(&self, title: &str, body: &str) -> f64 {
         let text = format!("{title} {body}").to_lowercase();
-        let matches = INTEREST_KEYWORDS.iter().filter(|&&kw| text.contains(kw)).count();
+        let matches = INTEREST_KEYWORDS
+            .iter()
+            .filter(|&&kw| text.contains(kw))
+            .count();
         if matches == 0 {
             0.1
         } else if matches >= 2 {
@@ -133,7 +211,11 @@ impl CandidateScorer {
         let freshness = self.score_freshness(pub_epoch);
         let publisher = self.score_publisher(&candidate.normalized_publisher);
 
-        let body_str = candidate.body.as_deref().or(candidate.description.as_deref()).unwrap_or("");
+        let body_str = candidate
+            .body
+            .as_deref()
+            .or(candidate.description.as_deref())
+            .unwrap_or("");
         let fact_density = self.score_fact_density(&candidate.title, body_str);
         let visual = self.score_visualizability(
             &candidate.title,

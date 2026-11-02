@@ -39,7 +39,10 @@ fn make_html_resp(status: u16, html: &str) -> Value {
 
 fn extract_topics(body: &Value) -> Option<Vec<String>> {
     if let Some(arr) = body["topics"].as_array() {
-        let items: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        let items: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
         if !items.is_empty() {
             return Some(items);
         }
@@ -75,18 +78,7 @@ fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {
     (from, to)
 }
 
-fn handle_request(req: Value, service: &DailyNewsService) -> Value {
-    let raw_path = req["path"].as_str().unwrap_or("");
-    let (path, query) = match raw_path.split_once('?') {
-        Some((p, q)) => (p.trim_end_matches('/'), q),
-        None => (raw_path.trim_end_matches('/'), ""),
-    };
-
-    let method = req["method"]
-        .as_str()
-        .unwrap_or("GET")
-        .to_ascii_uppercase();
-
+fn parse_request_body(req: &Value, query: &str) -> Value {
     let mut body: Value = if let Some(b) = req["body"].as_str() {
         serde_json::from_str(b).unwrap_or_else(|_| json!({}))
     } else if req["body"].is_object() {
@@ -108,209 +100,252 @@ fn handle_request(req: Value, service: &DailyNewsService) -> Value {
             }
         }
     }
+    body
+}
 
+fn handle_health(service: &DailyNewsService) -> Value {
+    let cfg = service.get_config();
+    make_json_resp(
+        200,
+        json!({
+            "status": "healthy",
+            "module": "daily-news",
+            "version": "1.3.0",
+            "engine": "rust-native",
+            "consumed_count": service.consumed_count(),
+            "cached_candidates": service.cached_candidates_count(),
+            "newsnow_url": cfg.newsnow_url,
+            "redis_enabled": cfg.redis_enabled
+        }),
+    )
+}
+
+fn handle_models() -> Value {
+    make_json_resp(
+        200,
+        json!({
+            "object": "list",
+            "data": [{
+                "id": "daily-news",
+                "object": "model",
+                "created": 1793618000,
+                "owned_by": "daily-news-rs"
+            }]
+        }),
+    )
+}
+
+fn handle_ui(service: &DailyNewsService, limit: usize) -> Value {
+    let cfg = service.get_config();
+    let candidates = service.get_candidates(limit.max(10));
+    let html = render_dashboard_html(
+        "1.3.0",
+        "rust-native",
+        &cfg,
+        service.consumed_count(),
+        &candidates,
+    );
+    make_html_resp(200, &html)
+}
+
+fn handle_chat_completions(service: &DailyNewsService, limit: usize) -> Value {
+    let content = service.chat_completion(limit);
+    make_json_resp(
+        200,
+        json!({
+            "id": format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+            "object": "chat.completion",
+            "model": "daily-news",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": content },
+                "finish_reason": "stop"
+            }]
+        }),
+    )
+}
+
+fn handle_discover(service: &DailyNewsService, body: &Value, limit: usize) -> Value {
+    let (from_date, to_date) = extract_date_range(body);
+    let topics = extract_topics(body);
+    let curated: Option<Vec<RawNewsItem>> = body["curated_candidates"]
+        .as_array()
+        .map(|arr| serde_json::from_value(json!(arr)).unwrap_or_default());
+    let sources: Option<Vec<String>> = body["sources"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    });
+
+    match service.discover(
+        limit,
+        curated,
+        sources,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        topics.as_deref(),
+    ) {
+        Ok(result) => make_json_resp(200, json!(result)),
+        Err((status_code, err_msg)) => make_json_resp(
+            400,
+            json!({
+                "tier": "none",
+                "status": status_code,
+                "candidates": [],
+                "reason": err_msg
+            }),
+        ),
+    }
+}
+
+fn handle_candidates(
+    service: &DailyNewsService,
+    method: &str,
+    body: &Value,
+    limit: usize,
+) -> Value {
+    if method == "POST" && body.get("items").is_some() {
+        let raw_items: Vec<RawNewsItem> =
+            serde_json::from_value(body["items"].clone()).unwrap_or_default();
+        let (from_date, to_date) = extract_date_range(body);
+        let from_epoch = from_date
+            .as_deref()
+            .and_then(|d| daily_news::date::parse_boundary_datetime(d, false).ok());
+        let to_epoch = to_date
+            .as_deref()
+            .and_then(|d| daily_news::date::parse_boundary_datetime(d, true).ok());
+        let topics = extract_topics(body);
+
+        let ranked =
+            service.filter_and_score(&raw_items, from_epoch, to_epoch, topics.as_deref(), limit);
+        let count = ranked.len();
+        return make_json_resp(200, json!({ "count": count, "candidates": ranked }));
+    }
+
+    let ranked = service.get_candidates(limit);
+    let count = ranked.len();
+    make_json_resp(200, json!({ "count": count, "candidates": ranked }))
+}
+
+fn handle_feed(service: &DailyNewsService, body: &Value, limit: usize) -> Value {
+    let sources: Option<Vec<String>> = body["sources"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    });
+    let feed = if let Some(ref s) = sources {
+        service.get_feed_sources(s, limit)
+    } else {
+        service.get_feed(limit)
+    };
+    let count = feed.len();
+    make_json_resp(200, json!({ "count": count, "items": feed }))
+}
+
+fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
+    let ids: Vec<String> = if let Some(arr) = body["candidate_ids"].as_array() {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    } else if let Some(single) = body["candidate_id"].as_str() {
+        vec![single.to_string()]
+    } else {
+        Vec::new()
+    };
+
+    match service.consume(&ids) {
+        Ok(count) => make_json_resp(200, json!({ "status": "consumed", "count": count })),
+        Err(e) => make_json_resp(500, json!({ "error": e })),
+    }
+}
+
+fn apply_config_updates(cfg: &mut daily_news::domain::ModuleConfig, body: &Value) {
+    if let Some(url) = body["newsnow_url"].as_str() {
+        cfg.newsnow_url = url.to_string();
+    }
+    if let Some(h) = body["freshness_window_hours"].as_f64() {
+        cfg.freshness_window_hours = h;
+    }
+    if let Some(d) = body["max_age_days"].as_u64() {
+        cfg.max_age_days = d as u32;
+    }
+    if let Some(b) = body["require_latest_news"].as_bool() {
+        cfg.require_latest_news = b;
+    }
+    if let Some(re) = body["redis_enabled"].as_bool() {
+        cfg.redis_enabled = re;
+    }
+    if let Some(ru) = body["redis_url"].as_str() {
+        cfg.redis_url = ru.to_string();
+    }
+    if let Some(rk) = body["redis_key"].as_str() {
+        cfg.redis_key = rk.to_string();
+    }
+    if let Some(rt) = body["redis_type"].as_str() {
+        cfg.redis_type = rt.to_string();
+    }
+}
+
+fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Value {
+    if method == "POST" {
+        let mut cfg = service.get_config();
+        apply_config_updates(&mut cfg, body);
+        return match service.update_config(cfg) {
+            Ok(updated) => make_json_resp(200, json!({ "status": "updated", "config": updated })),
+            Err(e) => make_json_resp(500, json!({ "error": e })),
+        };
+    }
+    let current = service.get_config();
+    make_json_resp(200, json!(current))
+}
+
+fn handle_request(req: Value, service: &DailyNewsService) -> Value {
+    let raw_path = req["path"].as_str().unwrap_or("");
+    let (path, query) = match raw_path.split_once('?') {
+        Some((p, q)) => (p.trim_end_matches('/'), q),
+        None => (raw_path.trim_end_matches('/'), ""),
+    };
+
+    let method = req["method"].as_str().unwrap_or("GET").to_ascii_uppercase();
+
+    let body = parse_request_body(&req, query);
     let limit = body["limit"]
         .as_u64()
         .or_else(|| body["count"].as_u64())
         .unwrap_or(5) as usize;
 
-    // 1. Health Endpoint
     if path.ends_with("/health") {
-        let cfg = service.get_config();
-        return make_json_resp(
-            200,
-            json!({
-                "status": "healthy",
-                "module": "daily-news",
-                "version": "1.3.0",
-                "engine": "rust-native",
-                "consumed_count": service.consumed_count(),
-                "cached_candidates": service.cached_candidates_count(),
-                "newsnow_url": cfg.newsnow_url,
-                "redis_enabled": cfg.redis_enabled
-            }),
-        );
+        return handle_health(service);
     }
-
-    // 2. Models Endpoint
     if path.ends_with("/models") {
-        return make_json_resp(
-            200,
-            json!({
-                "object": "list",
-                "data": [{
-                    "id": "daily-news",
-                    "object": "model",
-                    "created": 1793618000,
-                    "owned_by": "daily-news-rs"
-                }]
-            }),
-        );
+        return handle_models();
     }
-
-    // 3. UI Dashboard Endpoint
     if path.ends_with("/ui") || path.ends_with("/custom/daily-news") {
-        let cfg = service.get_config();
-        let candidates = service.get_candidates(limit.max(10));
-        let html = render_dashboard_html(
-            "1.3.0",
-            "rust-native",
-            &cfg,
-            service.consumed_count(),
-            &candidates,
-        );
-        return make_html_resp(200, &html);
+        return handle_ui(service, limit);
     }
-
-    // 4. Chat Completions
     if path.ends_with("/chat/completions") {
-        let content = service.chat_completion(limit);
-        return make_json_resp(
-            200,
-            json!({
-                "id": format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-                "object": "chat.completion",
-                "model": "daily-news",
-                "choices": [{
-                    "index": 0,
-                    "message": { "role": "assistant", "content": content },
-                    "finish_reason": "stop"
-                }]
-            }),
-        );
+        return handle_chat_completions(service, limit);
     }
-
-    // 5. Tiered Content Discovery
     if path.ends_with("/api/v1/discover") {
-        let (from_date, to_date) = extract_date_range(&body);
-        let topics = extract_topics(&body);
-        let curated: Option<Vec<RawNewsItem>> = body["curated_candidates"]
-            .as_array()
-            .map(|arr| serde_json::from_value(json!(arr)).unwrap_or_default());
-        let sources: Option<Vec<String>> = body["sources"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
-
-        match service.discover(
-            limit,
-            curated,
-            sources,
-            from_date.as_deref(),
-            to_date.as_deref(),
-            topics.as_deref(),
-        ) {
-            Ok(result) => return make_json_resp(200, json!(result)),
-            Err((status_code, err_msg)) => {
-                return make_json_resp(
-                    400,
-                    json!({
-                        "tier": "none",
-                        "status": status_code,
-                        "candidates": [],
-                        "reason": err_msg
-                    }),
-                );
-            }
-        }
+        return handle_discover(service, &body, limit);
     }
-
-    // 6. Candidates Endpoint
     if path.ends_with("/api/v1/candidates") {
-        if method == "POST" && body.get("items").is_some() {
-            let raw_items: Vec<RawNewsItem> = serde_json::from_value(body["items"].clone()).unwrap_or_default();
-            let (from_date, to_date) = extract_date_range(&body);
-            let from_epoch = from_date.as_deref().and_then(|d| daily_news::date::parse_boundary_datetime(d, false).ok());
-            let to_epoch = to_date.as_deref().and_then(|d| daily_news::date::parse_boundary_datetime(d, true).ok());
-            let topics = extract_topics(&body);
-
-            let ranked = service.filter_and_score(&raw_items, from_epoch, to_epoch, topics.as_deref(), limit);
-            let count = ranked.len();
-            return make_json_resp(200, json!({ "count": count, "candidates": ranked }));
-        }
-
-        let ranked = service.get_candidates(limit);
-        let count = ranked.len();
-        return make_json_resp(200, json!({ "count": count, "candidates": ranked }));
+        return handle_candidates(service, &method, &body, limit);
     }
-
-    // 7. Feed Ingestion Endpoint
     if path.ends_with("/api/v1/feed") {
-        let sources: Option<Vec<String>> = body["sources"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
-        let feed = if let Some(ref s) = sources {
-            service.get_feed_sources(s, limit)
-        } else {
-            service.get_feed(limit)
-        };
-        let count = feed.len();
-        return make_json_resp(200, json!({ "count": count, "items": feed }));
+        return handle_feed(service, &body, limit);
     }
-
-    // 8. Consume Candidates
     if path.ends_with("/api/v1/consume") {
-        let ids: Vec<String> = if let Some(arr) = body["candidate_ids"].as_array() {
-            arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-        } else if let Some(single) = body["candidate_id"].as_str() {
-            vec![single.to_string()]
-        } else {
-            Vec::new()
-        };
-
-        match service.consume(&ids) {
-            Ok(count) => {
-                return make_json_resp(200, json!({ "status": "consumed", "count": count }));
-            }
-            Err(e) => {
-                return make_json_resp(500, json!({ "error": e }));
-            }
-        }
+        return handle_consume(service, &body);
     }
-
-    // 9. Configuration Management
     if path.ends_with("/api/v1/config") {
-        if method == "POST" {
-            let mut cfg = service.get_config();
-            if let Some(url) = body["newsnow_url"].as_str() {
-                cfg.newsnow_url = url.to_string();
-            }
-            if let Some(h) = body["freshness_window_hours"].as_f64() {
-                cfg.freshness_window_hours = h;
-            }
-            if let Some(d) = body["max_age_days"].as_u64() {
-                cfg.max_age_days = d as u32;
-            }
-            if let Some(b) = body["require_latest_news"].as_bool() {
-                cfg.require_latest_news = b;
-            }
-            if let Some(re) = body["redis_enabled"].as_bool() {
-                cfg.redis_enabled = re;
-            }
-            if let Some(ru) = body["redis_url"].as_str() {
-                cfg.redis_url = ru.to_string();
-            }
-            if let Some(rk) = body["redis_key"].as_str() {
-                cfg.redis_key = rk.to_string();
-            }
-            if let Some(rt) = body["redis_type"].as_str() {
-                cfg.redis_type = rt.to_string();
-            }
-
-            match service.update_config(cfg) {
-                Ok(updated) => {
-                    return make_json_resp(200, json!({ "status": "updated", "config": updated }));
-                }
-                Err(e) => {
-                    return make_json_resp(500, json!({ "error": e }));
-                }
-            }
-        } else {
-            let current = service.get_config();
-            return make_json_resp(200, json!(current));
-        }
+        return handle_config(service, &method, &body);
     }
 
-    make_json_resp(404, json!({ "error": format!("Route not found: {raw_path}") }))
+    make_json_resp(
+        404,
+        json!({ "error": format!("Route not found: {raw_path}") }),
+    )
 }
 
 fn main() {
@@ -349,7 +384,8 @@ fn main() {
         let req: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                let err_resp = make_json_resp(400, json!({ "error": format!("Invalid JSON: {e}") }));
+                let err_resp =
+                    make_json_resp(400, json!({ "error": format!("Invalid JSON: {e}") }));
                 println!("{}", serde_json::to_string(&err_resp).unwrap_or_default());
                 continue;
             }

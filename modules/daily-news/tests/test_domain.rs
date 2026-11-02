@@ -3,9 +3,13 @@ use std::collections::HashSet;
 
 #[test]
 fn test_canonicalize_url() {
-    let url = "https://example.com/posts/1/?utm_source=twitter&utm_medium=social&fbclid=xyz#section";
+    let url =
+        "https://example.com/posts/1/?utm_source=twitter&utm_medium=social&fbclid=xyz#section";
     assert_eq!(canonicalize_url(url), "https://example.com/posts/1");
-    assert_eq!(canonicalize_url("http://example.com/path/"), "http://example.com/path");
+    assert_eq!(
+        canonicalize_url("http://example.com/path/"),
+        "http://example.com/path"
+    );
 }
 
 #[test]
@@ -48,9 +52,18 @@ fn test_is_safe_url() {
     allowed.insert("github.com".to_string());
     allowed.insert("anthropic.com".to_string());
 
-    assert!(is_safe_url("https://github.com/torvalds/linux", Some(&allowed)));
-    assert!(is_safe_url("https://docs.anthropic.com/en/docs", Some(&allowed)));
-    assert!(!is_safe_url("https://malicious-site.com/hack", Some(&allowed)));
+    assert!(is_safe_url(
+        "https://github.com/torvalds/linux",
+        Some(&allowed)
+    ));
+    assert!(is_safe_url(
+        "https://docs.anthropic.com/en/docs",
+        Some(&allowed)
+    ));
+    assert!(!is_safe_url(
+        "https://malicious-site.com/hack",
+        Some(&allowed)
+    ));
     assert!(!is_safe_url("http://192.168.1.1/secret", Some(&allowed)));
     assert!(!is_safe_url("http://10.0.0.1/private", Some(&allowed)));
     assert!(is_safe_url("http://127.0.0.1:6379/status", None));

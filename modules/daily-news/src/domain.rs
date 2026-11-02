@@ -41,14 +41,34 @@ pub const TRACKING_QUERY_PARAMS: &[&str] = &[
     "rss",
 ];
 
-fn default_newsnow_url() -> String { "http://127.0.0.1:4444".to_string() }
-fn default_freshness() -> f64 { 48.0 }
-fn default_max_age_days() -> u32 { 7 }
-fn default_require_latest() -> bool { true }
-fn default_sources() -> Vec<String> { vec!["hackernews".to_string(), "github".to_string(), "producthunt".to_string()] }
-fn default_redis_url() -> String { "redis://localhost:6379/0".to_string() }
-fn default_redis_key() -> String { "news:incoming".to_string() }
-fn default_redis_type() -> String { "stream".to_string() }
+fn default_newsnow_url() -> String {
+    "http://127.0.0.1:4444".to_string()
+}
+fn default_freshness() -> f64 {
+    48.0
+}
+fn default_max_age_days() -> u32 {
+    7
+}
+fn default_require_latest() -> bool {
+    true
+}
+fn default_sources() -> Vec<String> {
+    vec![
+        "hackernews".to_string(),
+        "github".to_string(),
+        "producthunt".to_string(),
+    ]
+}
+fn default_redis_url() -> String {
+    "redis://localhost:6379/0".to_string()
+}
+fn default_redis_key() -> String {
+    "news:incoming".to_string()
+}
+fn default_redis_type() -> String {
+    "stream".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleConfig {
@@ -157,7 +177,12 @@ pub struct RawNewsItem {
 }
 
 impl RawNewsItem {
-    pub fn new(id: impl Into<String>, url: impl Into<String>, title: impl Into<String>, published_at: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        url: impl Into<String>,
+        title: impl Into<String>,
+        published_at: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             url: url.into(),
@@ -291,9 +316,7 @@ pub fn normalize_publisher(publisher: Option<&str>) -> String {
                 return "Unknown".to_string();
             }
             let mut cleaned = trimmed.to_string();
-            for suffix in &[
-                ".com", ".org", ".net", ".co", ".io", ".gov", ".news", ".sh",
-            ] {
+            for suffix in &[".com", ".org", ".net", ".co", ".io", ".gov", ".news", ".sh"] {
                 if cleaned.to_lowercase().ends_with(suffix) {
                     cleaned.truncate(cleaned.len() - suffix.len());
                     break;
@@ -320,7 +343,9 @@ pub fn canonicalize_url(url: &str) -> String {
             .split('&')
             .filter(|p| {
                 let key = p.split('=').next().unwrap_or("").to_lowercase();
-                !TRACKING_QUERY_PARAMS.iter().any(|&tp| key == tp || key.starts_with("utm_"))
+                !TRACKING_QUERY_PARAMS
+                    .iter()
+                    .any(|&tp| key == tp || key.starts_with("utm_"))
             })
             .collect();
         if filtered.is_empty() {
@@ -346,43 +371,86 @@ pub fn compute_sha256(input: &str) -> String {
 }
 
 pub fn compute_title_hash(title: &str) -> String {
-    let norm: String = title.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    let norm: String = title
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .to_lowercase();
     compute_sha256(&norm)
 }
 
 pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str) -> String {
-    let clean_title: String = title.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    let clean_title: String = title
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .to_lowercase();
     let clean_url = canonical_url.trim().to_lowercase();
     let body_str = body.unwrap_or("").trim();
     let limit = body_str.chars().take(500).collect::<String>();
-    let clean_body: String = limit.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    let clean_body: String = limit
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .to_lowercase();
     let payload = format!("{clean_title}|{clean_url}|{clean_body}");
     compute_sha256(&payload)
 }
 
 pub fn classify_topic_family(title: &str, text: &str) -> String {
     let combined = format!("{title} {text}").to_lowercase();
-    if ["prompt caching", "context window", "kv cache", "memory", "state loss", "token limit"]
-        .iter()
-        .any(|k| combined.contains(k))
+    if [
+        "prompt caching",
+        "context window",
+        "kv cache",
+        "memory",
+        "state loss",
+        "token limit",
+    ]
+    .iter()
+    .any(|k| combined.contains(k))
     {
         return "context_memory".to_string();
     }
-    if ["tool call", "mcp", "schema", "function call", "tools", "payload parsing"]
-        .iter()
-        .any(|k| combined.contains(k))
+    if [
+        "tool call",
+        "mcp",
+        "schema",
+        "function call",
+        "tools",
+        "payload parsing",
+    ]
+    .iter()
+    .any(|k| combined.contains(k))
     {
         return "agent_tool_use".to_string();
     }
-    if ["debug", "retry", "flaky", "reliability", "ci", "loop", "crash", "failure", "trace"]
-        .iter()
-        .any(|k| combined.contains(k))
+    if [
+        "debug",
+        "retry",
+        "flaky",
+        "reliability",
+        "ci",
+        "loop",
+        "crash",
+        "failure",
+        "trace",
+    ]
+    .iter()
+    .any(|k| combined.contains(k))
     {
         return "debugging_reliability".to_string();
     }
-    if ["benchmark", "eval", "evaluation", "score", "metrics", "test suite"]
-        .iter()
-        .any(|k| combined.contains(k))
+    if [
+        "benchmark",
+        "eval",
+        "evaluation",
+        "score",
+        "metrics",
+        "test suite",
+    ]
+    .iter()
+    .any(|k| combined.contains(k))
     {
         return "agent_evaluation".to_string();
     }
@@ -415,8 +483,9 @@ pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool
     }
 
     if let Some(allowed) = allowed_domains {
-        return allowed.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")));
+        return allowed
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{d}")));
     }
     true
 }
-

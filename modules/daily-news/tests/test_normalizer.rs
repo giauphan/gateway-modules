@@ -106,10 +106,19 @@ fn test_normalize_valid_item_and_storyboard_fields() {
 
     let cand = svc.normalize_item(&raw).unwrap();
     assert!(cand.candidate_id.starts_with("cand_"));
-    assert_eq!(cand.canonical_url, "https://techcrunch.com/2026/11/02/ai-agents");
-    assert_eq!(cand.source_url, "https://techcrunch.com/2026/11/02/ai-agents");
+    assert_eq!(
+        cand.canonical_url,
+        "https://techcrunch.com/2026/11/02/ai-agents"
+    );
+    assert_eq!(
+        cand.source_url,
+        "https://techcrunch.com/2026/11/02/ai-agents"
+    );
     assert_eq!(cand.normalized_publisher, "TechCrunch");
-    assert_eq!(cand.discussion_url.as_deref(), Some("https://news.ycombinator.com/item?id=50333339"));
+    assert_eq!(
+        cand.discussion_url.as_deref(),
+        Some("https://news.ycombinator.com/item?id=50333339")
+    );
     assert_eq!(cand.symptom.as_deref(), Some("Agent context bloat"));
     assert_eq!(cand.root_cause.as_deref(), Some("Eager tool registration"));
     assert_eq!(cand.remedy.as_deref(), Some("Two-tier schema scoping"));
@@ -120,7 +129,12 @@ fn test_normalize_valid_item_and_storyboard_fields() {
 #[test]
 fn test_missing_required_fields_fails() {
     let svc = create_test_service(ModuleConfig::default());
-    let mut raw_empty_id = make_dummy_item("", "https://example.com", "Title", "2026-11-02T10:00:00+00:00");
+    let mut raw_empty_id = make_dummy_item(
+        "",
+        "https://example.com",
+        "Title",
+        "2026-11-02T10:00:00+00:00",
+    );
     raw_empty_id.id = "".to_string();
     assert!(svc.normalize_item(&raw_empty_id).is_err());
 }

@@ -27,9 +27,15 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
     if d_parts.len() != 3 {
         return Err(format!("Invalid date part: {date_part}"));
     }
-    let year: i64 = d_parts[0].parse().map_err(|e| format!("Invalid year: {e}"))?;
-    let month: u64 = d_parts[1].parse().map_err(|e| format!("Invalid month: {e}"))?;
-    let day: u64 = d_parts[2].parse().map_err(|e| format!("Invalid day: {e}"))?;
+    let year: i64 = d_parts[0]
+        .parse()
+        .map_err(|e| format!("Invalid year: {e}"))?;
+    let month: u64 = d_parts[1]
+        .parse()
+        .map_err(|e| format!("Invalid month: {e}"))?;
+    let day: u64 = d_parts[2]
+        .parse()
+        .map_err(|e| format!("Invalid day: {e}"))?;
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return Err(format!("Date out of range: {date_part}"));
     }
@@ -48,7 +54,12 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
             let h: u64 = t_parts[0].parse().unwrap_or(0);
             let m: u64 = t_parts[1].parse().unwrap_or(0);
             let s_val: u64 = if t_parts.len() >= 3 {
-                t_parts[2].split('.').next().unwrap_or("0").parse().unwrap_or(0)
+                t_parts[2]
+                    .split('.')
+                    .next()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0)
             } else {
                 0
             };

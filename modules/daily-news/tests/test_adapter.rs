@@ -10,7 +10,12 @@ fn send_rpc_request(req: Value) -> Value {
         .expect("Failed to start daily-news binary");
 
     let req_line = format!("{}\n", serde_json::to_string(&req).unwrap());
-    child.stdin.as_mut().unwrap().write_all(req_line.as_bytes()).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(req_line.as_bytes())
+        .unwrap();
 
     let output = child.wait_with_output().expect("Failed to read output");
     let out_str = String::from_utf8(output.stdout).expect("Invalid UTF-8");
@@ -55,7 +60,10 @@ fn test_adapter_ui_endpoint() {
     });
     let resp = send_rpc_request(req);
     assert_eq!(resp["status"], 200);
-    assert!(resp["headers"]["content-type"].as_str().unwrap().contains("text/html"));
+    assert!(resp["headers"]["content-type"]
+        .as_str()
+        .unwrap()
+        .contains("text/html"));
     assert!(resp["body"].as_str().unwrap().contains("Daily News"));
 }
 
@@ -86,7 +94,10 @@ fn test_adapter_candidates_custom_items() {
 
     let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
     assert_eq!(body["count"], 1);
-    assert_eq!(body["candidates"][0]["title"], "Anthropic Enhances Tool Use in Claude");
+    assert_eq!(
+        body["candidates"][0]["title"],
+        "Anthropic Enhances Tool Use in Claude"
+    );
 }
 
 #[test]

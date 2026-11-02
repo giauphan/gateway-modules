@@ -136,12 +136,7 @@ impl LiveFeedFetcher {
                 Value::String(disc_url.clone()),
             );
 
-            let mut item = RawNewsItem::new(
-                format!("hn_{id}"),
-                orig_url,
-                title,
-                pub_timestamp,
-            );
+            let mut item = RawNewsItem::new(format!("hn_{id}"), orig_url, title, pub_timestamp);
             item.publisher = Some(publisher);
             item.author = author;
             item.description = text.clone();
@@ -192,7 +187,9 @@ impl FeedFetcherPort for LiveFeedFetcher {
             }
         }
 
-        if items.is_empty() && (sources.is_empty() || sources.iter().any(|s| s == "hackernews" || s == "all")) {
+        if items.is_empty()
+            && (sources.is_empty() || sources.iter().any(|s| s == "hackernews" || s == "all"))
+        {
             items.extend(self.fetch_hackernews(limit));
         }
 

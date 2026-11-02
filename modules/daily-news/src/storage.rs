@@ -93,10 +93,7 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn load_config(&self) -> ModuleConfig {
-        self.config
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.config.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     fn save_config(&self, config: &ModuleConfig) -> Result<(), String> {
@@ -139,7 +136,9 @@ mod tests {
         assert_eq!(storage.consumed_count(), 0);
         assert!(!storage.is_consumed("cand_1"));
 
-        let added = storage.mark_consumed(&["cand_1".to_string(), "cand_2".to_string()]).unwrap();
+        let added = storage
+            .mark_consumed(&["cand_1".to_string(), "cand_2".to_string()])
+            .unwrap();
         assert_eq!(added, 2);
         assert!(storage.is_consumed("cand_1"));
         assert!(storage.is_consumed("cand_2"));
