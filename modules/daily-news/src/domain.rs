@@ -1,10 +1,45 @@
 //! Domain models, value objects, and sanitization for Daily News.
 //!
-//! Pure domain logic matching the exact field contract and Clean Architecture rules.
+//! Pure domain logic matching Clean Architecture rules and strict contracts.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
+
+pub use crate::date::*;
+
+pub const DEFAULT_ALLOWED_DOMAINS: &[&str] = &[
+    "docs.anthropic.com",
+    "docs.github.com",
+    "modelcontextprotocol.io",
+    "microsoft.github.io",
+    "openai.com",
+    "arxiv.org",
+    "github.com",
+    "git-scm.com",
+    "news.ycombinator.com",
+    "producthunt.com",
+    "techcrunch.com",
+    "theverge.com",
+    "wired.com",
+    "arstechnica.com",
+    "venturebeat.com",
+];
+
+pub const TRACKING_QUERY_PARAMS: &[&str] = &[
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "fbclid",
+    "gclid",
+    "msclkid",
+    "ref",
+    "source",
+    "rss",
+];
 
 fn default_newsnow_url() -> String {
     "http://127.0.0.1:4444".to_string()
@@ -116,6 +151,12 @@ pub struct RawNewsItem {
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
+    pub is_evergreen: bool,
+    #[serde(default)]
+    pub content_kind: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -124,12 +165,12 @@ pub struct NormalizedCandidate {
     pub candidate_id: String,
     pub canonical_url: String,
     pub original_url: String,
-    pub url: String, // Backward-compatibility alias
+    pub url: String,
     pub title: String,
     pub publisher: String,
     pub normalized_publisher: String,
     pub published_at_utc: String,
-    pub published_at: String, // Backward-compatibility alias
+    pub published_at: String,
     pub content_hash: String,
     pub title_hash: String,
     pub raw_provenance: RawProvenance,
@@ -198,64 +239,45 @@ pub fn extract_domain(url: &str) -> String {
     domain.trim_start_matches("www.").to_lowercase()
 }
 
-pub fn format_utc_timestamp(epoch_secs: u64) -> String {
-    let days = epoch_secs / 86400;
-    let rem_secs = epoch_secs % 86400;
-    let hours = rem_secs / 3600;
-    let minutes = (rem_secs % 3600) / 60;
-    let seconds = rem_secs % 60;
-
-    let mut year = 1970;
-    let mut d = days;
-    loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-        let days_in_year = if leap { 366 } else { 365 };
-        if d < days_in_year {
-            break;
+pub fn normalize_publisher(publisher: Option<&str>) -> String {
+    match publisher {
+        None => "Unknown".to_string(),
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return "Unknown".to_string();
+            }
+            let mut cleaned = trimmed.to_string();
+            for suffix in &[
+                ".com", ".org", ".net", ".co", ".io", ".gov", ".news", ".sh",
+            ] {
+                if cleaned.to_lowercase().ends_with(suffix) {
+                    cleaned.truncate(cleaned.len() - suffix.len());
+                    break;
+                }
+            }
+            let out = cleaned.trim();
+            if out.is_empty() {
+                "Unknown".to_string()
+            } else {
+                out.to_string()
+            }
         }
-        d -= days_in_year;
-        year += 1;
     }
-    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let days_in_months = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1;
-    for &dim in &days_in_months {
-        if d < dim {
-            break;
-        }
-        d -= dim;
-        month += 1;
-    }
-    let day = d + 1;
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}+00:00")
 }
 
 pub fn canonicalize_url(url: &str) -> String {
     let clean = url.trim();
+    if clean.is_empty() {
+        return String::new();
+    }
     let without_fragment = clean.split('#').next().unwrap_or(clean);
     if let Some((base, query)) = without_fragment.split_once('?') {
         let filtered: Vec<&str> = query
             .split('&')
             .filter(|p| {
                 let key = p.split('=').next().unwrap_or("").to_lowercase();
-                !key.starts_with("utm_")
-                    && key != "fbclid"
-                    && key != "gclid"
-                    && key != "ref"
-                    && key != "source"
+                !TRACKING_QUERY_PARAMS.iter().any(|&tp| key == tp || key.starts_with("utm_"))
             })
             .collect();
         if filtered.is_empty() {
@@ -280,64 +302,79 @@ pub fn compute_sha256(input: &str) -> String {
     s
 }
 
+pub fn compute_title_hash(title: &str) -> String {
+    let norm: String = title.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    compute_sha256(&norm)
+}
+
+pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str) -> String {
+    let clean_title: String = title.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    let clean_url = canonical_url.trim().to_lowercase();
+    let body_str = body.unwrap_or("").trim();
+    let limit = body_str.chars().take(500).collect::<String>();
+    let clean_body: String = limit.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase();
+    let payload = format!("{clean_title}|{clean_url}|{clean_body}");
+    compute_sha256(&payload)
+}
+
 pub fn classify_topic_family(title: &str, text: &str) -> String {
     let combined = format!("{title} {text}").to_lowercase();
-    if [
-        "prompt caching",
-        "context window",
-        "kv cache",
-        "memory",
-        "state loss",
-        "token limit",
-    ]
-    .iter()
-    .any(|k| combined.contains(k))
+    if ["prompt caching", "context window", "kv cache", "memory", "state loss", "token limit"]
+        .iter()
+        .any(|k| combined.contains(k))
     {
         return "context_memory".to_string();
     }
-    if [
-        "tool call",
-        "mcp",
-        "schema",
-        "function call",
-        "tools",
-        "payload parsing",
-    ]
-    .iter()
-    .any(|k| combined.contains(k))
+    if ["tool call", "mcp", "schema", "function call", "tools", "payload parsing"]
+        .iter()
+        .any(|k| combined.contains(k))
     {
         return "agent_tool_use".to_string();
     }
-    if [
-        "debug",
-        "retry",
-        "flaky",
-        "reliability",
-        "ci",
-        "loop",
-        "crash",
-        "failure",
-        "trace",
-    ]
-    .iter()
-    .any(|k| combined.contains(k))
+    if ["debug", "retry", "flaky", "reliability", "ci", "loop", "crash", "failure", "trace"]
+        .iter()
+        .any(|k| combined.contains(k))
     {
         return "debugging_reliability".to_string();
     }
-    if [
-        "benchmark",
-        "eval",
-        "evaluation",
-        "score",
-        "metrics",
-        "test suite",
-    ]
-    .iter()
-    .any(|k| combined.contains(k))
+    if ["benchmark", "eval", "evaluation", "score", "metrics", "test suite"]
+        .iter()
+        .any(|k| combined.contains(k))
     {
         return "agent_evaluation".to_string();
     }
     "agent_architecture".to_string()
+}
+
+pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return false;
+    }
+    let host = extract_domain(trimmed);
+    if host.is_empty() {
+        return false;
+    }
+
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        let octets = ip.octets();
+        if octets[0] == 127 {
+            return true;
+        }
+        if octets[0] == 10
+            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+            || (octets[0] == 192 && octets[1] == 168)
+            || (octets[0] == 169 && octets[1] == 254)
+            || octets[0] == 0
+        {
+            return false;
+        }
+    }
+
+    if let Some(allowed) = allowed_domains {
+        return allowed.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")));
+    }
+    true
 }
 
 #[cfg(test)]
@@ -345,32 +382,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_domain() {
-        assert_eq!(extract_domain("https://syscall.sh/"), "syscall.sh");
-        assert_eq!(
-            extract_domain("https://www.nature.com/articles/123"),
-            "nature.com"
-        );
+    fn test_extract_domain_and_normalize_publisher() {
+        assert_eq!(extract_domain("https://techcrunch.com/article"), "techcrunch.com");
+        assert_eq!(normalize_publisher(Some("TechCrunch.com")), "TechCrunch");
+        assert_eq!(normalize_publisher(Some("")), "Unknown");
+        assert_eq!(normalize_publisher(None), "Unknown");
     }
 
     #[test]
-    fn test_format_utc_timestamp() {
-        let ts = format_utc_timestamp(1793618000);
-        assert!(ts.contains("2026-"));
-        assert!(ts.ends_with("+00:00"));
+    fn test_canonicalize_url_and_hashes() {
+        let raw = "https://example.com/posts/1/?utm_source=twitter&utm_medium=social&fbclid=xyz#section";
+        assert_eq!(canonicalize_url(raw), "https://example.com/posts/1");
+
+        let h1 = compute_title_hash("Anthropic Announces MCP");
+        let h2 = compute_title_hash("anthropic  announces mcp ");
+        assert_eq!(h1, h2);
+
+        let ch1 = compute_content_hash("Title", Some("Body text"), "https://example.com");
+        let ch2 = compute_content_hash("title ", Some("body text"), "https://example.com");
+        assert_eq!(ch1, ch2);
     }
 
     #[test]
-    fn test_canonicalize_url() {
-        assert_eq!(
-            canonicalize_url("https://example.com/article/?utm_source=twitter&foo=bar#section"),
-            "https://example.com/article?foo=bar"
-        );
-    }
+    fn test_is_safe_url() {
+        let mut allowed = HashSet::new();
+        allowed.insert("github.com".to_string());
+        allowed.insert("anthropic.com".to_string());
 
-    #[test]
-    fn test_compute_sha256() {
-        let hash = compute_sha256("hello world");
-        assert_eq!(hash.len(), 64);
+        assert!(is_safe_url("https://github.com/torvalds/linux", Some(&allowed)));
+        assert!(is_safe_url("https://docs.anthropic.com/en/docs", Some(&allowed)));
+        assert!(!is_safe_url("https://malicious-site.com/hack", Some(&allowed)));
+        assert!(!is_safe_url("http://192.168.1.1/secret", Some(&allowed)));
+        assert!(!is_safe_url("http://10.0.0.1/private", Some(&allowed)));
+        assert!(is_safe_url("http://127.0.0.1:6379/status", None));
     }
 }

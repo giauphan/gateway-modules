@@ -9,6 +9,11 @@ use crate::domain::{ModuleConfig, NormalizedCandidate, RawNewsItem};
 pub trait FeedFetcherPort: Send + Sync {
     /// Ingest raw news items from external feeds (Hacker News, NewsNow, etc.).
     fn fetch_raw_items(&self, limit: usize) -> Result<Vec<RawNewsItem>, String>;
+
+    /// Ingest items from specified sources (e.g. hackernews, redis, newsnow).
+    fn fetch_sources(&self, _sources: &[String], limit: usize) -> Result<Vec<RawNewsItem>, String> {
+        self.fetch_raw_items(limit)
+    }
 }
 
 pub trait StoragePort: Send + Sync {
