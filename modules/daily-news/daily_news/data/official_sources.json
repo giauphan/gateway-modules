@@ -2,8 +2,8 @@
   {
     "id": "official_anthropic_context_window",
     "candidate_id": "cand_official_anthropic_context_window",
-    "url": "https://docs.anthropic.com/claude/context-window",
-    "canonical_url": "https://docs.anthropic.com/claude/context-window",
+    "url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+    "canonical_url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
     "title": "Why coding agents lose project requirements between sessions",
     "body": "Claude context window limitations require persisting requirements and state to disk files across sessions. Because context memory is bounded per invocation, durable state must be serialized to repo artifacts.",
     "publisher": "Anthropic Documentation",
@@ -27,8 +27,8 @@
   {
     "id": "official_mcp_tool_schemas",
     "candidate_id": "cand_official_mcp_tool_schemas",
-    "url": "https://modelcontextprotocol.io/specification/tools",
-    "canonical_url": "https://modelcontextprotocol.io/specification/tools",
+    "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools",
+    "canonical_url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools",
     "title": "MCP function call fails because tool JSON schema mismatches payload",
     "body": "Model Context Protocol JSON-RPC specification requires tool call parameters to validate against declared JSON schema. Type mismatches, unexpected properties, or missing required fields cause protocol validation errors.",
     "publisher": "Model Context Protocol Open Standard",
@@ -52,8 +52,8 @@
   {
     "id": "official_github_agent_sandbox",
     "candidate_id": "cand_official_github_agent_sandbox",
-    "url": "https://docs.github.com/copilot/agent-mode/permissions",
-    "canonical_url": "https://docs.github.com/copilot/agent-mode/permissions",
+    "url": "https://docs.github.com/en/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-policies-for-copilot-in-your-organization",
+    "canonical_url": "https://docs.github.com/en/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-policies-for-copilot-in-your-organization",
     "title": "Configuring sandbox permission boundaries for autonomous coding agents",
     "body": "Security architecture for coding agent CLIs enforces read-only sandbox execution boundaries, file system path validation, and shell execution permission gates to prevent unauthorized write mutations.",
     "publisher": "GitHub Copilot Documentation",
