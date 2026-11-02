@@ -184,8 +184,14 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if path.endswith("/api/v1/discover"):
         count = int(body.get("count") or 5)
         curated = body.get("curated_candidates")
-        sources = body.get("sources") or cfg.get("default_sources")
-        res = discovery.discover_candidates(count=count, curated_feed=curated, feed_sources=sources)
+        sources = body.get("sources")
+        official_only = bool(body.get("official_only", False) or (isinstance(sources, list) and sources == ["official"]))
+        res = discovery.discover_candidates(
+            count=count,
+            curated_feed=curated,
+            feed_sources=sources,
+            official_only=official_only,
+        )
         return json_resp(200, res.to_dict())
 
     # 8. Mark Consumed Endpoint

@@ -1,7 +1,7 @@
 """Feed Fetcher Service for ingesting upstream news items.
 
 Clean Architecture Layer: Interface Adapters / Infrastructure Outbound Port.
-Fetches items from NewsNow API or configured upstream feeds.
+Fetches items from official technical specifications, NewsNow API, or file feeds.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ DEFAULT_SOURCES = ("hackernews", "github", "producthunt")
 
 
 class FeedFetcher:
-    """Fetches raw feeds from upstream NewsNow service or local feed sources."""
+    """Fetches raw feeds from official technical sources, NewsNow, or local feeds."""
 
     def __init__(
         self,
@@ -29,6 +29,7 @@ class FeedFetcher:
     ) -> None:
         self.newsnow_base_url = newsnow_base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.base_dir = Path(__file__).resolve().parent
 
     @staticmethod
     def _extract_published_at(raw_item: Dict[str, Any], payload: Dict[str, Any]) -> Optional[str]:
@@ -37,12 +38,27 @@ class FeedFetcher:
             val = raw_item.get(field)
             if isinstance(val, str) and val.strip():
                 return val.strip()
-        # Fallback to current time if feed does not supply one
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
     def _host(url: str) -> str:
         return urlparse(url).hostname or "newsnow"
+
+    def fetch_official_sources(self) -> List[Dict[str, Any]]:
+        """Fetch verified official technical sources (MCP, Anthropic, GitHub, Git, SWE-bench)."""
+        candidates: List[Dict[str, Any]] = []
+
+        # 1. Bundled official sources
+        bundled_path = self.base_dir / "data" / "official_sources.json"
+        if bundled_path.is_file():
+            candidates.extend(self.fetch_from_file(bundled_path))
+
+        # 2. OpenMontage production feed fallback if available
+        om_feed = Path("/home/ubuntu/OpenMontage/config/sources/production_agent_engineering_feed.json")
+        if not candidates and om_feed.is_file():
+            candidates.extend(self.fetch_from_file(om_feed))
+
+        return candidates
 
     def fetch_newsnow_feed(
         self,
