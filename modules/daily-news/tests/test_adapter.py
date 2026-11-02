@@ -150,6 +150,37 @@ class TestAdapter(unittest.TestCase):
         self.assertEqual(res2["status"], 200)
         self.assertEqual(len(json.loads(res2["body"])["candidates"]), 6)
 
+    def test_discover_query_string_parameters(self):
+        items = [
+            {
+                "id": f"c_{i}",
+                "url": f"https://example.com/art-{i}",
+                "title": f"Article {i}",
+                "publisher": "Example",
+                "published_at": self.recent_ts,
+            }
+            for i in range(10)
+        ]
+        # GET request with ?limit=3 in query string
+        req1 = {
+            "path": "/api/v1/discover?limit=3",
+            "method": "GET",
+            "body": json.dumps({"curated_candidates": items}),
+        }
+        res1 = handle_request(req1)
+        self.assertEqual(res1["status"], 200)
+        self.assertEqual(len(json.loads(res1["body"])["candidates"]), 3)
+
+        # GET request with ?count=7 in query string
+        req2 = {
+            "path": "/api/v1/discover?count=7",
+            "method": "GET",
+            "body": json.dumps({"curated_candidates": items}),
+        }
+        res2 = handle_request(req2)
+        self.assertEqual(res2["status"], 200)
+        self.assertEqual(len(json.loads(res2["body"])["candidates"]), 7)
+
     def test_discover_endpoint_date_range_filtering(self):
         curated = [
             {

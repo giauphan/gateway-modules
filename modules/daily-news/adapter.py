@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.parse
 import uuid
 
 from daily_news import (
@@ -100,7 +101,19 @@ def extract_date_range(payload: Dict[str, Any]) -> Tuple[Optional[str], Optional
 
 
 def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
-    path = str(req.get("path") or "").rstrip("/")
+    raw_path = str(req.get("path") or "")
+    if "?" in raw_path:
+        path, query_str = raw_path.split("?", 1)
+    else:
+        path, query_str = raw_path, ""
+    path = path.rstrip("/")
+
+    query_params: Dict[str, Any] = {}
+    if query_str:
+        for k, vals in urllib.parse.parse_qs(query_str).items():
+            if vals:
+                query_params[k] = vals[-1] if len(vals) == 1 else vals
+
     method = str(req.get("method") or "GET").upper()
     raw_body = req.get("body") or ""
 
@@ -112,6 +125,9 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             body = {}
     elif isinstance(raw_body, dict):
         body = raw_body
+
+    # Merge query parameters with JSON body (body takes precedence)
+    body = {**query_params, **body}
 
     cfg = get_active_config()
     fetcher = FeedFetcher(
