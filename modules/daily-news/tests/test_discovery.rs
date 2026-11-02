@@ -63,22 +63,16 @@ fn test_tier_1_curated_priority_and_consumed() {
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher { items: vec![] });
     let service = DailyNewsService::new(fetcher, storage.clone(), CandidateScorer::default());
 
-    let curated = vec![RawNewsItem {
-        id: "c1".to_string(),
-        url: "https://docs.anthropic.com/model-context-protocol".to_string(),
-        title: "Model Context Protocol Specification 1.0".to_string(),
-        published_at: "2026-11-02T10:00:00+00:00".to_string(),
-        publisher: Some("Anthropic".to_string()),
-        author: None,
-        description: Some("Official specification for tool schemas".to_string()),
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    }];
+    let mut curated_item = RawNewsItem::new(
+        "c1",
+        "https://docs.anthropic.com/model-context-protocol",
+        "Model Context Protocol Specification 1.0",
+        "2026-11-02T10:00:00+00:00",
+    );
+    curated_item.publisher = Some("Anthropic".to_string());
+    curated_item.description = Some("Official specification for tool schemas".to_string());
+
+    let curated = vec![curated_item];
 
     // 1. Initial discovery matches Tier 1
     let res = service.discover(5, Some(curated.clone()), None, None, None, None).unwrap();
@@ -99,38 +93,21 @@ fn test_tier_1_curated_priority_and_consumed() {
 
 #[test]
 fn test_topic_filtering_and_fail_closed() {
-    let raw_tool = RawNewsItem {
-        id: "t1".to_string(),
-        url: "https://mcp.io/spec".to_string(),
-        title: "Model Context Protocol Tool Schema Update".to_string(),
-        published_at: "2026-11-02T10:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: Some("MCP function calls and tool schemas".to_string()),
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
-    let raw_debug = RawNewsItem {
-        id: "t2".to_string(),
-        url: "https://ci.dev/flaky".to_string(),
-        title: "Debugging Flaky Test Retries in CI".to_string(),
-        published_at: "2026-11-02T10:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: Some("Flaky CI loop debug and crash traces".to_string()),
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
+    let mut raw_tool = RawNewsItem::new(
+        "t1",
+        "https://mcp.io/spec",
+        "Model Context Protocol Tool Schema Update",
+        "2026-11-02T10:00:00+00:00",
+    );
+    raw_tool.description = Some("MCP function calls and tool schemas".to_string());
+
+    let mut raw_debug = RawNewsItem::new(
+        "t2",
+        "https://ci.dev/flaky",
+        "Debugging Flaky Test Retries in CI",
+        "2026-11-02T10:00:00+00:00",
+    );
+    raw_debug.description = Some("Flaky CI loop debug and crash traces".to_string());
 
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher {
         items: vec![raw_tool, raw_debug],
@@ -162,38 +139,18 @@ fn test_topic_filtering_and_fail_closed() {
 
 #[test]
 fn test_date_range_filtering_and_validation() {
-    let d1 = RawNewsItem {
-        id: "d1".to_string(),
-        url: "https://news.ycombinator.com/item?id=101".to_string(),
-        title: "Rust 2026 Edition Announced".to_string(),
-        published_at: "2026-10-29T10:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
-    let d2 = RawNewsItem {
-        id: "d2".to_string(),
-        url: "https://news.ycombinator.com/item?id=102".to_string(),
-        title: "DeepMind Launches New Agent".to_string(),
-        published_at: "2026-10-31T15:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
+    let d1 = RawNewsItem::new(
+        "d1",
+        "https://news.ycombinator.com/item?id=101",
+        "Rust 2026 Edition Announced",
+        "2026-10-29T10:00:00+00:00",
+    );
+    let d2 = RawNewsItem::new(
+        "d2",
+        "https://news.ycombinator.com/item?id=102",
+        "DeepMind Launches New Agent",
+        "2026-10-31T15:00:00+00:00",
+    );
 
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher { items: vec![d1, d2] });
     let storage = std::sync::Arc::new(MockDiscoveryStorage {

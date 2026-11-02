@@ -41,34 +41,14 @@ pub const TRACKING_QUERY_PARAMS: &[&str] = &[
     "rss",
 ];
 
-fn default_newsnow_url() -> String {
-    "http://127.0.0.1:4444".to_string()
-}
-fn default_freshness() -> f64 {
-    48.0
-}
-fn default_max_age_days() -> u32 {
-    7
-}
-fn default_require_latest() -> bool {
-    true
-}
-fn default_sources() -> Vec<String> {
-    vec![
-        "hackernews".to_string(),
-        "github".to_string(),
-        "producthunt".to_string(),
-    ]
-}
-fn default_redis_url() -> String {
-    "redis://localhost:6379/0".to_string()
-}
-fn default_redis_key() -> String {
-    "news:incoming".to_string()
-}
-fn default_redis_type() -> String {
-    "stream".to_string()
-}
+fn default_newsnow_url() -> String { "http://127.0.0.1:4444".to_string() }
+fn default_freshness() -> f64 { 48.0 }
+fn default_max_age_days() -> u32 { 7 }
+fn default_require_latest() -> bool { true }
+fn default_sources() -> Vec<String> { vec!["hackernews".to_string(), "github".to_string(), "producthunt".to_string()] }
+fn default_redis_url() -> String { "redis://localhost:6379/0".to_string() }
+fn default_redis_key() -> String { "news:incoming".to_string() }
+fn default_redis_type() -> String { "stream".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleConfig {
@@ -157,7 +137,52 @@ pub struct RawNewsItem {
     #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]
+    pub hook: Option<String>,
+    #[serde(default)]
+    pub viewer_question: Option<String>,
+    #[serde(default)]
+    pub symptom: Option<String>,
+    #[serde(default)]
+    pub root_cause: Option<String>,
+    #[serde(default)]
+    pub remedy: Option<String>,
+    #[serde(default)]
+    pub evidence_excerpt: Option<String>,
+    #[serde(default)]
+    pub source_snapshot: Option<String>,
+    #[serde(default)]
+    pub snapshot_sha256: Option<String>,
+    #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl RawNewsItem {
+    pub fn new(id: impl Into<String>, url: impl Into<String>, title: impl Into<String>, published_at: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            url: url.into(),
+            title: title.into(),
+            published_at: published_at.into(),
+            publisher: None,
+            author: None,
+            description: None,
+            body: None,
+            discussion_url: None,
+            tags: Vec::new(),
+            is_evergreen: false,
+            content_kind: None,
+            updated_at: None,
+            hook: None,
+            viewer_question: None,
+            symptom: None,
+            root_cause: None,
+            remedy: None,
+            evidence_excerpt: None,
+            source_snapshot: None,
+            snapshot_sha256: None,
+            extra: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +191,8 @@ pub struct NormalizedCandidate {
     pub canonical_url: String,
     pub original_url: String,
     pub url: String,
+    pub source_url: String,
+    pub source_type: String,
     pub title: String,
     pub publisher: String,
     pub normalized_publisher: String,
@@ -198,6 +225,22 @@ pub struct NormalizedCandidate {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub discussion_url: Option<String>,
+    #[serde(default)]
+    pub hook: Option<String>,
+    #[serde(default)]
+    pub viewer_question: Option<String>,
+    #[serde(default)]
+    pub symptom: Option<String>,
+    #[serde(default)]
+    pub root_cause: Option<String>,
+    #[serde(default)]
+    pub remedy: Option<String>,
+    #[serde(default)]
+    pub evidence_excerpt: Option<String>,
+    #[serde(default)]
+    pub source_snapshot: Option<String>,
+    #[serde(default)]
+    pub snapshot_sha256: Option<String>,
     #[serde(default)]
     pub independent_fact_check: Option<serde_json::Value>,
     #[serde(default)]
@@ -377,43 +420,3 @@ pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool
     true
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_domain_and_normalize_publisher() {
-        assert_eq!(extract_domain("https://techcrunch.com/article"), "techcrunch.com");
-        assert_eq!(normalize_publisher(Some("TechCrunch.com")), "TechCrunch");
-        assert_eq!(normalize_publisher(Some("")), "Unknown");
-        assert_eq!(normalize_publisher(None), "Unknown");
-    }
-
-    #[test]
-    fn test_canonicalize_url_and_hashes() {
-        let raw = "https://example.com/posts/1/?utm_source=twitter&utm_medium=social&fbclid=xyz#section";
-        assert_eq!(canonicalize_url(raw), "https://example.com/posts/1");
-
-        let h1 = compute_title_hash("Anthropic Announces MCP");
-        let h2 = compute_title_hash("anthropic  announces mcp ");
-        assert_eq!(h1, h2);
-
-        let ch1 = compute_content_hash("Title", Some("Body text"), "https://example.com");
-        let ch2 = compute_content_hash("title ", Some("body text"), "https://example.com");
-        assert_eq!(ch1, ch2);
-    }
-
-    #[test]
-    fn test_is_safe_url() {
-        let mut allowed = HashSet::new();
-        allowed.insert("github.com".to_string());
-        allowed.insert("anthropic.com".to_string());
-
-        assert!(is_safe_url("https://github.com/torvalds/linux", Some(&allowed)));
-        assert!(is_safe_url("https://docs.anthropic.com/en/docs", Some(&allowed)));
-        assert!(!is_safe_url("https://malicious-site.com/hack", Some(&allowed)));
-        assert!(!is_safe_url("http://192.168.1.1/secret", Some(&allowed)));
-        assert!(!is_safe_url("http://10.0.0.1/private", Some(&allowed)));
-        assert!(is_safe_url("http://127.0.0.1:6379/status", None));
-    }
-}

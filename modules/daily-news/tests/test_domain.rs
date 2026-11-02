@@ -53,4 +53,5 @@ fn test_is_safe_url() {
     assert!(!is_safe_url("https://malicious-site.com/hack", Some(&allowed)));
     assert!(!is_safe_url("http://192.168.1.1/secret", Some(&allowed)));
     assert!(!is_safe_url("http://10.0.0.1/private", Some(&allowed)));
+    assert!(is_safe_url("http://127.0.0.1:6379/status", None));
 }

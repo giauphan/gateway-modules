@@ -62,22 +62,19 @@ impl LiveFeedFetcher {
                 .or_else(|| raw["comments_url"].as_str())
                 .map(str::to_string);
 
-            items.push(RawNewsItem {
-                id: format!("newsnow_{source}_{item_id}"),
+            let mut item = RawNewsItem::new(
+                format!("newsnow_{source}_{item_id}"),
                 url,
                 title,
-                published_at: pub_timestamp,
-                publisher: Some(publisher),
-                author: raw["author"].as_str().map(str::to_string),
-                description: raw["description"].as_str().map(str::to_string),
-                body: raw["body"].as_str().map(str::to_string),
-                discussion_url: disc_url,
-                tags: vec![source.to_string()],
-                is_evergreen: false,
-                content_kind: Some("news".to_string()),
-                updated_at: None,
-                extra: HashMap::new(),
-            });
+                pub_timestamp,
+            );
+            item.publisher = Some(publisher);
+            item.author = raw["author"].as_str().map(str::to_string);
+            item.description = raw["description"].as_str().map(str::to_string);
+            item.body = raw["body"].as_str().map(str::to_string);
+            item.discussion_url = disc_url;
+            item.tags = vec![source.to_string()];
+            items.push(item);
         }
         items
     }
@@ -139,22 +136,20 @@ impl LiveFeedFetcher {
                 Value::String(disc_url.clone()),
             );
 
-            items.push(RawNewsItem {
-                id: format!("hn_{id}"),
-                url: orig_url,
+            let mut item = RawNewsItem::new(
+                format!("hn_{id}"),
+                orig_url,
                 title,
-                published_at: pub_timestamp,
-                publisher: Some(publisher),
-                author,
-                description: text.clone(),
-                body: text,
-                discussion_url: Some(disc_url),
-                tags: vec!["hackernews".to_string(), "tech".to_string()],
-                is_evergreen: false,
-                content_kind: Some("news".to_string()),
-                updated_at: None,
-                extra,
-            });
+                pub_timestamp,
+            );
+            item.publisher = Some(publisher);
+            item.author = author;
+            item.description = text.clone();
+            item.body = text;
+            item.discussion_url = Some(disc_url);
+            item.tags = vec!["hackernews".to_string(), "tech".to_string()];
+            item.extra = extra;
+            items.push(item);
         }
         items
     }

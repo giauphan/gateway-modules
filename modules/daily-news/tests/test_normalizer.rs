@@ -57,41 +57,12 @@ fn create_test_service(config: ModuleConfig) -> DailyNewsService {
     DailyNewsService::new(fetcher, storage, CandidateScorer::default())
 }
 
-#[test]
-fn test_normalize_valid_item_and_discussion_url() {
-    let svc = create_test_service(ModuleConfig::default());
-    let raw = RawNewsItem {
-        id: "item_123".to_string(),
-        url: "https://techcrunch.com/2026/11/02/ai-agents/?utm_source=feed".to_string(),
-        title: "Anthropic Announces MCP Improvements".to_string(),
-        published_at: "2026-11-02T10:00:00+00:00".to_string(),
-        publisher: Some("TechCrunch.com".to_string()),
-        author: Some("Jane Doe".to_string()),
-        description: Some("Anthropic published improvements to MCP.".to_string()),
-        body: None,
-        discussion_url: Some("https://news.ycombinator.com/item?id=50333339".to_string()),
-        tags: vec!["ai".to_string(), "mcp".to_string()],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
-
-    let cand = svc.normalize_item(&raw).unwrap();
-    assert!(cand.candidate_id.starts_with("cand_"));
-    assert_eq!(cand.canonical_url, "https://techcrunch.com/2026/11/02/ai-agents");
-    assert_eq!(cand.normalized_publisher, "TechCrunch");
-    assert_eq!(cand.discussion_url.as_deref(), Some("https://news.ycombinator.com/item?id=50333339"));
-}
-
-#[test]
-fn test_missing_required_fields_fails() {
-    let svc = create_test_service(ModuleConfig::default());
-    let raw_empty_id = RawNewsItem {
-        id: "".to_string(),
-        url: "https://example.com".to_string(),
-        title: "Title".to_string(),
-        published_at: "2026-11-02T10:00:00+00:00".to_string(),
+fn make_dummy_item(id: &str, url: &str, title: &str, pub_at: &str) -> RawNewsItem {
+    RawNewsItem {
+        id: id.to_string(),
+        url: url.to_string(),
+        title: title.to_string(),
+        published_at: pub_at.to_string(),
         publisher: None,
         author: None,
         description: None,
@@ -101,8 +72,56 @@ fn test_missing_required_fields_fails() {
         is_evergreen: false,
         content_kind: None,
         updated_at: None,
+        hook: None,
+        viewer_question: None,
+        symptom: None,
+        root_cause: None,
+        remedy: None,
+        evidence_excerpt: None,
+        source_snapshot: None,
+        snapshot_sha256: None,
         extra: std::collections::HashMap::new(),
-    };
+    }
+}
+
+#[test]
+fn test_normalize_valid_item_and_storyboard_fields() {
+    let svc = create_test_service(ModuleConfig::default());
+    let mut raw = make_dummy_item(
+        "item_123",
+        "https://techcrunch.com/2026/11/02/ai-agents/?utm_source=feed",
+        "Anthropic Announces MCP Improvements",
+        "2026-11-02T10:00:00+00:00",
+    );
+    raw.publisher = Some("TechCrunch.com".to_string());
+    raw.author = Some("Jane Doe".to_string());
+    raw.description = Some("Anthropic published improvements to MCP.".to_string());
+    raw.discussion_url = Some("https://news.ycombinator.com/item?id=50333339".to_string());
+    raw.tags = vec!["ai".to_string(), "mcp".to_string()];
+    raw.symptom = Some("Agent context bloat".to_string());
+    raw.root_cause = Some("Eager tool registration".to_string());
+    raw.remedy = Some("Two-tier schema scoping".to_string());
+    raw.source_snapshot = Some("artifacts/s1.txt".to_string());
+    raw.snapshot_sha256 = Some("2bad0815c06b65".to_string());
+
+    let cand = svc.normalize_item(&raw).unwrap();
+    assert!(cand.candidate_id.starts_with("cand_"));
+    assert_eq!(cand.canonical_url, "https://techcrunch.com/2026/11/02/ai-agents");
+    assert_eq!(cand.source_url, "https://techcrunch.com/2026/11/02/ai-agents");
+    assert_eq!(cand.normalized_publisher, "TechCrunch");
+    assert_eq!(cand.discussion_url.as_deref(), Some("https://news.ycombinator.com/item?id=50333339"));
+    assert_eq!(cand.symptom.as_deref(), Some("Agent context bloat"));
+    assert_eq!(cand.root_cause.as_deref(), Some("Eager tool registration"));
+    assert_eq!(cand.remedy.as_deref(), Some("Two-tier schema scoping"));
+    assert_eq!(cand.source_snapshot.as_deref(), Some("artifacts/s1.txt"));
+    assert_eq!(cand.snapshot_sha256.as_deref(), Some("2bad0815c06b65"));
+}
+
+#[test]
+fn test_missing_required_fields_fails() {
+    let svc = create_test_service(ModuleConfig::default());
+    let mut raw_empty_id = make_dummy_item("", "https://example.com", "Title", "2026-11-02T10:00:00+00:00");
+    raw_empty_id.id = "".to_string();
     assert!(svc.normalize_item(&raw_empty_id).is_err());
 }
 
@@ -113,59 +132,29 @@ fn test_batch_deduplication_and_date_filtering() {
     cfg.require_latest_news = false;
     let svc = create_test_service(cfg);
 
-    let raw1 = RawNewsItem {
-        id: "1".to_string(),
-        url: "https://news.ycombinator.com/item?id=100".to_string(),
-        title: "New Rust Toolcase Gateway Released".to_string(),
-        published_at: "2026-11-02T11:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
-    let raw2_duplicate = RawNewsItem {
-        id: "2".to_string(),
-        url: "https://news.ycombinator.com/item?id=100&utm_source=twitter".to_string(),
-        title: "New Rust Toolcase Gateway Released".to_string(),
-        published_at: "2026-11-02T11:05:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
-    let raw_evergreen = RawNewsItem {
-        id: "eg_1".to_string(),
-        url: "https://git-scm.com/docs/git-worktree".to_string(),
-        title: "Git Worktree Documentation".to_string(),
-        published_at: "2015-07-28T00:00:00+00:00".to_string(),
-        publisher: Some("git-scm.com".to_string()),
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: true,
-        content_kind: Some("documentation".to_string()),
-        updated_at: Some("2026-10-28T14:00:00+00:00".to_string()),
-        extra: std::collections::HashMap::new(),
-    };
+    let raw1 = make_dummy_item(
+        "1",
+        "https://news.ycombinator.com/item?id=100",
+        "New Rust Toolcase Gateway Released",
+        "2026-11-02T11:00:00+00:00",
+    );
+    let raw2_duplicate = make_dummy_item(
+        "2",
+        "https://news.ycombinator.com/item?id=100&utm_source=twitter",
+        "New Rust Toolcase Gateway Released",
+        "2026-11-02T11:05:00+00:00",
+    );
+    let mut raw_evergreen = make_dummy_item(
+        "eg_1",
+        "https://git-scm.com/docs/git-worktree",
+        "Git Worktree Documentation",
+        "2015-07-28T00:00:00+00:00",
+    );
+    raw_evergreen.is_evergreen = true;
+    raw_evergreen.updated_at = Some("2026-10-28T14:00:00+00:00".to_string());
 
     let items = vec![raw1, raw2_duplicate, raw_evergreen];
     let ranked = svc.filter_and_score(&items, None, None, None, 10);
-
-    // Duplicate was filtered out, evergreen is preserved because require_latest_news is false
     assert_eq!(ranked.len(), 2);
 }
 
@@ -176,22 +165,13 @@ fn test_require_latest_news_enforces_freshness_even_for_evergreen() {
     cfg.require_latest_news = true;
     let svc = create_test_service(cfg);
 
-    let stale_doc = RawNewsItem {
-        id: "cand_old".to_string(),
-        url: "https://docs.anthropic.com/context-windows".to_string(),
-        title: "Why coding agents lose context".to_string(),
-        published_at: "2024-03-04T00:00:00+00:00".to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: true,
-        content_kind: None,
-        updated_at: None,
-        extra: std::collections::HashMap::new(),
-    };
+    let mut stale_doc = make_dummy_item(
+        "cand_old",
+        "https://docs.anthropic.com/context-windows",
+        "Why coding agents lose context",
+        "2024-03-04T00:00:00+00:00",
+    );
+    stale_doc.is_evergreen = true;
 
     let ranked = svc.filter_and_score(&[stale_doc], None, None, None, 5);
     assert_eq!(ranked.len(), 0);
