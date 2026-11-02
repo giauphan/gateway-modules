@@ -89,5 +89,47 @@ class TestDomainPureFunctions(unittest.TestCase):
         self.assertFalse(is_safe_url("http://10.0.0.1/private", allowed))
 
 
+class TestDomainModels(unittest.TestCase):
+    def test_raw_news_item_discussion_url(self):
+        from daily_news.domain import RawNewsItem, NormalizedCandidate
+
+        raw = RawNewsItem(
+            id="test_1",
+            url="https://wikihack.netlify.app",
+            title="Show HN: Wikihack",
+            publisher="Hacker News",
+            published_at="2026-11-02T10:00:00Z",
+            discussion_url="https://news.ycombinator.com/item?id=50333339",
+        )
+        self.assertEqual(raw.discussion_url, "https://news.ycombinator.com/item?id=50333339")
+
+        # from_dict with direct key
+        d1 = {"id": "1", "url": "https://example.com", "title": "Ex", "discussion_url": "https://hn.com/1"}
+        item1 = RawNewsItem.from_dict(d1)
+        self.assertEqual(item1.discussion_url, "https://hn.com/1")
+
+        # from_dict with extra key
+        d2 = {"id": "2", "url": "https://example.com", "title": "Ex", "extra": {"discussion_url": "https://hn.com/2"}}
+        item2 = RawNewsItem.from_dict(d2)
+        self.assertEqual(item2.discussion_url, "https://hn.com/2")
+
+        cand = NormalizedCandidate(
+            candidate_id="cand_1",
+            original_url="https://wikihack.netlify.app",
+            canonical_url="https://wikihack.netlify.app",
+            title="Show HN: Wikihack",
+            publisher="Hacker News",
+            normalized_publisher="Hacker News",
+            published_at_utc="2026-11-02T10:00:00+00:00",
+            content_hash="chash123",
+            title_hash="thash123",
+            raw_provenance={"id": "test_1"},
+            discussion_url="https://news.ycombinator.com/item?id=50333339",
+        )
+        cand_dict = cand.to_dict()
+        self.assertEqual(cand_dict["canonical_url"], "https://wikihack.netlify.app")
+        self.assertEqual(cand_dict["discussion_url"], "https://news.ycombinator.com/item?id=50333339")
+
+
 if __name__ == "__main__":
     unittest.main()

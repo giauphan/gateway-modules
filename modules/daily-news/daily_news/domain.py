@@ -64,10 +64,36 @@ class RawNewsItem:
     image_url: Optional[str] = None
     source_feed: Optional[str] = None
     updated_at: Optional[str] = None
+    discussion_url: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RawNewsItem":
+        """Instantiate RawNewsItem safely from a raw dictionary."""
+        disc_url = d.get("discussion_url")
+        if not disc_url and isinstance(d.get("extra"), dict):
+            disc_url = d["extra"].get("discussion_url")
+        return cls(
+            id=str(d.get("id") or ""),
+            url=str(d.get("url") or d.get("canonical_url") or ""),
+            title=str(d.get("title") or ""),
+            published_at=str(d.get("published_at") or d.get("published_at_utc") or ""),
+            publisher=d.get("publisher"),
+            author=d.get("author"),
+            description=d.get("description"),
+            body=d.get("body"),
+            content_hash=d.get("content_hash"),
+            tags=list(d.get("tags") or []),
+            language=d.get("language", "en"),
+            image_url=d.get("image_url"),
+            source_feed=d.get("source_feed"),
+            updated_at=d.get("updated_at"),
+            discussion_url=str(disc_url).strip() if disc_url else None,
+            extra=dict(d.get("extra") or {}),
+        )
 
 
 @dataclass(frozen=True)
@@ -104,6 +130,7 @@ class NormalizedCandidate:
     evidence_excerpt: Optional[str] = None
     source_snapshot: Optional[str] = None
     snapshot_sha256: Optional[str] = None
+    discussion_url: Optional[str] = None
     independent_fact_check: Optional[Dict[str, Any]] = None
     scoring: Optional[Dict[str, Any]] = None
 
@@ -113,6 +140,8 @@ class NormalizedCandidate:
         d["published_at"] = self.published_at_utc
         if self.updated_at:
             d["updated_at"] = self.updated_at
+        if self.discussion_url:
+            d["discussion_url"] = self.discussion_url
         if not d.get("summary"):
             d["summary"] = self.description or (self.body[:300] if self.body else "")
         return d

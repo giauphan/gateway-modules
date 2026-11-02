@@ -96,6 +96,30 @@ class TestRedisFeedProvider(unittest.TestCase):
         self.assertEqual(items[0]["title"], "Autonomous Coding Agent Benchmark Matrix")
         self.assertEqual(items[0]["topic_family"], "agent_evaluation")
 
+    def test_redis_discussion_url_passthrough(self):
+        mock_client = MagicMock()
+        mock_client.lrange.return_value = [
+            json.dumps({
+                "title": "Discussion Tool Integration",
+                "url": "https://example.com/tool-integration",
+                "discussion_url": "https://news.ycombinator.com/item?id=99999",
+                "publisher": "ToolNews",
+                "published_at": "2026-11-02T08:00:00Z",
+            })
+        ]
+
+        provider = RedisFeedProvider(
+            redis_url="redis://localhost:6379/0",
+            key="news:queue",
+            channel_type="list",
+            client=mock_client,
+        )
+
+        items = provider.fetch_items(limit=1)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/tool-integration")
+        self.assertEqual(items[0]["discussion_url"], "https://news.ycombinator.com/item?id=99999")
+
     def test_timestamp_from_stream_msg_id_fallback(self):
         mock_client = MagicMock()
         # Message with no published_at field; ID is timestamp 1730541600000 (2024-11-02 10:00:00 UTC)

@@ -129,6 +129,10 @@ class RedisFeedProvider:
             },
         }
 
+        disc_url = str(payload.get("discussion_url") or payload.get("comments_url") or "").strip()
+        if disc_url:
+            item["discussion_url"] = disc_url
+
         # Pass-through 6-beat storyboard fields if already provided by upstream crawler
         for beat_field in (
             "symptom",

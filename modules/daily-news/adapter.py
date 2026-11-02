@@ -147,7 +147,7 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return json_resp(200, {
             "status": "healthy",
             "module": MODULE_ID,
-            "version": "1.2.0",
+            "version": "1.3.0",
             "cached_candidates": len(store.get_cached_candidates()),
             "consumed_count": len(store.get_consumed_ids()),
             "newsnow_url": cfg["newsnow_url"],
@@ -189,7 +189,11 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 u = item.get("canonical_url", "")
                 p = item.get("publisher", "")
                 s = item.get("scoring", {}).get("total_score", 0.0)
-                lines.append(f"{i}. **{t}** ({p}) [Score: {s:.2f}]\n   {u}")
+                disc = item.get("discussion_url", "")
+                link_line = f"   {u}"
+                if disc and disc != u:
+                    link_line += f"\n   Discussion: {disc}"
+                lines.append(f"{i}. **{t}** ({p}) [Score: {s:.2f}]\n{link_line}")
             reply = "\n".join(lines)
         else:
             reply = "No eligible news candidates found within the current freshness window."

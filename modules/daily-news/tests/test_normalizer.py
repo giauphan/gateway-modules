@@ -27,6 +27,21 @@ class TestNewsNormalizer(unittest.TestCase):
         self.assertEqual(cand.normalized_publisher, "TechCrunch")
         self.assertEqual(cand.tags, ["ai", "mcp"])
 
+    def test_normalize_discussion_url(self):
+        raw = {
+            "id": "hn_50333339",
+            "url": "https://wikihack.netlify.app",
+            "title": "Show HN: Wikihack",
+            "discussion_url": "https://news.ycombinator.com/item?id=50333339",
+            "published_at": "2026-11-02T10:00:00Z",
+        }
+        cand = self.normalizer.normalize_item(raw)
+        self.assertEqual(cand.canonical_url, "https://wikihack.netlify.app")
+        self.assertEqual(cand.discussion_url, "https://news.ycombinator.com/item?id=50333339")
+        d = cand.to_dict()
+        self.assertEqual(d["canonical_url"], "https://wikihack.netlify.app")
+        self.assertEqual(d["discussion_url"], "https://news.ycombinator.com/item?id=50333339")
+
     def test_missing_required_fields_raises(self):
         with self.assertRaises(ValueError):
             self.normalizer.normalize_item({"id": "1", "url": "https://x.com", "title": ""})

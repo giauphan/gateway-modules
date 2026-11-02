@@ -84,6 +84,17 @@ class NewsNormalizer:
             except Exception:
                 parsed_updated = str(updated_val).strip()
 
+        disc_url = (
+            raw_item.get("discussion_url")
+            or raw_item.get("comments_url")
+            or (raw_item.get("extra", {}).get("discussion_url") if isinstance(raw_item.get("extra"), dict) else None)
+            or (raw_item.get("extra", {}).get("comments_url") if isinstance(raw_item.get("extra"), dict) else None)
+        )
+        if disc_url and str(disc_url).strip():
+            disc_url = str(disc_url).strip()
+        else:
+            disc_url = None
+
         return NormalizedCandidate(
             candidate_id=candidate_id,
             canonical_url=canonical_url,
@@ -106,6 +117,7 @@ class NewsNormalizer:
             is_evergreen=bool(raw_item.get("is_evergreen", False)),
             content_kind=str(raw_item.get("content_kind", "news")),
             updated_at=parsed_updated,
+            discussion_url=disc_url,
             summary=raw_item.get("summary") or desc,
             hook=raw_item.get("hook"),
             viewer_question=raw_item.get("viewer_question"),

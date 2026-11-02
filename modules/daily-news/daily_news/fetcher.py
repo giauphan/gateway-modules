@@ -132,6 +132,15 @@ class FeedFetcher:
                 info = str(extra.get("info") or raw.get("description") or "").strip()
                 item_id = str(raw.get("id") or norm_key)
 
+                disc_url = (
+                    raw.get("discussion_url")
+                    or raw.get("comments_url")
+                    or extra.get("discussion_url")
+                    or extra.get("comments_url")
+                )
+                if not disc_url and source == "hackernews" and raw.get("id"):
+                    disc_url = f"https://news.ycombinator.com/item?id={raw.get('id')}"
+
                 item = {
                     "id": f"newsnow_{source}_{item_id}",
                     "url": url,
@@ -143,6 +152,7 @@ class FeedFetcher:
                     "tags": [source],
                     "language": "en",
                     "source_feed": f"newsnow:{source}",
+                    "discussion_url": disc_url,
                     "extra": extra,
                 }
                 items.append(item)
@@ -197,6 +207,7 @@ class FeedFetcher:
                 else datetime.now(timezone.utc).isoformat()
             )
             info = str(raw.get("text") or "").strip()
+            hn_disc_url = f"https://news.ycombinator.com/item?id={item_id}"
 
             items.append({
                 "id": f"hn_{item_id}",
@@ -209,10 +220,12 @@ class FeedFetcher:
                 "tags": ["hackernews", "tech"],
                 "language": "en",
                 "source_feed": "live:hackernews",
+                "discussion_url": hn_disc_url,
                 "extra": {
                     "score": raw.get("score"),
                     "by": raw.get("by"),
                     "comments": raw.get("descendants"),
+                    "discussion_url": hn_disc_url,
                 },
             })
         return items

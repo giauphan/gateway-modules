@@ -206,6 +206,18 @@ class TestAdapter(unittest.TestCase):
         feed_body = json.loads(resp_feed["body"])
         self.assertEqual(isinstance(feed_body["items"], list), True)
 
+    def test_chat_completions_with_discussion_url(self):
+        req = {
+            "path": "/chat/completions",
+            "method": "POST",
+            "body": json.dumps({"limit": 2}),
+        }
+        resp = handle_request(req)
+        self.assertEqual(resp["status"], 200)
+        body = json.loads(resp["body"])
+        content = body["choices"][0]["message"]["content"]
+        self.assertIn("Daily News Briefing", content)
+
 
 if __name__ == "__main__":
     unittest.main()
