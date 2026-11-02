@@ -74,6 +74,14 @@ class NewsNormalizer:
         tags = [str(t).strip() for t in raw_item.get("tags", []) if str(t).strip()]
         topic_fam = raw_item.get("topic_family") or classify_topic_family(title, f"{desc or ''} {body or ''}")
 
+        updated_val = raw_item.get("updated_at") or raw_item.get("last_modified")
+        parsed_updated: Optional[str] = None
+        if updated_val and str(updated_val).strip():
+            try:
+                parsed_updated = parse_iso_utc(str(updated_val).strip())
+            except Exception:
+                parsed_updated = str(updated_val).strip()
+
         return NormalizedCandidate(
             candidate_id=candidate_id,
             canonical_url=canonical_url,
@@ -95,6 +103,7 @@ class NewsNormalizer:
             image_url=raw_item.get("image_url"),
             is_evergreen=bool(raw_item.get("is_evergreen", False)),
             content_kind=str(raw_item.get("content_kind", "news")),
+            updated_at=parsed_updated,
             summary=raw_item.get("summary") or desc,
             hook=raw_item.get("hook"),
             viewer_question=raw_item.get("viewer_question"),
@@ -148,7 +157,7 @@ class NewsNormalizer:
                 })
                 continue
 
-            if item_dt < cutoff:
+            if not candidate.is_evergreen and item_dt < cutoff:
                 diagnostics.append({
                     "raw_item_id": raw_id,
                     "reason": "stale_content",

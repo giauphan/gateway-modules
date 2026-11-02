@@ -69,6 +69,27 @@ class TestNewsNormalizer(unittest.TestCase):
         self.assertEqual(candidates[0].original_url, raw1["url"])
         self.assertEqual(len(diagnostics), 3)
 
+    def test_evergreen_items_bypass_freshness_window(self):
+        evergreen_raw = {
+            "id": "eg_1",
+            "url": "https://git-scm.com/docs/git-worktree",
+            "title": "Git Worktree Documentation",
+            "published_at": "2015-07-28T00:00:00Z",
+            "updated_at": "2026-10-28T14:00:00Z",
+            "is_evergreen": True,
+            "content_kind": "documentation",
+        }
+        candidates, diagnostics = self.normalizer.ingest_and_normalize(
+            [evergreen_raw],
+            reference_time=self.now,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].is_evergreen, True)
+        self.assertEqual(candidates[0].updated_at, "2026-10-28T14:00:00+00:00")
+        self.assertEqual(candidates[0].published_at_utc, "2015-07-28T00:00:00+00:00")
+        self.assertEqual(candidates[0].to_dict().get("updated_at"), "2026-10-28T14:00:00+00:00")
+        self.assertEqual(len(diagnostics), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

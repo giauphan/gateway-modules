@@ -63,6 +63,7 @@ class RawNewsItem:
     language: Optional[str] = "en"
     image_url: Optional[str] = None
     source_feed: Optional[str] = None
+    updated_at: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -93,6 +94,7 @@ class NormalizedCandidate:
     image_url: Optional[str] = None
     is_evergreen: bool = False
     content_kind: str = "news"
+    updated_at: Optional[str] = None
     summary: Optional[str] = None
     hook: Optional[str] = None
     viewer_question: Optional[str] = None
@@ -109,6 +111,8 @@ class NormalizedCandidate:
         d = asdict(self)
         d["url"] = self.canonical_url
         d["published_at"] = self.published_at_utc
+        if self.updated_at:
+            d["updated_at"] = self.updated_at
         if not d.get("summary"):
             d["summary"] = self.description or (self.body[:300] if self.body else "")
         return d
