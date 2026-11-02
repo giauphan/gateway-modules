@@ -1,0 +1,62 @@
+{
+  "id": "daily-news",
+  "name": "Daily News & Content Discovery Service",
+  "short_name": "Daily News",
+  "version": "1.0.0",
+  "namespace": "/custom/daily-news",
+  "entrypoint": "run.sh",
+  "protocol": "stdio-stream",
+  "capabilities": [
+    "news",
+    "content_discovery",
+    "chat_completions",
+    "models"
+  ],
+  "icon": "📰",
+  "config_schema": {
+    "title": "Daily News & Content Discovery Service Config",
+    "module_id": "daily-news",
+    "namespace": "/custom/daily-news",
+    "fields": [
+      {
+        "key": "newsnow_url",
+        "label": "NewsNow Upstream Base URL",
+        "type": "text",
+        "placeholder": "http://127.0.0.1:4444",
+        "description": "Upstream NewsNow feed service base URL"
+      },
+      {
+        "key": "freshness_window_hours",
+        "label": "Freshness Window (Hours)",
+        "type": "number",
+        "placeholder": "48",
+        "description": "Maximum age of news articles in hours to consider fresh"
+      },
+      {
+        "key": "max_age_days",
+        "label": "Max Age (Days)",
+        "type": "number",
+        "placeholder": "7",
+        "description": "Sliding window for tiered content discovery"
+      },
+      {
+        "key": "require_latest_news",
+        "label": "Require Latest Breaking News",
+        "type": "boolean",
+        "default": true,
+        "description": "Prioritize latest breaking news with verified publication timestamps"
+      },
+      {
+        "key": "default_sources",
+        "label": "Default Feeds/Sources",
+        "type": "text",
+        "placeholder": "hackernews,github,producthunt",
+        "description": "Comma-separated list of feed sources to query"
+      }
+    ]
+  },
+  "permissions": [
+    "network"
+  ],
+  "source": "https://github.com/giauphan/gateway-modules.git"
+}

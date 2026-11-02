@@ -1,0 +1,12 @@
+{
+  "name": "Daily News & Content Discovery Service",
+  "newsnow_url": "http://127.0.0.1:4444",
+  "freshness_window_hours": 48.0,
+  "max_age_days": 7,
+  "require_latest_news": true,
+  "default_sources": [
+    "hackernews",
+    "github",
+    "producthunt"
+  ]
+}
