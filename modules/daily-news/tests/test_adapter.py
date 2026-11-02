@@ -119,6 +119,37 @@ class TestAdapter(unittest.TestCase):
         self.assertEqual(body["status"], "ELIGIBLE")
         self.assertEqual(len(body["candidates"]), 2)
 
+    def test_discover_limit_and_count_aliases(self):
+        items = [
+            {
+                "id": f"c_{i}",
+                "url": f"https://example.com/art-{i}",
+                "title": f"Article {i}",
+                "publisher": "Example",
+                "published_at": self.recent_ts,
+            }
+            for i in range(10)
+        ]
+        # Request with "limit"
+        req1 = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({"curated_candidates": items, "limit": 4}),
+        }
+        res1 = handle_request(req1)
+        self.assertEqual(res1["status"], 200)
+        self.assertEqual(len(json.loads(res1["body"])["candidates"]), 4)
+
+        # Request with "count"
+        req2 = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({"curated_candidates": items, "count": 6}),
+        }
+        res2 = handle_request(req2)
+        self.assertEqual(res2["status"], 200)
+        self.assertEqual(len(json.loads(res2["body"])["candidates"]), 6)
+
     def test_discover_endpoint_date_range_filtering(self):
         curated = [
             {

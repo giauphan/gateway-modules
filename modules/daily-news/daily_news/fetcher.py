@@ -159,14 +159,14 @@ class FeedFetcher:
 
         # Fallback to direct public HackerNews API if local NewsNow daemon yielded 0 items
         if not items and ("hackernews" in sources or "all" in sources):
-            direct_items = self.fetch_hackernews_direct(limit=15)
+            direct_items = self.fetch_hackernews_direct(limit=35)
             if direct_items:
                 logger.info("Retrieved %d live items via direct HackerNews fallback", len(direct_items))
                 items.extend(direct_items)
 
         return items
 
-    def fetch_hackernews_direct(self, limit: int = 15) -> List[Dict[str, Any]]:
+    def fetch_hackernews_direct(self, limit: int = 35) -> List[Dict[str, Any]]:
         """Direct fallback fetching top stories from HackerNews Firebase API."""
         endpoint = "https://hacker-news.firebaseio.com/v0/topstories.json"
         try:
@@ -189,7 +189,7 @@ class FeedFetcher:
             except Exception:
                 return None
 
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=10) as pool:
             raw_items = [it for it in pool.map(fetch_item, target_ids) if isinstance(it, dict)]
 
         items: List[Dict[str, Any]] = []

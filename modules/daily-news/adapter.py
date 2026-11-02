@@ -170,7 +170,7 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
 
     # 4. Chat Completions (News Summary)
     if path.endswith("/chat/completions"):
-        limit = body.get("limit", 3)
+        limit = int(body.get("limit") or body.get("count") or 3)
         topics = extract_topics(body)
         from_date, to_date = extract_date_range(body)
         res = discovery.discover_candidates(
@@ -262,7 +262,7 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
                 or any(nt in c.topic_family.lower() for nt in norm_targets)
                 or any(nt in c.title.lower() for nt in norm_targets)
             ]
-        limit = int(body.get("limit") or 10)
+        limit = int(body.get("limit") or body.get("count") or 10)
         ranked = scorer.rank_candidates(normalized, limit=limit)
         return json_resp(200, {
             "count": len(ranked),
@@ -273,7 +273,7 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7. Tiered Discovery Endpoint
     if path.endswith("/api/v1/discover"):
-        count = int(body.get("count") or 5)
+        count = int(body.get("count") or body.get("limit") or 5)
         curated = body.get("curated_candidates")
         sources = body.get("sources")
         official_only = bool(body.get("official_only", False) or (isinstance(sources, list) and sources == ["official"]))
