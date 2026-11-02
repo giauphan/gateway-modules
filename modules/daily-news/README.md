@@ -2,163 +2,120 @@
 
 A high-performance standalone provider module for **Toolcase Gateway**, extracted from OpenMontage's daily news gathering, canonicalization, and tiered ranking pipeline.
 
-The module supports **dual-runtime execution**:
-1. **Native Rust Binary (`daily-news-rs`)**: Standalone, high-speed, zero-dependency compiled binary for Rust-only or minimal container environments where Python 3 is not installed.
-2. **Python Engine**: Dynamic, full-featured Python service with rich source adapters (NewsNow, Redis, Hacker News, GitHub, Product Hunt).
+The module is **100% Native Rust** with **zero Python dependencies**.
 
 ---
 
 ## Table of Contents
 
 1. [Features & Capabilities](#1-features--capabilities)
-2. [Dual-Runtime Architecture](#2-dual-runtime-architecture)
-3. [Running in Pure Rust Environments (Zero Python)](#3-running-in-pure-rust-environments-zero-python)
+2. [Clean Architecture & File Layout](#2-clean-architecture--file-layout)
+3. [Running and Compiling with Cargo](#3-running-and-compiling-with-cargo)
 4. [API Endpoints Reference](#4-api-endpoints-reference)
-5. [Discovery API & Dual-Link Schema](#5-discovery-api--dual-link-schema)
-6. [Pagination & Filtering Parameters](#6-pagination--filtering-parameters)
-7. [Deterministic 6-Axis Scoring](#7-deterministic-6-axis-scoring)
-8. [Configuration Options](#8-configuration-options)
-9. [Integration with Toolcase Gateway](#9-integration-with-toolcase-gateway)
+5. [Query String Parameters & Dual-Link Schema](#5-query-string-parameters--dual-link-schema)
+6. [Deterministic 6-Axis Scoring](#6-deterministic-6-axis-scoring)
+7. [Configuration Reference](#7-configuration-reference)
 
 ---
 
 ## 1. Features & Capabilities
 
-- **Zero-Dependency Native Execution**: Runs directly as a compiled Rust binary communicating over standard `stdio-stream` JSON-RPC.
-- **Multi-Source Ingestion**: Ingests breaking news and technical releases from Hacker News, GitHub, Product Hunt, NewsNow feeds, and Redis streams/lists.
+- **100% Pure Native Rust**: Zero Python runtime, pip dependencies, or virtualenvs required.
+- **Query String Parameter Support**: Accepts parameters seamlessly via JSON body or URL query strings (`?limit=15`, `?count=10`, `?topics=agent_architecture`) across all routes.
+- **Multi-Source News Ingestion**: Ingests breaking stories from Hacker News Firebase API and upstream NewsNow instances.
 - **SSRF Protection & URL Canonicalization**: Enforces strict URL sanitization, stripping tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`, `source`) and URL fragments.
 - **Dual-Link Resolution**: Disambiguates between the actual content target (`canonical_url`) and the community discussion thread (`discussion_url`).
-- **Deterministic Deduplication & Hashing**: Computes authoritative SHA-256 `title_hash` and `content_hash` to reject duplicates across multiple aggregators.
+- **Deterministic Deduplication & Hashing**: Computes authoritative SHA-256 `title_hash` and `content_hash` signatures.
 - **Explainable 6-Axis Scoring**: Computes objective scores across Freshness, Publisher Authority, Fact Density, Visual Potential, Audience Interest, and Feasibility.
 - **Tiered Cascade Discovery**: Employs Tier 1 (Curated Queue) -> Tier 2 (Automated Breaking Feed) -> Tier 3 (Fail-Closed Safety).
+- **Interactive Dark-Mode UI**: Built-in responsive HTML status dashboard mounted at `/ui`.
 
 ---
 
-## 2. Dual-Runtime Architecture
+## 2. Clean Architecture & File Layout
 
-Toolcase Gateway executes modules via `stdio-stream` using the `./run.sh` launcher.
-
-```text
-Toolcase Gateway (Reverse Proxy / Routing)
-   │
-   ▼ stdio-stream (JSON Lines over stdin / stdout)
-./run.sh
-   ├── 1. Check $SCRIPT_DIR/rust/target/release/daily-news  ──► [Native Rust Engine]
-   ├── 2. Check $SCRIPT_DIR/daily-news (Static Binary)     ──► [Native Rust Engine]
-   └── 3. Fallback: command -v python3 adapter.py           ──► [Python Engine]
-```
-
-### Module File Layout
+The module is organized strictly according to Clean Architecture and Domain-Driven Design (DDD). Every file remains under 450 lines:
 
 ```text
 modules/daily-news/
-├── module.json         # Toolcase Gateway personal manifest (id: daily-news)
-├── run.sh              # Universal auto-detecting executable launcher
-├── adapter.py          # Python stdio-stream protocol adapter
-├── config.example.json # Sample configuration template
+├── Cargo.toml          # Rust crate manifest (serde, ureq, sha2, uuid)
+├── Cargo.lock          # Locked deterministic dependencies
+├── daily-news          # Precompiled standalone ELF binary (2.4 MB stripped)
+├── run.sh              # Standalone executable launcher
+├── module.json         # Toolcase Gateway manifest
+├── config.example.json # Configuration template
 ├── README.md           # Comprehensive documentation
-├── rust/               # Standalone Native Rust Crate
-│   ├── Cargo.toml      # Minimal zero-async dependencies (serde, ureq, sha2, uuid)
-│   └── src/
-│       ├── domain.rs   # Domain entities, URL canonicalizer, SHA-256 hashing
-│       ├── scoring.rs  # 6-axis scoring engine and candidate ranker
-│       ├── lib.rs      # Library facade and unit test suite
-│       └── main.rs     # stdio-stream event loop & route handlers
-├── daily_news/         # Python domain & application package
-│   ├── domain.py       # Domain models, DiscoveryResult, RawNewsItem
-│   ├── scoring.py      # Python 6-axis scoring implementation
-│   ├── discovery.py    # Tiered cascade discovery engine
-│   ├── fetcher.py      # NewsNow, Hacker News, Redis fetchers
-│   └── ui.py           # Interactive HTML dashboard renderer
-└── tests/              # Python test suite
+└── src/
+    ├── domain.rs       # Domain Entities, Value Objects, URL canonicalizer, SHA-256
+    ├── ports.rs        # Outbound Port Traits (FeedFetcherPort, StoragePort)
+    ├── scoring.rs      # Domain Service: Deterministic 6-axis scoring & ranker
+    ├── service.rs      # Application Layer: Discovery, Consume, and Config use cases
+    ├── storage.rs      # Storage Adapter: Persistent JSON state & candidate cache
+    ├── fetcher.rs      # Network Adapter: Live Hacker News & NewsNow HTTP client
+    ├── ui.rs           # Presenter Adapter: Responsive HTML dashboard presenter
+    ├── lib.rs          # Library facade and module re-exports
+    └── main.rs         # Frameworks & Drivers: stdio-stream JSON-RPC event loop
 ```
 
 ---
 
-## 3. Running in Pure Rust Environments (Zero Python)
+## 3. Running and Compiling with Cargo
 
-If your client, container, or server environment does **not** have Python installed, you can build the native Rust binary with `cargo`:
-
-### Step 1: Build the Native Binary
-
+### Precompiled Standalone Mode
+The module includes a precompiled, stripped 2.4 MB binary (`./daily-news`). When Toolcase Gateway starts, `./run.sh` immediately executes this binary:
 ```bash
-cd modules/daily-news/rust
+./run.sh
+```
+
+### Compiling from Source
+To compile the binary yourself with Cargo:
+```bash
 cargo build --release
 ```
+The compiled binary will be placed at `target/release/daily-news`.
 
-The resulting binary will be created at `rust/target/release/daily-news`.
-
-*(Optional)* You can copy the binary directly to the module root:
+### Running Unit Tests
 ```bash
-cp target/release/daily-news ../daily-news
+cargo test
 ```
-
-### Step 2: Verify Execution
-
-Run `./run.sh` or check the module via Toolcase Gateway:
-```bash
-curl -s http://127.0.0.1:28130/custom/daily-news/health
-```
-
-Output:
-```json
-{
-  "status": "healthy",
-  "module": "daily-news",
-  "version": "1.3.0",
-  "engine": "rust-native"
-}
-```
-
-The `x-module-engine: rust-native` response header confirms that the native Rust engine is actively handling requests without invoking Python.
+Runs the full suite of unit tests verifying URL canonicalization, deterministic hashing, scoring weights, and storage persistence.
 
 ---
 
 ## 4. API Endpoints Reference
 
-All endpoints are mounted under the Toolcase Gateway prefix `/custom/daily-news/*`:
+All endpoints are mounted under the Toolcase Gateway namespace prefix `/custom/daily-news/*`:
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/custom/daily-news/health` | Health check, module version, and active runtime engine |
+| `GET` | `/custom/daily-news/health` | Health check, module version, and active runtime engine (`rust-native`) |
 | `GET` | `/custom/daily-news/models` | OpenAI-compatible model listing (`daily-news`) |
-| `POST` | `/custom/daily-news/chat/completions` | OpenAI-compatible chat completion returning formatted news digest |
+| `POST` | `/custom/daily-news/chat/completions` | Formatted daily news summary in chat format |
 | `GET` | `/custom/daily-news/ui` or `/` | Interactive responsive HTML status dashboard |
 | `POST` | `/custom/daily-news/api/v1/discover` | Tiered content discovery returning ranked candidates and top-level `count` |
 | `GET` | `/custom/daily-news/api/v1/candidates` | Returns currently ranked and scored candidates |
-| `GET` | `/custom/daily-news/api/v1/feed` | Ingested raw feed items before deduplication and scoring |
+| `GET` | `/custom/daily-news/api/v1/feed` | Raw ingested feed items before scoring |
 | `POST` | `/custom/daily-news/api/v1/consume` | Marks candidates as consumed/processed to avoid re-serving |
-| `GET` | `/custom/daily-news/api/v1/config` | Inspect active module configuration |
+| `GET` | `/custom/daily-news/api/v1/config` | Read active configuration |
 | `POST` | `/custom/daily-news/api/v1/config` | Update configuration parameters dynamically |
 
 ---
 
-## 5. Discovery API & Dual-Link Schema
+## 5. Query String Parameters & Dual-Link Schema
 
-### Request Format (`POST /custom/daily-news/api/v1/discover`)
-
-The discovery endpoint accepts parameters either via JSON body or query parameters:
+All routes support query string parameters as well as JSON body parameters:
 
 ```bash
+# Query string parameter
+curl -s -X POST "http://127.0.0.1:28130/custom/daily-news/api/v1/discover?limit=15"
+
+# JSON body parameter
 curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/discover \
   -H "Content-Type: application/json" \
-  -d '{
-    "limit": 15,
-    "from_date": "2026-11-01T00:00:00Z",
-    "to_date": "2026-11-02T23:59:59Z",
-    "topics": ["agent_architecture", "agent_tool_use"]
-  }'
+  -d '{"limit": 15}'
 ```
 
-Query string format is also fully supported:
-```bash
-curl -s -X POST "http://127.0.0.1:28130/custom/daily-news/api/v1/discover?limit=15"
-```
-
-### Response Schema
-
-The response includes the **top-level `count`** field representing the exact number of returned candidates, along with the discovery tier and full candidate metadata:
-
+### Response Schema with Top-Level `count`
 ```json
 {
   "tier": "tier_2_automated",
@@ -190,54 +147,34 @@ The response includes the **top-level `count`** field representing the exact num
         }
       }
     }
-  ],
-  "source_file": "live:hackernews",
-  "diagnostics": {
-    "tier_2_checked": true
-  }
+  ]
 }
 ```
 
 ### Understanding the Dual Links
-
-Every candidate provides both links explicitly:
-1. **`canonical_url`**: The destination article, project website, or announcement. Tracking parameters (`utm_source`, `utm_medium`, `fbclid`, `gclid`, `ref`) and fragments are stripped for clean caching and deduplication.
-2. **`discussion_url`**: The community comment thread or forum post (e.g. `https://news.ycombinator.com/item?id=50334704`). This allows consumers to read community reactions, upvotes, and context.
+- **`canonical_url`**: The destination article or project website, stripped of all tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`).
+- **`discussion_url`**: The community comment thread or forum post (e.g. Hacker News item), allowing users to browse discussion and context.
 
 ---
 
-## 6. Pagination & Filtering Parameters
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `limit` (or `count`) | Integer | `5` | Maximum number of candidate items to return (1 to 100). |
-| `from_date` | ISO 8601 String | `None` | Filters candidates published on or after this timestamp. |
-| `to_date` | ISO 8601 String | `None` | Filters candidates published on or before this timestamp. |
-| `topics` | List[String] | `None` | Filters by topic family (e.g., `agent_architecture`, `context_memory`, `agent_tool_use`, `debugging_reliability`). |
-| `source_feeds` | List[String] | `None` | Limits discovery to specific feed identifiers (e.g., `["live:hackernews"]`). |
-
----
-
-## 7. Deterministic 6-Axis Scoring
+## 6. Deterministic 6-Axis Scoring
 
 Candidates are ranked using a multi-factor formula:
 
 $$\text{Score} = (W_F \times F) + (W_A \times A) + (W_D \times D) + (W_V \times V) + (W_I \times I) + (W_{\text{Fe}} \times \text{Fe})$$
 
-| Axis | Weight | Meaning | Scoring Criteria |
-| :--- | :--- | :--- | :--- |
-| **Freshness ($F$)** | 25% | Timeliness of publication | $1.0$ for $<12\text{h}$, decays linearly to $0.0$ at $48\text{h}$. |
-| **Publisher Authority ($A$)** | 20% | Domain reputation | $1.0$ for tier-1 AI labs / peer-reviewed sources; $0.70$ for HN/TechCrunch; $0.50$ default. |
-| **Fact Density ($D$)** | 15% | Substance of content | Evaluated on text length, technical terminology, and concrete metrics. |
-| **Visual Potential ($V$)** | 15% | Media suitability | $0.8$ if rich media/diagrams present; $0.6$ if active discussion exists. |
-| **Audience Interest ($I$)** | 15% | Community engagement | Upvotes, comment count, and social velocity. |
-| **Feasibility ($\text{Fe}$)** | 10% | Reproducibility | $1.0$ if code, open API, or runnable repo is linked. |
+| Axis | Weight | Criteria |
+| :--- | :--- | :--- |
+| **Freshness ($F$)** | 25% | $1.0$ for $<12\text{h}$, decays linearly to $0.0$ at $48\text{h}$. |
+| **Publisher Authority ($A$)** | 20% | Tier-1 AI labs ($1.0$), HN/TechCrunch ($0.70$), default ($0.50$). |
+| **Fact Density ($D$)** | 15% | Content length, technical density, code snippets. |
+| **Visual Potential ($V$)** | 15% | Discussion link presence, media richness. |
+| **Audience Interest ($I$)** | 15% | Community upvotes, comment velocity. |
+| **Feasibility ($\text{Fe}$)** | 10% | Reproducibility and open repo/API availability ($1.0$). |
 
 ---
 
-## 8. Configuration Options
-
-Module settings can be specified in `config.json` inside the module directory:
+## 7. Configuration Reference
 
 ```json
 {
@@ -252,25 +189,3 @@ Module settings can be specified in `config.json` inside the module directory:
   "redis_type": "stream"
 }
 ```
-
----
-
-## 9. Integration with Toolcase Gateway
-
-### OpenAI-Compatible Chat Integration
-
-Query the module as an OpenAI-compatible model:
-
-```bash
-curl -s http://127.0.0.1:28130/custom/daily-news/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "daily-news",
-    "messages": [{"role": "user", "content": "What is breaking in tech today?"}],
-    "limit": 10
-  }' | jq '.choices[0].message.content'
-```
-
-### Module Auto-Discovery in Toolcase Gateway
-
-When installed in `./addons/daily-news/`, Toolcase Gateway automatically discovers, registers, and mounts the module routes on server startup or dynamically upon incoming requests.
