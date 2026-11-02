@@ -123,6 +123,8 @@ class NewsNormalizer:
         raw_items: List[Dict[str, Any]],
         reference_time: Optional[datetime.datetime] = None,
         require_latest_news: Optional[bool] = None,
+        from_date: Optional[datetime.datetime] = None,
+        to_date: Optional[datetime.datetime] = None,
     ) -> Tuple[List[NormalizedCandidate], List[Dict[str, Any]]]:
         """Normalize multiple raw items, filter staleness/future dates, and deduplicate."""
         if reference_time is None:
@@ -132,8 +134,22 @@ class NewsNormalizer:
         else:
             ref = reference_time.astimezone(datetime.timezone.utc)
 
-        cutoff = ref - datetime.timedelta(hours=self.freshness_window_hours)
+        # Boundary calculations:
+        # If explicit from_date is provided, use it as boundary; otherwise use sliding cutoff
+        if from_date is not None:
+            cutoff = from_date.astimezone(datetime.timezone.utc) if from_date.tzinfo else from_date.replace(tzinfo=datetime.timezone.utc)
+        else:
+            cutoff = ref - datetime.timedelta(hours=self.freshness_window_hours)
+
+        # If explicit to_date is provided, use it as upper bound; otherwise use reference time
+        if to_date is not None:
+            upper_bound = to_date.astimezone(datetime.timezone.utc) if to_date.tzinfo else to_date.replace(tzinfo=datetime.timezone.utc)
+        else:
+            upper_bound = ref
+
         enforce_latest = self.require_latest_news if require_latest_news is None else bool(require_latest_news)
+        if from_date is not None:
+            enforce_latest = True
 
         seen_content_hashes: Set[str] = set()
         seen_title_hashes: Set[str] = set()
@@ -159,22 +175,23 @@ class NewsNormalizer:
             except Exception:
                 effective_dt = datetime.datetime.fromisoformat(candidate.published_at_utc)
 
-            if effective_dt > ref:
+            if effective_dt > upper_bound:
                 diagnostics.append({
                     "raw_item_id": raw_id,
-                    "reason": "future_published_at",
+                    "reason": "after_to_date" if to_date is not None else "future_published_at",
                     "effective_date": effective_ts,
                     "published_at_utc": candidate.published_at_utc,
+                    "upper_bound": upper_bound.isoformat(),
                 })
                 continue
 
-            # When enforce_latest is True, all items (even evergreen) must have effective_dt >= cutoff.
-            # When enforce_latest is False, evergreen items may bypass cutoff for archival reference.
+            # When enforce_latest is True (or explicit from_date set), all items must be >= cutoff.
+            # When enforce_latest is False and no from_date, evergreen items may bypass cutoff for archival reference.
             if effective_dt < cutoff:
                 if enforce_latest or not candidate.is_evergreen:
                     diagnostics.append({
                         "raw_item_id": raw_id,
-                        "reason": "stale_content",
+                        "reason": "before_from_date" if from_date is not None else "stale_content",
                         "effective_date": effective_ts,
                         "published_at_utc": candidate.published_at_utc,
                         "updated_at": candidate.updated_at,

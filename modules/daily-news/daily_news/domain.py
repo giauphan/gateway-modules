@@ -210,6 +210,32 @@ def parse_iso_utc(ts_str: str) -> str:
     return dt.isoformat()
 
 
+def parse_boundary_datetime(
+    val: Optional[datetime.datetime | str],
+    is_end_of_day: bool = False,
+) -> Optional[datetime.datetime]:
+    """Parse boundary date/time string or pass through datetime object in UTC."""
+    if val is None:
+        return None
+    if isinstance(val, datetime.datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=datetime.timezone.utc)
+        return val.astimezone(datetime.timezone.utc)
+
+    s = str(val).strip()
+    if not s:
+        return None
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        d = datetime.datetime.strptime(s, "%Y-%m-%d")
+        if is_end_of_day:
+            return d.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=datetime.timezone.utc)
+        return d.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc)
+
+    iso_str = parse_iso_utc(s)
+    return datetime.datetime.fromisoformat(iso_str)
+
+
 def compute_title_hash(title: str) -> str:
     """Compute SHA-256 digest of normalized headline."""
     norm = re.sub(r"\s+", " ", title.strip().lower())

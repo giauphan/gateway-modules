@@ -26,7 +26,7 @@ A standalone provider module for **Toolcase Gateway**, extracted from OpenMontag
 | `POST`| `/custom/daily-news/chat/completions` | Formatted daily news summary in chat format |
 | `GET` | `/custom/daily-news/api/v1/feed` | Raw ingested feed items |
 | `GET` | `/custom/daily-news/api/v1/candidates`| Normalized, scored, and ranked candidates |
-| `POST`| `/custom/daily-news/api/v1/discover` | Priority tiered discovery |
+| `POST`| `/custom/daily-news/api/v1/discover` | Priority tiered discovery with topic and date-range filtering |
 | `POST`| `/custom/daily-news/api/v1/consume` | Mark candidates as consumed / processed |
 | `GET` | `/custom/daily-news/api/v1/config` | Read active configuration |
 | `POST`| `/custom/daily-news/api/v1/config` | Update active configuration |

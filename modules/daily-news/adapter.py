@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from daily_news import (
@@ -21,6 +21,7 @@ from daily_news import (
     NewsNormalizer,
     NewsStateStore,
     TieredContentDiscovery,
+    parse_boundary_datetime,
     render_dashboard_html,
 )
 
@@ -75,6 +76,25 @@ def extract_topics(payload: Dict[str, Any]) -> Optional[List[str]]:
     return None
 
 
+def extract_date_range(payload: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Extract from_date and to_date (or aliases) from request payload."""
+    from_date = (
+        payload.get("from_date")
+        or payload.get("since")
+        or payload.get("start_date")
+        or payload.get("from")
+    )
+    to_date = (
+        payload.get("to_date")
+        or payload.get("until")
+        or payload.get("end_date")
+        or payload.get("to")
+    )
+    from_str = str(from_date).strip() if from_date is not None and str(from_date).strip() else None
+    to_str = str(to_date).strip() if to_date is not None and str(to_date).strip() else None
+    return from_str, to_str
+
+
 def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     path = str(req.get("path") or "").rstrip("/")
     method = str(req.get("method") or "GET").upper()
@@ -118,7 +138,7 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return json_resp(200, {
             "status": "healthy",
             "module": MODULE_ID,
-            "version": "1.0.0",
+            "version": "1.1.0",
             "cached_candidates": len(store.get_cached_candidates()),
             "consumed_count": len(store.get_consumed_ids()),
             "newsnow_url": cfg["newsnow_url"],
@@ -142,7 +162,15 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if path.endswith("/chat/completions"):
         limit = body.get("limit", 3)
         topics = extract_topics(body)
-        res = discovery.discover_candidates(count=limit, topics=topics)
+        from_date, to_date = extract_date_range(body)
+        res = discovery.discover_candidates(
+            count=limit,
+            topics=topics,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        if res.status in ("INVALID_DATE_FORMAT", "INVALID_DATE_RANGE"):
+            return json_resp(400, {"error": res.reason, "status": res.status})
         items = res.candidates
         if items:
             lines = [f"### Daily News Briefing ({len(items)} items):\n"]
@@ -186,7 +214,27 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             sources = cfg.get("default_sources", ["hackernews", "github", "producthunt"])
             raw_items = fetcher.fetch_newsnow_feed(sources=sources)
 
-        normalized, diagnostics = normalizer.ingest_and_normalize(raw_items)
+        from_date, to_date = extract_date_range(body)
+        from_dt = None
+        to_dt = None
+        try:
+            if from_date:
+                from_dt = parse_boundary_datetime(from_date, is_end_of_day=False)
+            if to_date:
+                to_dt = parse_boundary_datetime(to_date, is_end_of_day=True)
+            if from_dt and to_dt and from_dt > to_dt:
+                return json_resp(400, {
+                    "error": f"from_date ({from_dt.isoformat()}) must not be later than to_date ({to_dt.isoformat()})",
+                    "status": "INVALID_DATE_RANGE",
+                })
+        except ValueError as err:
+            return json_resp(400, {"error": str(err), "status": "INVALID_DATE_FORMAT"})
+
+        normalized, diagnostics = normalizer.ingest_and_normalize(
+            raw_items,
+            from_date=from_dt,
+            to_date=to_dt,
+        )
         topics = extract_topics(body)
         if topics:
             norm_targets = {t.lower() for t in topics}
@@ -213,13 +261,18 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         sources = body.get("sources")
         official_only = bool(body.get("official_only", False) or (isinstance(sources, list) and sources == ["official"]))
         topics = extract_topics(body)
+        from_date, to_date = extract_date_range(body)
         res = discovery.discover_candidates(
             count=count,
             curated_feed=curated,
             feed_sources=sources,
             official_only=official_only,
             topics=topics,
+            from_date=from_date,
+            to_date=to_date,
         )
+        if res.status in ("INVALID_DATE_FORMAT", "INVALID_DATE_RANGE"):
+            return json_resp(400, res.to_dict())
         return json_resp(200, res.to_dict())
 
     # 8. Mark Consumed Endpoint

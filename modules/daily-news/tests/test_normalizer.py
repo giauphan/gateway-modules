@@ -132,6 +132,47 @@ class TestNewsNormalizer(unittest.TestCase):
         self.assertEqual(candidates[0].published_at_utc, "2024-03-04T00:00:00+00:00")
         self.assertEqual(len(diagnostics), 0)
 
+    def test_from_and_to_date_filtering(self):
+        # 3 items with distinct timestamps
+        item1 = {
+            "id": "i1",
+            "url": "https://example.com/item1",
+            "title": "Item on Oct 25",
+            "published_at": "2026-10-25T12:00:00Z",
+        }
+        item2 = {
+            "id": "i2",
+            "url": "https://example.com/item2",
+            "title": "Item on Oct 30",
+            "published_at": "2026-10-30T12:00:00Z",
+        }
+        item3 = {
+            "id": "i3",
+            "url": "https://example.com/item3",
+            "title": "Item on Nov 02",
+            "published_at": "2026-11-02T10:00:00Z",
+        }
+
+        # Filter window: Oct 28 to Nov 01
+        from_dt = datetime(2026, 10, 28, 0, 0, 0, tzinfo=timezone.utc)
+        to_dt = datetime(2026, 11, 1, 23, 59, 59, tzinfo=timezone.utc)
+
+        candidates, diagnostics = self.normalizer.ingest_and_normalize(
+            [item1, item2, item3],
+            reference_time=self.now,
+            from_date=from_dt,
+            to_date=to_dt,
+        )
+
+        # Only item2 (Oct 30) matches
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].original_url, item2["url"])
+
+        # item1 dropped for stale/before from_date, item3 dropped for future/after to_date
+        drop_reasons = {d["raw_item_id"]: d["reason"] for d in diagnostics}
+        self.assertEqual(drop_reasons["i1"], "before_from_date")
+        self.assertEqual(drop_reasons["i3"], "after_to_date")
+
 
 if __name__ == "__main__":
     unittest.main()

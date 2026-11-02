@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-from .domain import DiscoveryResult, NormalizedCandidate
+from .domain import DiscoveryResult, NormalizedCandidate, parse_boundary_datetime
 from .fetcher import DEFAULT_SOURCES, FeedFetcher
 from .normalizer import NewsNormalizer
 from .ports import (
@@ -54,11 +54,15 @@ class TieredContentDiscovery:
         reference_time: datetime,
         limit: int,
         topics: Optional[Sequence[str]] = None,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         normalized, _ = self.normalizer.ingest_and_normalize(
             raw_items,
             reference_time=reference_time,
             require_latest_news=self.require_latest_news,
+            from_date=from_date,
+            to_date=to_date,
         )
         unconsumed: List[NormalizedCandidate] = [
             c for c in normalized if c.candidate_id not in consumed_ids
@@ -96,17 +100,46 @@ class TieredContentDiscovery:
         feed_sources: Optional[Sequence[str]] = None,
         official_only: bool = False,
         topics: Optional[Sequence[str]] = None,
+        from_date: Optional[Any] = None,
+        to_date: Optional[Any] = None,
     ) -> DiscoveryResult:
-        """Execute tiered discovery with fallback, deterministic outcome, and topic filtering."""
+        """Execute tiered discovery with fallback, deterministic outcome, topic and date-range filtering."""
         ref_time = datetime.now(timezone.utc)
         consumed_ids = self.store.get_consumed_ids()
         norm_topics = [str(t).strip() for t in topics if str(t).strip()] if topics else None
+
+        try:
+            from_dt = parse_boundary_datetime(from_date, is_end_of_day=False)
+            to_dt = parse_boundary_datetime(to_date, is_end_of_day=True)
+        except ValueError as err:
+            return DiscoveryResult(
+                tier="none",
+                status="INVALID_DATE_FORMAT",
+                candidates=[],
+                reason=f"Failed to parse date boundary: {err}",
+                diagnostics={"error": str(err)},
+            )
+
+        if from_dt and to_dt and from_dt > to_dt:
+            return DiscoveryResult(
+                tier="none",
+                status="INVALID_DATE_RANGE",
+                candidates=[],
+                reason=f"from_date ({from_dt.isoformat()}) must not be later than to_date ({to_dt.isoformat()})",
+                diagnostics={
+                    "from_date": from_dt.isoformat(),
+                    "to_date": to_dt.isoformat(),
+                },
+            )
+
         diagnostics: Dict[str, Any] = {
             "consumed_ids_count": len(consumed_ids),
             "tier_1_checked": False,
             "tier_2_checked": False,
             "official_only": official_only,
             "topics_filter": norm_topics,
+            "from_date": from_dt.isoformat() if from_dt else None,
+            "to_date": to_dt.isoformat() if to_dt else None,
             "require_latest_news": self.require_latest_news,
             "max_age_days": self.max_age_days,
             "reference_time": ref_time.isoformat(),
@@ -116,7 +149,13 @@ class TieredContentDiscovery:
         if curated_feed is not None and len(curated_feed) > 0:
             diagnostics["tier_1_checked"] = True
             t1_ranked = self._filter_and_score(
-                curated_feed, consumed_ids, ref_time, count, topics=norm_topics
+                curated_feed,
+                consumed_ids,
+                ref_time,
+                count,
+                topics=norm_topics,
+                from_date=from_dt,
+                to_date=to_dt,
             )
             diagnostics["tier_1_valid_count"] = len(t1_ranked)
             if t1_ranked:
@@ -132,7 +171,7 @@ class TieredContentDiscovery:
                 tier="none",
                 status="NO_ELIGIBLE_TOPIC",
                 candidates=[],
-                reason="All candidates in curated feed were consumed, stale, or dropped by topic filter",
+                reason="All candidates in curated feed were consumed, stale, or dropped by topic/date filter",
                 diagnostics=diagnostics,
             )
 
@@ -140,7 +179,13 @@ class TieredContentDiscovery:
             diagnostics["tier_1_checked"] = True
             official_pool = self.fetcher.fetch_official_sources()
             t1_ranked = self._filter_and_score(
-                official_pool, consumed_ids, ref_time, count, topics=norm_topics
+                official_pool,
+                consumed_ids,
+                ref_time,
+                count,
+                topics=norm_topics,
+                from_date=from_dt,
+                to_date=to_dt,
             )
             diagnostics["tier_1_valid_count"] = len(t1_ranked)
             if t1_ranked:
@@ -172,7 +217,13 @@ class TieredContentDiscovery:
 
         if live_raw:
             t2_ranked = self._filter_and_score(
-                live_raw, consumed_ids, ref_time, count, topics=norm_topics
+                live_raw,
+                consumed_ids,
+                ref_time,
+                count,
+                topics=norm_topics,
+                from_date=from_dt,
+                to_date=to_dt,
             )
             diagnostics["tier_2_valid_count"] = len(t2_ranked)
             if t2_ranked:
@@ -190,7 +241,13 @@ class TieredContentDiscovery:
         official_pool = self.fetcher.fetch_official_sources()
         if official_pool:
             t1_fallback_ranked = self._filter_and_score(
-                official_pool, consumed_ids, ref_time, count, topics=norm_topics
+                official_pool,
+                consumed_ids,
+                ref_time,
+                count,
+                topics=norm_topics,
+                from_date=from_dt,
+                to_date=to_dt,
             )
             diagnostics["tier_1_fallback_valid_count"] = len(t1_fallback_ranked)
             if t1_fallback_ranked:
@@ -206,18 +263,26 @@ class TieredContentDiscovery:
         # --- Fallback: Cached candidates ---
         cached = self.store.get_cached_candidates()
         cached_unconsumed = [c for c in cached if c.get("candidate_id") not in consumed_ids]
-        if cached_unconsumed and self.require_latest_news:
-            cutoff = ref_time - timedelta(days=self.max_age_days)
-            fresh_cached = []
+        if cached_unconsumed:
+            effective_cutoff = from_dt if from_dt else (ref_time - timedelta(days=self.max_age_days) if self.require_latest_news else None)
+            bounded_cached = []
             for c in cached_unconsumed:
                 ts = c.get("updated_at") or c.get("published_at") or c.get("published_at_utc")
                 if ts:
                     try:
-                        if datetime.fromisoformat(ts) >= cutoff:
-                            fresh_cached.append(c)
+                        cand_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                        if cand_dt.tzinfo is None:
+                            cand_dt = cand_dt.replace(tzinfo=timezone.utc)
+                        if effective_cutoff and cand_dt < effective_cutoff:
+                            continue
+                        if to_dt and cand_dt > to_dt:
+                            continue
+                        bounded_cached.append(c)
                     except Exception:
                         pass
-            cached_unconsumed = fresh_cached
+                elif not effective_cutoff and not to_dt:
+                    bounded_cached.append(c)
+            cached_unconsumed = bounded_cached
 
         if cached_unconsumed and norm_topics:
             target_set = {t.lower() for t in norm_topics}
@@ -241,11 +306,17 @@ class TieredContentDiscovery:
             )
 
         # --- Tier 3: Clean Fail-Closed ---
-        fail_reason = (
-            f"No eligible candidates matched the requested topic filter(s): {norm_topics}"
-            if norm_topics
-            else "All candidates were consumed, stale, or dropped by safety/domain policies"
-        )
+        fail_reasons = []
+        if norm_topics:
+            fail_reasons.append(f"topic filter(s): {norm_topics}")
+        if from_dt or to_dt:
+            date_filter_desc = f"date range: [{from_dt.isoformat() if from_dt else '-inf'}, {to_dt.isoformat() if to_dt else '+inf'}]"
+            fail_reasons.append(date_filter_desc)
+        if fail_reasons:
+            fail_reason = f"No eligible candidates matched the requested {', '.join(fail_reasons)}"
+        else:
+            fail_reason = "All candidates were consumed, stale, or dropped by safety/domain policies"
+
         return DiscoveryResult(
             tier="none",
             status="NO_ELIGIBLE_TOPIC",

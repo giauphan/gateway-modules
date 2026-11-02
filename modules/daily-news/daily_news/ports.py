@@ -61,5 +61,7 @@ class NewsNormalizerPort(Protocol):
         raw_items: List[Dict[str, Any]],
         reference_time: Optional[datetime] = None,
         require_latest_news: Optional[bool] = None,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
     ) -> Tuple[List[NormalizedCandidate], List[Dict[str, Any]]]:
         ...

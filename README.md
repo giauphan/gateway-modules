@@ -37,7 +37,7 @@ gateway-modules/
 
 | Module ID | Name | Version | Namespace | Capabilities | Path |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`daily-news`** | **Daily News & Content Discovery Service** | `1.0.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
+| **`daily-news`** | **Daily News & Content Discovery Service** | `1.1.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
 
 ### Module Highlights: `daily-news`
 - **Multi-Source Ingestion**: Ingests breaking updates from Hacker News, GitHub Trending/Releases, Product Hunt, Reddit, and ArXiv.
@@ -46,6 +46,7 @@ gateway-modules/
 - **Deterministic Deduplication**: Computes SHA-256 `title_hash` and `content_hash` to eliminate duplicates.
 - **Multi-Axis Scoring Engine**: Ranks content along six axes (freshness, publisher authority, fact density, visual potential, audience interest, feasibility).
 - **Tiered Discovery**: Priority cascading (Tier 1 Curated Specs $\to$ Tier 2 Automated Feeds $\to$ Tier 3 Fail-Closed).
+- **Topic & Date-Range Filtering**: Supports filtering candidates by topic families (`agent_tool_use`, `context_memory`, etc.) and calendar date ranges (`from_date` / `to_date`).
 
 ---
 

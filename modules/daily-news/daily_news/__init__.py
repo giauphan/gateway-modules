@@ -14,6 +14,7 @@ from .domain import (
     compute_title_hash,
     is_safe_url,
     normalize_publisher,
+    parse_boundary_datetime,
     parse_iso_utc,
 )
 from .fetcher import DEFAULT_SOURCES, FeedFetcher
@@ -40,6 +41,7 @@ __all__ = [
     "compute_title_hash",
     "is_safe_url",
     "normalize_publisher",
+    "parse_boundary_datetime",
     "parse_iso_utc",
     "DEFAULT_SOURCES",
     "FeedFetcher",

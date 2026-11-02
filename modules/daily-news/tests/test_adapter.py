@@ -119,6 +119,63 @@ class TestAdapter(unittest.TestCase):
         self.assertEqual(body["status"], "ELIGIBLE")
         self.assertEqual(len(body["candidates"]), 2)
 
+    def test_discover_endpoint_date_range_filtering(self):
+        curated = [
+            {
+                "id": "c_oct29",
+                "url": "https://mcp.io/tool-spec-1",
+                "title": "Model Context Protocol Tool Schema Spec",
+                "publisher": "MCP",
+                "published_at": "2026-10-29T10:00:00Z",
+            },
+            {
+                "id": "c_oct31",
+                "url": "https://debug.io/trace-2",
+                "title": "Debugging Flaky Test Retries in CI",
+                "publisher": "DebugIO",
+                "published_at": "2026-10-31T15:00:00Z",
+            },
+            {
+                "id": "c_nov02",
+                "url": "https://news.ycombinator.com/item?id=300",
+                "title": "New Toolcase Release",
+                "publisher": "HackerNews",
+                "published_at": self.recent_ts,
+            },
+        ]
+
+        # 1. Search date range Oct 30 to Nov 01
+        req = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({
+                "curated_candidates": curated,
+                "from_date": "2026-10-30",
+                "to_date": "2026-11-01",
+            }),
+        }
+        resp = handle_request(req)
+        self.assertEqual(resp["status"], 200)
+        body = json.loads(resp["body"])
+        self.assertEqual(body["status"], "ELIGIBLE")
+        self.assertEqual(len(body["candidates"]), 1)
+        self.assertEqual(body["candidates"][0]["title"], "Debugging Flaky Test Retries in CI")
+
+        # 2. Inverted date range returns 400 Bad Request
+        req_inverted = {
+            "path": "/api/v1/discover",
+            "method": "POST",
+            "body": json.dumps({
+                "curated_candidates": curated,
+                "from_date": "2026-11-05",
+                "to_date": "2026-11-01",
+            }),
+        }
+        resp_inverted = handle_request(req_inverted)
+        self.assertEqual(resp_inverted["status"], 400)
+        body_inv = json.loads(resp_inverted["body"])
+        self.assertEqual(body_inv["status"], "INVALID_DATE_RANGE")
+
 
 if __name__ == "__main__":
     unittest.main()

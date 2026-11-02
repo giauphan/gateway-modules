@@ -8,6 +8,7 @@ from daily_news.domain import (
     compute_title_hash,
     is_safe_url,
     normalize_publisher,
+    parse_boundary_datetime,
     parse_iso_utc,
 )
 
@@ -36,6 +37,39 @@ class TestDomainPureFunctions(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             parse_iso_utc("invalid-timestamp")
+
+    def test_parse_boundary_datetime(self):
+        self.assertIsNone(parse_boundary_datetime(None))
+        self.assertIsNone(parse_boundary_datetime(""))
+        self.assertIsNone(parse_boundary_datetime("   "))
+
+        # Calendar date start-of-day
+        dt_start = parse_boundary_datetime("2026-10-28", is_end_of_day=False)
+        self.assertIsNotNone(dt_start)
+        self.assertEqual(dt_start.year, 2026)
+        self.assertEqual(dt_start.month, 10)
+        self.assertEqual(dt_start.day, 28)
+        self.assertEqual(dt_start.hour, 0)
+        self.assertEqual(dt_start.minute, 0)
+        self.assertEqual(dt_start.second, 0)
+
+        # Calendar date end-of-day
+        dt_end = parse_boundary_datetime("2026-10-28", is_end_of_day=True)
+        self.assertIsNotNone(dt_end)
+        self.assertEqual(dt_end.year, 2026)
+        self.assertEqual(dt_end.month, 10)
+        self.assertEqual(dt_end.day, 28)
+        self.assertEqual(dt_end.hour, 23)
+        self.assertEqual(dt_end.minute, 59)
+        self.assertEqual(dt_end.second, 59)
+
+        # Full ISO-8601
+        dt_iso = parse_boundary_datetime("2026-11-01T15:30:00Z")
+        self.assertEqual(dt_iso.hour, 15)
+        self.assertEqual(dt_iso.minute, 30)
+
+        with self.assertRaises(ValueError):
+            parse_boundary_datetime("not-a-valid-date")
 
     def test_compute_hashes(self):
         t1 = "OpenAI Announces New Agent SDK"

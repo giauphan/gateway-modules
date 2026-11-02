@@ -166,6 +166,65 @@ class TestTieredDiscovery(unittest.TestCase):
         self.assertEqual(res_none.status, "NO_ELIGIBLE_TOPIC")
         self.assertIn("crypto_blockchain_unknown", res_none.reason)
 
+    def test_date_range_discovery_and_validation(self):
+        class DatedFetcher:
+            def fetch_official_sources(self):
+                return []
+
+            def fetch_newsnow_feed(self, sources):
+                return [
+                    {
+                        "id": "d1",
+                        "url": "https://news.ycombinator.com/item?id=101",
+                        "title": "Rust 2026 Edition Announced",
+                        "published_at": "2026-10-29T10:00:00Z",
+                    },
+                    {
+                        "id": "d2",
+                        "url": "https://news.ycombinator.com/item?id=102",
+                        "title": "DeepMind Launches New Agent",
+                        "published_at": "2026-10-31T15:00:00Z",
+                    },
+                    {
+                        "id": "d3",
+                        "url": "https://news.ycombinator.com/item?id=103",
+                        "title": "Today News Event",
+                        "published_at": "2026-11-02T08:00:00Z",
+                    },
+                ]
+
+        disc = TieredContentDiscovery(store=self.store, fetcher=DatedFetcher(), require_latest_news=True)
+
+        # 1. Valid range matching d2
+        res = disc.discover_candidates(
+            count=5,
+            from_date="2026-10-30",
+            to_date="2026-11-01",
+        )
+        self.assertTrue(res.is_eligible)
+        self.assertEqual(len(res.candidates), 1)
+        self.assertEqual(res.candidates[0]["title"], "DeepMind Launches New Agent")
+        self.assertIn("2026-10-30", res.diagnostics["from_date"])
+        self.assertIn("2026-11-01", res.diagnostics["to_date"])
+
+        # 2. Inverted date range validation (from_date > to_date)
+        res_inverted = disc.discover_candidates(
+            count=5,
+            from_date="2026-11-05",
+            to_date="2026-11-01",
+        )
+        self.assertFalse(res_inverted.is_eligible)
+        self.assertEqual(res_inverted.status, "INVALID_DATE_RANGE")
+        self.assertIn("must not be later than", res_inverted.reason)
+
+        # 3. Invalid date string format
+        res_bad_fmt = disc.discover_candidates(
+            count=5,
+            from_date="not-a-real-date",
+        )
+        self.assertFalse(res_bad_fmt.is_eligible)
+        self.assertEqual(res_bad_fmt.status, "INVALID_DATE_FORMAT")
+
 
 if __name__ == "__main__":
     unittest.main()
