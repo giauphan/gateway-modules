@@ -30,9 +30,11 @@ class NewsNormalizer:
         self,
         freshness_window_hours: float = 48.0,
         allowed_domains: Optional[Set[str]] = None,
+        require_latest_news: bool = False,
     ) -> None:
         self.freshness_window_hours = float(freshness_window_hours)
         self.allowed_domains = allowed_domains
+        self.require_latest_news = require_latest_news
 
     def normalize_item(self, raw_item: Dict[str, Any]) -> NormalizedCandidate:
         """Transform a single raw item dict into a canonical NormalizedCandidate."""
@@ -120,6 +122,7 @@ class NewsNormalizer:
         self,
         raw_items: List[Dict[str, Any]],
         reference_time: Optional[datetime.datetime] = None,
+        require_latest_news: Optional[bool] = None,
     ) -> Tuple[List[NormalizedCandidate], List[Dict[str, Any]]]:
         """Normalize multiple raw items, filter staleness/future dates, and deduplicate."""
         if reference_time is None:
@@ -130,6 +133,7 @@ class NewsNormalizer:
             ref = reference_time.astimezone(datetime.timezone.utc)
 
         cutoff = ref - datetime.timedelta(hours=self.freshness_window_hours)
+        enforce_latest = self.require_latest_news if require_latest_news is None else bool(require_latest_news)
 
         seen_content_hashes: Set[str] = set()
         seen_title_hashes: Set[str] = set()
@@ -148,23 +152,35 @@ class NewsNormalizer:
                 diagnostics.append({"raw_item_id": raw_id, "reason": "normalization_failed", "error": str(e)})
                 continue
 
-            item_dt = datetime.datetime.fromisoformat(candidate.published_at_utc)
-            if item_dt > ref:
+            # Determine effective timestamp (prefer updated_at if available, else published_at_utc)
+            effective_ts = candidate.updated_at or candidate.published_at_utc
+            try:
+                effective_dt = datetime.datetime.fromisoformat(effective_ts)
+            except Exception:
+                effective_dt = datetime.datetime.fromisoformat(candidate.published_at_utc)
+
+            if effective_dt > ref:
                 diagnostics.append({
                     "raw_item_id": raw_id,
                     "reason": "future_published_at",
+                    "effective_date": effective_ts,
                     "published_at_utc": candidate.published_at_utc,
                 })
                 continue
 
-            if not candidate.is_evergreen and item_dt < cutoff:
-                diagnostics.append({
-                    "raw_item_id": raw_id,
-                    "reason": "stale_content",
-                    "published_at_utc": candidate.published_at_utc,
-                    "cutoff": cutoff.isoformat(),
-                })
-                continue
+            # When enforce_latest is True, all items (even evergreen) must have effective_dt >= cutoff.
+            # When enforce_latest is False, evergreen items may bypass cutoff for archival reference.
+            if effective_dt < cutoff:
+                if enforce_latest or not candidate.is_evergreen:
+                    diagnostics.append({
+                        "raw_item_id": raw_id,
+                        "reason": "stale_content",
+                        "effective_date": effective_ts,
+                        "published_at_utc": candidate.published_at_utc,
+                        "updated_at": candidate.updated_at,
+                        "cutoff": cutoff.isoformat(),
+                    })
+                    continue
 
             if candidate.content_hash in seen_content_hashes or candidate.title_hash in seen_title_hashes:
                 diagnostics.append({

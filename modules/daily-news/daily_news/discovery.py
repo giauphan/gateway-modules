@@ -38,11 +38,14 @@ class TieredContentDiscovery:
         require_latest_news: bool = True,
     ) -> None:
         self.store = store
-        self.fetcher = fetcher or FeedFetcher()
-        self.normalizer = normalizer or NewsNormalizer()
-        self.scorer = scorer or CandidateScorer()
         self.max_age_days = max(1, int(max_age_days))
         self.require_latest_news = require_latest_news
+        self.fetcher = fetcher or FeedFetcher()
+        self.normalizer = normalizer or NewsNormalizer(
+            freshness_window_hours=float(self.max_age_days * 24),
+            require_latest_news=self.require_latest_news,
+        )
+        self.scorer = scorer or CandidateScorer()
 
     def _filter_and_score(
         self,
@@ -51,7 +54,11 @@ class TieredContentDiscovery:
         reference_time: datetime,
         limit: int,
     ) -> List[Dict[str, Any]]:
-        normalized, _ = self.normalizer.ingest_and_normalize(raw_items, reference_time)
+        normalized, _ = self.normalizer.ingest_and_normalize(
+            raw_items,
+            reference_time=reference_time,
+            require_latest_news=self.require_latest_news,
+        )
         unconsumed: List[NormalizedCandidate] = [
             c for c in normalized if c.candidate_id not in consumed_ids
         ]
@@ -60,7 +67,10 @@ class TieredContentDiscovery:
             return []
 
         if self.require_latest_news:
-            unconsumed.sort(key=lambda c: c.published_at_utc, reverse=True)
+            unconsumed.sort(
+                key=lambda c: c.updated_at or c.published_at_utc,
+                reverse=True,
+            )
 
         ranked = self.scorer.rank_candidates(unconsumed, limit=limit)
         return ranked
@@ -85,41 +95,52 @@ class TieredContentDiscovery:
             "reference_time": ref_time.isoformat(),
         }
 
-        # --- Tier 1: Curated Backlog & Official Sources ---
-        diagnostics["tier_1_checked"] = True
-        official_pool: List[Dict[str, Any]] = []
-        is_curated_custom = False
-
+        # --- Tier 1 Explicit: Caller-provided curated feed OR explicit official_only request ---
         if curated_feed is not None and len(curated_feed) > 0:
-            official_pool.extend(curated_feed)
-            is_curated_custom = True
-        elif official_only or feed_sources is None or "official" in feed_sources or "all" in feed_sources:
-            official_pool.extend(self.fetcher.fetch_official_sources())
-
-        if official_pool:
-            t1_ranked = self._filter_and_score(official_pool, consumed_ids, ref_time, count)
+            diagnostics["tier_1_checked"] = True
+            t1_ranked = self._filter_and_score(curated_feed, consumed_ids, ref_time, count)
             diagnostics["tier_1_valid_count"] = len(t1_ranked)
             if t1_ranked:
                 self.store.save_cached_candidates(t1_ranked)
-                tier_name = "tier_1_curated" if is_curated_custom else "tier_1_curated_official"
                 return DiscoveryResult(
-                    tier=tier_name,
+                    tier="tier_1_curated",
                     status="ELIGIBLE",
                     candidates=t1_ranked,
-                    source_file="curated_feed" if is_curated_custom else "official_sources",
+                    source_file="curated_feed",
                     diagnostics=diagnostics,
                 )
-
-        if official_only:
             return DiscoveryResult(
                 tier="none",
                 status="NO_ELIGIBLE_TOPIC",
                 candidates=[],
-                reason="No unconsumed candidates found in official documentation sources",
+                reason="All candidates in curated feed were consumed or dropped",
+                diagnostics=diagnostics,
+            )
+
+        if official_only or (feed_sources is not None and list(feed_sources) == ["official"]):
+            diagnostics["tier_1_checked"] = True
+            official_pool = self.fetcher.fetch_official_sources()
+            t1_ranked = self._filter_and_score(official_pool, consumed_ids, ref_time, count)
+            diagnostics["tier_1_valid_count"] = len(t1_ranked)
+            if t1_ranked:
+                self.store.save_cached_candidates(t1_ranked)
+                return DiscoveryResult(
+                    tier="tier_1_curated_official",
+                    status="ELIGIBLE",
+                    candidates=t1_ranked,
+                    source_file="official_sources",
+                    diagnostics=diagnostics,
+                )
+            return DiscoveryResult(
+                tier="none",
+                status="NO_ELIGIBLE_TOPIC",
+                candidates=[],
+                reason="No fresh unconsumed candidates found in official documentation sources",
                 diagnostics=diagnostics,
             )
 
         # --- Tier 2: Automated Live Feed (HackerNews, GitHub, ProductHunt, Reddit, ArXiv) ---
+        # When querying daily news, live feeds take precedence over static documentation.
         diagnostics["tier_2_checked"] = True
         active_sources = [s for s in (feed_sources or DEFAULT_SOURCES) if s != "official"]
         if not active_sources:
@@ -141,9 +162,38 @@ class TieredContentDiscovery:
                     diagnostics=diagnostics,
                 )
 
+        # --- Tier 1 Fallback: Official Sources (only if fresh and unconsumed) ---
+        diagnostics["tier_1_fallback_checked"] = True
+        official_pool = self.fetcher.fetch_official_sources()
+        if official_pool:
+            t1_fallback_ranked = self._filter_and_score(official_pool, consumed_ids, ref_time, count)
+            diagnostics["tier_1_fallback_valid_count"] = len(t1_fallback_ranked)
+            if t1_fallback_ranked:
+                self.store.save_cached_candidates(t1_fallback_ranked)
+                return DiscoveryResult(
+                    tier="tier_1_curated_official_fallback",
+                    status="ELIGIBLE",
+                    candidates=t1_fallback_ranked,
+                    source_file="official_sources",
+                    diagnostics=diagnostics,
+                )
+
         # --- Fallback: Cached candidates ---
         cached = self.store.get_cached_candidates()
         cached_unconsumed = [c for c in cached if c.get("candidate_id") not in consumed_ids]
+        if cached_unconsumed and self.require_latest_news:
+            cutoff = ref_time - timedelta(days=self.max_age_days)
+            fresh_cached = []
+            for c in cached_unconsumed:
+                ts = c.get("updated_at") or c.get("published_at") or c.get("published_at_utc")
+                if ts:
+                    try:
+                        if datetime.fromisoformat(ts) >= cutoff:
+                            fresh_cached.append(c)
+                    except Exception:
+                        pass
+            cached_unconsumed = fresh_cached
+
         if cached_unconsumed:
             return DiscoveryResult(
                 tier="tier_2_cache",
@@ -158,6 +208,6 @@ class TieredContentDiscovery:
             tier="none",
             status="NO_ELIGIBLE_TOPIC",
             candidates=[],
-            reason="Zero candidates passed freshness, deduplication, and scope boundaries",
+            reason="All candidates were consumed, stale, or dropped by safety/domain policies",
             diagnostics=diagnostics,
         )

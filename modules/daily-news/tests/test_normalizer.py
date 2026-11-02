@@ -91,5 +91,47 @@ class TestNewsNormalizer(unittest.TestCase):
         self.assertEqual(len(diagnostics), 0)
 
 
+    def test_require_latest_news_enforces_freshness_even_for_evergreen(self):
+        # When require_latest_news=True, stale items (even evergreen from 2024 or 2015) MUST be dropped
+        stale_2024_doc = {
+            "id": "cand_official_anthropic_context_window",
+            "url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+            "title": "Why coding agents lose project requirements between sessions",
+            "published_at": "2024-03-04T00:00:00Z",
+            "is_evergreen": True,
+            "content_kind": "documentation",
+        }
+        candidates, diagnostics = self.normalizer.ingest_and_normalize(
+            [stale_2024_doc],
+            reference_time=self.now,
+            require_latest_news=True,
+        )
+        self.assertEqual(len(candidates), 0)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertEqual(diagnostics[0]["reason"], "stale_content")
+        self.assertEqual(diagnostics[0]["effective_date"], "2024-03-04T00:00:00+00:00")
+
+    def test_require_latest_news_accepts_recently_updated_items(self):
+        # An item originally published in 2024 but updated within 48h must be accepted
+        freshly_updated_doc = {
+            "id": "doc_updated_today",
+            "url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+            "title": "Context Windows Updates",
+            "published_at": "2024-03-04T00:00:00Z",
+            "updated_at": "2026-11-02T10:00:00Z",  # 2h before reference self.now
+            "is_evergreen": True,
+        }
+        candidates, diagnostics = self.normalizer.ingest_and_normalize(
+            [freshly_updated_doc],
+            reference_time=self.now,
+            require_latest_news=True,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].candidate_id.startswith("cand_"), True)
+        self.assertEqual(candidates[0].updated_at, "2026-11-02T10:00:00+00:00")
+        self.assertEqual(candidates[0].published_at_utc, "2024-03-04T00:00:00+00:00")
+        self.assertEqual(len(diagnostics), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

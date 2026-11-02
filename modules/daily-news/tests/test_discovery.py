@@ -57,6 +57,68 @@ class TestTieredDiscovery(unittest.TestCase):
         self.assertEqual(res2.status, "NO_ELIGIBLE_TOPIC")
         self.assertFalse(res2.is_eligible)
 
+    def test_live_feed_priority_over_stale_official(self):
+        class MockFetcher:
+            def __init__(self, recent_ts):
+                self.recent_ts = recent_ts
+
+            def fetch_official_sources(self):
+                return [
+                    {
+                        "id": "stale_1",
+                        "url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+                        "title": "Old Docs From 2024",
+                        "published_at": "2024-03-04T00:00:00Z",
+                        "is_evergreen": True,
+                    }
+                ]
+
+            def fetch_newsnow_feed(self, sources):
+                return [
+                    {
+                        "id": "live_1",
+                        "url": "https://news.ycombinator.com/item?id=99999",
+                        "title": "Breaking Tech News Today",
+                        "publisher": "news.ycombinator.com",
+                        "published_at": self.recent_ts,
+                    }
+                ]
+
+        mock_fetcher = MockFetcher(self.recent_ts)
+        disc = TieredContentDiscovery(store=self.store, fetcher=mock_fetcher, require_latest_news=True)
+        res = disc.discover_candidates(count=1)
+
+        self.assertTrue(res.is_eligible)
+        self.assertEqual(res.tier, "tier_2_automated")
+        self.assertEqual(res.candidates[0]["title"], "Breaking Tech News Today")
+        # Ensure stale 2024 doc was NOT returned
+        self.assertNotIn("2024-03-04", [c.get("published_at") for c in res.candidates])
+
+    def test_stale_official_sources_filtered_out_when_latest_required(self):
+        class StaleOnlyFetcher:
+            def fetch_official_sources(self):
+                return [
+                    {
+                        "id": "stale_1",
+                        "url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+                        "title": "Old Docs From 2024",
+                        "published_at": "2024-03-04T00:00:00Z",
+                        "is_evergreen": True,
+                    }
+                ]
+
+            def fetch_newsnow_feed(self, sources):
+                return []
+
+        mock_fetcher = StaleOnlyFetcher()
+        disc = TieredContentDiscovery(store=self.store, fetcher=mock_fetcher, require_latest_news=True)
+        res = disc.discover_candidates(count=1)
+
+        # Stale 2024 items must not be returned when require_latest_news is True
+        self.assertFalse(res.is_eligible)
+        self.assertEqual(res.status, "NO_ELIGIBLE_TOPIC")
+        self.assertEqual(len(res.candidates), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

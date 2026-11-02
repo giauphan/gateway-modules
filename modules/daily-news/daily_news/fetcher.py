@@ -6,6 +6,7 @@ Fetches items from official technical specifications, NewsNow API, or file feeds
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import logging
@@ -114,6 +115,74 @@ class FeedFetcher:
                 }
                 items.append(item)
 
+        # Fallback to direct public HackerNews API if local NewsNow daemon yielded 0 items
+        if not items and ("hackernews" in sources or "all" in sources):
+            direct_items = self.fetch_hackernews_direct(limit=15)
+            if direct_items:
+                logger.info("Retrieved %d live items via direct HackerNews fallback", len(direct_items))
+                items.extend(direct_items)
+
+        return items
+
+    def fetch_hackernews_direct(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Direct fallback fetching top stories from HackerNews Firebase API."""
+        endpoint = "https://hacker-news.firebaseio.com/v0/topstories.json"
+        try:
+            req = Request(endpoint, headers={"Accept": "application/json", "User-Agent": "toolcase-daily-news/1.0"})
+            with urlopen(req, timeout=4.0) as resp:
+                ids = json.load(resp)
+            if not isinstance(ids, list):
+                return []
+            target_ids = ids[:max(1, limit)]
+        except Exception as e:
+            logger.warning("Failed querying HackerNews top stories: %s", e)
+            return []
+
+        def fetch_item(item_id: int | str) -> Optional[Dict[str, Any]]:
+            item_url = f"https://hacker-news.firebaseio.com/v0/item/{item_id}.json"
+            try:
+                r = Request(item_url, headers={"Accept": "application/json", "User-Agent": "toolcase-daily-news/1.0"})
+                with urlopen(r, timeout=3.0) as resp:
+                    return json.load(resp)
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            raw_items = [it for it in pool.map(fetch_item, target_ids) if isinstance(it, dict)]
+
+        items: List[Dict[str, Any]] = []
+        for raw in raw_items:
+            title = str(raw.get("title") or "").strip()
+            item_id = str(raw.get("id") or "")
+            url = str(raw.get("url") or f"https://news.ycombinator.com/item?id={item_id}").strip()
+            if not title or not item_id:
+                continue
+
+            unix_ts = raw.get("time")
+            pub_iso = (
+                datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+                if unix_ts
+                else datetime.now(timezone.utc).isoformat()
+            )
+            info = str(raw.get("text") or "").strip()
+
+            items.append({
+                "id": f"hn_{item_id}",
+                "url": url,
+                "title": title,
+                "publisher": self._host(url),
+                "published_at": pub_iso,
+                "description": info,
+                "body": info,
+                "tags": ["hackernews", "tech"],
+                "language": "en",
+                "source_feed": "live:hackernews",
+                "extra": {
+                    "score": raw.get("score"),
+                    "by": raw.get("by"),
+                    "comments": raw.get("descendants"),
+                },
+            })
         return items
 
     def fetch_from_file(self, file_path: str | Path) -> List[Dict[str, Any]]:

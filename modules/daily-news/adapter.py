@@ -79,7 +79,10 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
 
     cfg = get_active_config()
     fetcher = FeedFetcher(newsnow_base_url=cfg["newsnow_url"])
-    normalizer = NewsNormalizer(freshness_window_hours=cfg["freshness_window_hours"])
+    normalizer = NewsNormalizer(
+        freshness_window_hours=cfg["freshness_window_hours"],
+        require_latest_news=cfg["require_latest_news"],
+    )
     scorer = CandidateScorer()
     discovery = TieredContentDiscovery(
         store=store,
