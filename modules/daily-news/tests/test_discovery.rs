@@ -1,6 +1,4 @@
 use daily_news::*;
-use std::collections::HashSet;
-use std::sync::RwLock;
 
 struct MockDiscoveryFetcher {
     items: Vec<RawNewsItem>,
@@ -19,51 +17,9 @@ impl FeedFetcherPort for MockDiscoveryFetcher {
     }
 }
 
-struct MockDiscoveryStorage {
-    consumed: RwLock<HashSet<String>>,
-    config: RwLock<ModuleConfig>,
-    cached: RwLock<Vec<NormalizedCandidate>>,
-}
-
-impl StoragePort for MockDiscoveryStorage {
-    fn is_consumed(&self, id: &str) -> bool {
-        self.consumed.read().unwrap().contains(id)
-    }
-    fn mark_consumed(&self, ids: &[String]) -> Result<usize, String> {
-        let mut count = 0;
-        let mut guard = self.consumed.write().unwrap();
-        for id in ids {
-            if guard.insert(id.clone()) {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-    fn consumed_count(&self) -> usize {
-        self.consumed.read().unwrap().len()
-    }
-    fn load_config(&self) -> ModuleConfig {
-        self.config.read().unwrap().clone()
-    }
-    fn save_config(&self, c: &ModuleConfig) -> Result<(), String> {
-        *self.config.write().unwrap() = c.clone();
-        Ok(())
-    }
-    fn cache_candidates(&self, c: &[NormalizedCandidate]) {
-        *self.cached.write().unwrap() = c.to_vec();
-    }
-    fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
-        self.cached.read().unwrap().clone()
-    }
-}
-
 #[test]
 fn test_tier_1_curated_priority_and_consumed() {
-    let storage = std::sync::Arc::new(MockDiscoveryStorage {
-        consumed: RwLock::new(HashSet::new()),
-        config: RwLock::new(ModuleConfig::default()),
-        cached: RwLock::new(Vec::new()),
-    });
+    let storage = std::sync::Arc::new(InMemoryStorageAdapter::new());
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher { items: vec![] });
     let service = DailyNewsService::new(fetcher, storage.clone(), CandidateScorer::default());
 
@@ -120,11 +76,7 @@ fn test_topic_filtering_and_fail_closed() {
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher {
         items: vec![raw_tool, raw_debug],
     });
-    let storage = std::sync::Arc::new(MockDiscoveryStorage {
-        consumed: RwLock::new(HashSet::new()),
-        config: RwLock::new(ModuleConfig::default()),
-        cached: RwLock::new(Vec::new()),
-    });
+    let storage = std::sync::Arc::new(InMemoryStorageAdapter::new());
     let service = DailyNewsService::new(fetcher, storage, CandidateScorer::default());
 
     // 1. Filter by agent_tool_use
@@ -186,11 +138,7 @@ fn test_date_range_filtering_and_validation() {
     let fetcher = std::sync::Arc::new(MockDiscoveryFetcher {
         items: vec![d1, d2],
     });
-    let storage = std::sync::Arc::new(MockDiscoveryStorage {
-        consumed: RwLock::new(HashSet::new()),
-        config: RwLock::new(ModuleConfig::default()),
-        cached: RwLock::new(Vec::new()),
-    });
+    let storage = std::sync::Arc::new(InMemoryStorageAdapter::new());
     let service = DailyNewsService::new(fetcher, storage, CandidateScorer::default());
 
     // 1. Search Oct 30 to Nov 01 -> matches only d2

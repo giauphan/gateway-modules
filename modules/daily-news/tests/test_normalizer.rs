@@ -1,6 +1,4 @@
 use daily_news::*;
-use std::collections::HashSet;
-use std::sync::RwLock;
 
 struct DummyFetcher;
 impl FeedFetcherPort for DummyFetcher {
@@ -9,79 +7,14 @@ impl FeedFetcherPort for DummyFetcher {
     }
 }
 
-struct InMemoryStorage {
-    config: RwLock<ModuleConfig>,
-    consumed: RwLock<HashSet<String>>,
-    cached: RwLock<Vec<NormalizedCandidate>>,
-}
-
-impl StoragePort for InMemoryStorage {
-    fn is_consumed(&self, id: &str) -> bool {
-        self.consumed.read().unwrap().contains(id)
-    }
-    fn mark_consumed(&self, ids: &[String]) -> Result<usize, String> {
-        let mut count = 0;
-        let mut guard = self.consumed.write().unwrap();
-        for id in ids {
-            if guard.insert(id.clone()) {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-    fn consumed_count(&self) -> usize {
-        self.consumed.read().unwrap().len()
-    }
-    fn load_config(&self) -> ModuleConfig {
-        self.config.read().unwrap().clone()
-    }
-    fn save_config(&self, c: &ModuleConfig) -> Result<(), String> {
-        *self.config.write().unwrap() = c.clone();
-        Ok(())
-    }
-    fn cache_candidates(&self, c: &[NormalizedCandidate]) {
-        *self.cached.write().unwrap() = c.to_vec();
-    }
-    fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
-        self.cached.read().unwrap().clone()
-    }
-}
-
 fn create_test_service(config: ModuleConfig) -> DailyNewsService {
     let fetcher = std::sync::Arc::new(DummyFetcher);
-    let storage = std::sync::Arc::new(InMemoryStorage {
-        config: RwLock::new(config),
-        consumed: RwLock::new(HashSet::new()),
-        cached: RwLock::new(Vec::new()),
-    });
+    let storage = std::sync::Arc::new(InMemoryStorageAdapter::with_config(config));
     DailyNewsService::new(fetcher, storage, CandidateScorer::default())
 }
 
 fn make_dummy_item(id: &str, url: &str, title: &str, pub_at: &str) -> RawNewsItem {
-    RawNewsItem {
-        id: id.to_string(),
-        url: url.to_string(),
-        title: title.to_string(),
-        published_at: pub_at.to_string(),
-        publisher: None,
-        author: None,
-        description: None,
-        body: None,
-        discussion_url: None,
-        tags: vec![],
-        is_evergreen: false,
-        content_kind: None,
-        updated_at: None,
-        hook: None,
-        viewer_question: None,
-        symptom: None,
-        root_cause: None,
-        remedy: None,
-        evidence_excerpt: None,
-        source_snapshot: None,
-        snapshot_sha256: None,
-        extra: std::collections::HashMap::new(),
-    }
+    RawNewsItem::new(id, url, title, pub_at)
 }
 
 #[test]
@@ -98,11 +31,11 @@ fn test_normalize_valid_item_and_storyboard_fields() {
     raw.description = Some("Anthropic published improvements to MCP.".to_string());
     raw.discussion_url = Some("https://news.ycombinator.com/item?id=50333339".to_string());
     raw.tags = vec!["ai".to_string(), "mcp".to_string()];
-    raw.symptom = Some("Agent context bloat".to_string());
-    raw.root_cause = Some("Eager tool registration".to_string());
-    raw.remedy = Some("Two-tier schema scoping".to_string());
-    raw.source_snapshot = Some("artifacts/s1.txt".to_string());
-    raw.snapshot_sha256 = Some("2bad0815c06b65".to_string());
+    raw.evidence.symptom = Some("Agent context bloat".to_string());
+    raw.evidence.root_cause = Some("Eager tool registration".to_string());
+    raw.evidence.remedy = Some("Two-tier schema scoping".to_string());
+    raw.evidence.source_snapshot = Some("artifacts/s1.txt".to_string());
+    raw.evidence.snapshot_sha256 = Some("2bad0815c06b65".to_string());
 
     let cand = svc.normalize_item(&raw).unwrap();
     assert!(cand.candidate_id.starts_with("cand_"));
@@ -119,11 +52,34 @@ fn test_normalize_valid_item_and_storyboard_fields() {
         cand.discussion_url.as_deref(),
         Some("https://news.ycombinator.com/item?id=50333339")
     );
-    assert_eq!(cand.symptom.as_deref(), Some("Agent context bloat"));
-    assert_eq!(cand.root_cause.as_deref(), Some("Eager tool registration"));
-    assert_eq!(cand.remedy.as_deref(), Some("Two-tier schema scoping"));
-    assert_eq!(cand.source_snapshot.as_deref(), Some("artifacts/s1.txt"));
-    assert_eq!(cand.snapshot_sha256.as_deref(), Some("2bad0815c06b65"));
+    assert_eq!(
+        cand.evidence.symptom.as_deref(),
+        Some("Agent context bloat")
+    );
+    assert_eq!(
+        cand.evidence.root_cause.as_deref(),
+        Some("Eager tool registration")
+    );
+    assert_eq!(
+        cand.evidence.remedy.as_deref(),
+        Some("Two-tier schema scoping")
+    );
+    assert_eq!(
+        cand.evidence.source_snapshot.as_deref(),
+        Some("artifacts/s1.txt")
+    );
+    assert_eq!(
+        cand.evidence.snapshot_sha256.as_deref(),
+        Some("2bad0815c06b65")
+    );
+
+    // Verify serde flatten ensures flat JSON serialization for candidate contract
+    let json_val = serde_json::to_value(&cand).unwrap();
+    assert_eq!(json_val["symptom"], "Agent context bloat");
+    assert_eq!(json_val["root_cause"], "Eager tool registration");
+    assert_eq!(json_val["remedy"], "Two-tier schema scoping");
+    assert_eq!(json_val["source_snapshot"], "artifacts/s1.txt");
+    assert_eq!(json_val["snapshot_sha256"], "2bad0815c06b65");
 }
 
 #[test]
@@ -141,9 +97,11 @@ fn test_missing_required_fields_fails() {
 
 #[test]
 fn test_batch_deduplication_and_date_filtering() {
-    let mut cfg = ModuleConfig::default();
-    cfg.freshness_window_hours = 48.0;
-    cfg.require_latest_news = false;
+    let cfg = ModuleConfig {
+        freshness_window_hours: 48.0,
+        require_latest_news: false,
+        ..Default::default()
+    };
     let svc = create_test_service(cfg);
 
     let raw1 = make_dummy_item(
@@ -174,9 +132,11 @@ fn test_batch_deduplication_and_date_filtering() {
 
 #[test]
 fn test_require_latest_news_enforces_freshness_even_for_evergreen() {
-    let mut cfg = ModuleConfig::default();
-    cfg.freshness_window_hours = 48.0;
-    cfg.require_latest_news = true;
+    let cfg = ModuleConfig {
+        freshness_window_hours: 48.0,
+        require_latest_news: true,
+        ..Default::default()
+    };
     let svc = create_test_service(cfg);
 
     let mut stale_doc = make_dummy_item(

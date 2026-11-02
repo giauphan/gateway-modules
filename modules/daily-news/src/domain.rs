@@ -124,6 +124,42 @@ pub struct CandidateScoring {
     pub axes: ScoringAxes,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoryboardEvidence {
+    #[serde(default)]
+    pub hook: Option<String>,
+    #[serde(default)]
+    pub viewer_question: Option<String>,
+    #[serde(default)]
+    pub symptom: Option<String>,
+    #[serde(default)]
+    pub root_cause: Option<String>,
+    #[serde(default)]
+    pub remedy: Option<String>,
+    #[serde(default)]
+    pub evidence_excerpt: Option<String>,
+    #[serde(default)]
+    pub source_snapshot: Option<String>,
+    #[serde(default)]
+    pub snapshot_sha256: Option<String>,
+}
+
+impl StoryboardEvidence {
+    pub fn from_json_map(obj: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let get_str = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        Self {
+            hook: get_str("hook"),
+            viewer_question: get_str("viewer_question"),
+            symptom: get_str("symptom"),
+            root_cause: get_str("root_cause"),
+            remedy: get_str("remedy"),
+            evidence_excerpt: get_str("evidence_excerpt"),
+            source_snapshot: get_str("source_snapshot"),
+            snapshot_sha256: get_str("snapshot_sha256"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawProvenance {
     pub source_id: String,
@@ -156,22 +192,8 @@ pub struct RawNewsItem {
     pub content_kind: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
-    #[serde(default)]
-    pub hook: Option<String>,
-    #[serde(default)]
-    pub viewer_question: Option<String>,
-    #[serde(default)]
-    pub symptom: Option<String>,
-    #[serde(default)]
-    pub root_cause: Option<String>,
-    #[serde(default)]
-    pub remedy: Option<String>,
-    #[serde(default)]
-    pub evidence_excerpt: Option<String>,
-    #[serde(default)]
-    pub source_snapshot: Option<String>,
-    #[serde(default)]
-    pub snapshot_sha256: Option<String>,
+    #[serde(flatten)]
+    pub evidence: StoryboardEvidence,
     #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -197,14 +219,7 @@ impl RawNewsItem {
             is_evergreen: false,
             content_kind: None,
             updated_at: None,
-            hook: None,
-            viewer_question: None,
-            symptom: None,
-            root_cause: None,
-            remedy: None,
-            evidence_excerpt: None,
-            source_snapshot: None,
-            snapshot_sha256: None,
+            evidence: StoryboardEvidence::default(),
             extra: HashMap::new(),
         }
     }
@@ -250,22 +265,8 @@ pub struct NormalizedCandidate {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub discussion_url: Option<String>,
-    #[serde(default)]
-    pub hook: Option<String>,
-    #[serde(default)]
-    pub viewer_question: Option<String>,
-    #[serde(default)]
-    pub symptom: Option<String>,
-    #[serde(default)]
-    pub root_cause: Option<String>,
-    #[serde(default)]
-    pub remedy: Option<String>,
-    #[serde(default)]
-    pub evidence_excerpt: Option<String>,
-    #[serde(default)]
-    pub source_snapshot: Option<String>,
-    #[serde(default)]
-    pub snapshot_sha256: Option<String>,
+    #[serde(flatten)]
+    pub evidence: StoryboardEvidence,
     #[serde(default)]
     pub independent_fact_check: Option<serde_json::Value>,
     #[serde(default)]

@@ -3,7 +3,7 @@
 //! Synchronous, non-panicking RESP-compatible client over `std::net::TcpStream`.
 //! Implements support for Redis Streams (XREVRANGE) and Redis Lists (LRANGE).
 
-use crate::domain::{format_utc_timestamp, RawNewsItem};
+use crate::domain::{format_utc_timestamp, RawNewsItem, StoryboardEvidence};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -221,35 +221,7 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         is_evergreen: false,
         content_kind: Some("news".to_string()),
         updated_at: None,
-        hook: obj.get("hook").and_then(|v| v.as_str()).map(str::to_string),
-        viewer_question: obj
-            .get("viewer_question")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        symptom: obj
-            .get("symptom")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        root_cause: obj
-            .get("root_cause")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        remedy: obj
-            .get("remedy")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        evidence_excerpt: obj
-            .get("evidence_excerpt")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        source_snapshot: obj
-            .get("source_snapshot")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        snapshot_sha256: obj
-            .get("snapshot_sha256")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        evidence: StoryboardEvidence::from_json_map(obj),
         extra,
     })
 }

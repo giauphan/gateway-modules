@@ -9,12 +9,84 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+#[derive(Default)]
+pub struct InMemoryStorageAdapter {
+    pub(crate) config: RwLock<ModuleConfig>,
+    pub(crate) consumed: RwLock<HashSet<String>>,
+    pub(crate) cached_candidates: RwLock<Vec<NormalizedCandidate>>,
+}
+
+impl InMemoryStorageAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_config(config: ModuleConfig) -> Self {
+        Self {
+            config: RwLock::new(config),
+            consumed: RwLock::new(HashSet::new()),
+            cached_candidates: RwLock::new(Vec::new()),
+        }
+    }
+}
+
+impl StoragePort for InMemoryStorageAdapter {
+    fn is_consumed(&self, candidate_id: &str) -> bool {
+        self.consumed
+            .read()
+            .map(|g| g.contains(candidate_id))
+            .unwrap_or(false)
+    }
+
+    fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
+        let mut count = 0;
+        let mut guard = self
+            .consumed
+            .write()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        for id in candidate_ids {
+            if guard.insert(id.clone()) {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    fn consumed_count(&self) -> usize {
+        self.consumed.read().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn load_config(&self) -> ModuleConfig {
+        self.config.read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    fn save_config(&self, config: &ModuleConfig) -> Result<(), String> {
+        let mut guard = self
+            .config
+            .write()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        *guard = config.clone();
+        Ok(())
+    }
+
+    fn cache_candidates(&self, candidates: &[NormalizedCandidate]) {
+        if let Ok(mut guard) = self.cached_candidates.write() {
+            *guard = candidates.to_vec();
+        }
+    }
+
+    fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
+        self.cached_candidates
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+}
+
 pub struct FileStorageAdapter {
     config_path: PathBuf,
     state_dir: PathBuf,
-    consumed: RwLock<HashSet<String>>,
-    config: RwLock<ModuleConfig>,
-    cached_candidates: RwLock<Vec<NormalizedCandidate>>,
+    inner: InMemoryStorageAdapter,
 }
 
 impl FileStorageAdapter {
@@ -46,15 +118,17 @@ impl FileStorageAdapter {
         Self {
             config_path,
             state_dir,
-            consumed: RwLock::new(initial_consumed),
-            config: RwLock::new(initial_config),
-            cached_candidates: RwLock::new(Vec::new()),
+            inner: InMemoryStorageAdapter {
+                config: RwLock::new(initial_config),
+                consumed: RwLock::new(initial_consumed),
+                cached_candidates: RwLock::new(Vec::new()),
+            },
         }
     }
 
     fn persist_consumed(&self) {
         let consumed_path = self.state_dir.join("consumed.json");
-        if let Ok(guard) = self.consumed.read() {
+        if let Ok(guard) = self.inner.consumed.read() {
             let list: Vec<String> = guard.iter().cloned().collect();
             if let Ok(json) = serde_json::to_string_pretty(&list) {
                 let _ = fs::write(consumed_path, json);
@@ -65,45 +139,25 @@ impl FileStorageAdapter {
 
 impl StoragePort for FileStorageAdapter {
     fn is_consumed(&self, candidate_id: &str) -> bool {
-        self.consumed
-            .read()
-            .map(|g| g.contains(candidate_id))
-            .unwrap_or(false)
+        self.inner.is_consumed(candidate_id)
     }
 
     fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
-        let mut count = 0;
-        {
-            let mut guard = self
-                .consumed
-                .write()
-                .map_err(|e| format!("Lock error: {e}"))?;
-            for id in candidate_ids {
-                if guard.insert(id.clone()) {
-                    count += 1;
-                }
-            }
-        }
+        let count = self.inner.mark_consumed(candidate_ids)?;
         self.persist_consumed();
         Ok(count)
     }
 
     fn consumed_count(&self) -> usize {
-        self.consumed.read().map(|g| g.len()).unwrap_or(0)
+        self.inner.consumed_count()
     }
 
     fn load_config(&self) -> ModuleConfig {
-        self.config.read().map(|g| g.clone()).unwrap_or_default()
+        self.inner.load_config()
     }
 
     fn save_config(&self, config: &ModuleConfig) -> Result<(), String> {
-        {
-            let mut guard = self
-                .config
-                .write()
-                .map_err(|e| format!("Lock error: {e}"))?;
-            *guard = config.clone();
-        }
+        self.inner.save_config(config)?;
         if let Ok(json) = serde_json::to_string_pretty(config) {
             let _ = fs::write(&self.config_path, json);
         }
@@ -111,16 +165,11 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn cache_candidates(&self, candidates: &[NormalizedCandidate]) {
-        if let Ok(mut guard) = self.cached_candidates.write() {
-            *guard = candidates.to_vec();
-        }
+        self.inner.cache_candidates(candidates);
     }
 
     fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
-        self.cached_candidates
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.inner.get_cached_candidates()
     }
 }
 
