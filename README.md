@@ -35,9 +35,9 @@ gateway-modules/
 
 ## 2. Available Feature Modules
 
-| Module ID | Name | Namespace | Capabilities | Path |
-| :--- | :--- | :--- | :--- | :--- |
-| **`daily-news`** | **Daily News & Content Discovery Service** | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
+| Module ID | Name | Version | Namespace | Capabilities | Path |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`daily-news`** | **Daily News & Content Discovery Service** | `1.0.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
 
 ### Module Highlights: `daily-news`
 - **Multi-Source Ingestion**: Ingests breaking updates from Hacker News, GitHub Trending/Releases, Product Hunt, Reddit, and ArXiv.
