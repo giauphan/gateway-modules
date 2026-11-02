@@ -34,6 +34,7 @@ class TestTieredDiscovery(unittest.TestCase):
         self.assertTrue(res.is_eligible)
         self.assertEqual(res.tier, "tier_1_curated")
         self.assertEqual(len(res.candidates), 1)
+        self.assertEqual(res.to_dict()["count"], 1)
 
     def test_consumed_filtering(self):
         curated = [

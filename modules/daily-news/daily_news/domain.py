@@ -163,7 +163,9 @@ class DiscoveryResult:
         return self.status == "ELIGIBLE" and len(self.candidates) > 0
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["count"] = len(self.candidates)
+        return d
 
 
 def classify_topic_family(title: str, text: str = "") -> str:
