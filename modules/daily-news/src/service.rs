@@ -6,7 +6,7 @@
 
 use crate::domain::{
     canonicalize_url, classify_topic_family, compute_sha256, DiscoveryResult, ModuleConfig,
-    NormalizedCandidate, RawNewsItem,
+    NormalizedCandidate, RawNewsItem, RawProvenance,
 };
 use crate::ports::{FeedFetcherPort, StoragePort};
 use crate::scoring::CandidateScorer;
@@ -42,23 +42,42 @@ impl DailyNewsService {
         let chash = compute_sha256(&format!("{}:{}", raw.title, canonical));
         let thash = compute_sha256(&raw.title);
         let topic = classify_topic_family(&raw.title, raw.description.as_deref().unwrap_or(""));
+        let pub_name = raw
+            .publisher
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string());
 
         NormalizedCandidate {
             candidate_id: format!("cand_{}", &chash[..16]),
-            canonical_url: canonical,
+            canonical_url: canonical.clone(),
             original_url: raw.url.clone(),
+            url: canonical,
             title: raw.title.clone(),
-            publisher: raw.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
-            normalized_publisher: raw.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
+            publisher: pub_name.clone(),
+            normalized_publisher: pub_name,
             published_at_utc: raw.published_at.clone(),
+            published_at: raw.published_at.clone(),
             content_hash: chash,
             title_hash: thash,
+            raw_provenance: RawProvenance {
+                source_id: raw.id.clone(),
+                source_feed: "live:hackernews".to_string(),
+                extra: raw.extra.clone(),
+            },
+            adapter_version: "1.0.0".to_string(),
+            topic_family: topic,
+            author: raw.author.clone(),
             description: raw.description.clone(),
             body: raw.body.clone(),
             summary: raw.description.clone(),
-            discussion_url: Some(disc_url),
-            topic_family: topic,
             tags: raw.tags.clone(),
+            language: "en".to_string(),
+            image_url: None,
+            is_evergreen: false,
+            content_kind: "news".to_string(),
+            updated_at: None,
+            discussion_url: Some(disc_url),
+            independent_fact_check: None,
             scoring: None,
         }
     }
@@ -205,8 +224,9 @@ mod tests {
                     id: "test_1".to_string(),
                     url: "https://example.com/item1?utm_medium=email".to_string(),
                     title: "First Live Article".to_string(),
-                    published_at: "2026-11-02T10:00:00Z".to_string(),
-                    publisher: Some("TechNews".to_string()),
+                    published_at: "2026-11-02T10:00:00+00:00".to_string(),
+                    publisher: Some("example.com".to_string()),
+                    author: Some("johndoe".to_string()),
                     description: Some("Description here".to_string()),
                     body: None,
                     discussion_url: Some("https://news.ycombinator.com/item?id=123".to_string()),
@@ -217,8 +237,9 @@ mod tests {
                     id: "test_duplicate".to_string(),
                     url: "https://example.com/item1?utm_source=twitter".to_string(),
                     title: "First Live Article".to_string(),
-                    published_at: "2026-11-02T10:05:00Z".to_string(),
-                    publisher: Some("TechNews".to_string()),
+                    published_at: "2026-11-02T10:05:00+00:00".to_string(),
+                    publisher: Some("example.com".to_string()),
+                    author: Some("johndoe".to_string()),
                     description: Some("Duplicate description".to_string()),
                     body: None,
                     discussion_url: Some("https://news.ycombinator.com/item?id=124".to_string()),
@@ -276,6 +297,9 @@ mod tests {
         assert_eq!(res1.status, "ELIGIBLE");
         assert_eq!(res1.count, 1); // Duplicate item was filtered out
         assert_eq!(res1.candidates[0].canonical_url, "https://example.com/item1");
+        assert_eq!(res1.candidates[0].url, "https://example.com/item1");
+        assert_eq!(res1.candidates[0].publisher, "example.com");
+        assert_eq!(res1.candidates[0].author.as_deref(), Some("johndoe"));
 
         // 2. Consume item
         let cand_id = &res1.candidates[0].candidate_id;

@@ -2,7 +2,7 @@
 //!
 //! Pulls breaking stories from Hacker News Firebase API and NewsNow service using `ureq`.
 
-use crate::domain::RawNewsItem;
+use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
 use crate::ports::FeedFetcherPort;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -34,6 +34,7 @@ impl LiveFeedFetcher {
             };
 
             let title = val["title"].as_str().unwrap_or("").trim().to_string();
+            let is_external = val["url"].is_string();
             let orig_url = val["url"]
                 .as_str()
                 .map(|s| s.trim().to_string())
@@ -42,22 +43,43 @@ impl LiveFeedFetcher {
                 continue;
             }
 
+            let publisher = if is_external {
+                extract_domain(&orig_url)
+            } else {
+                "news.ycombinator.com".to_string()
+            };
+
             let disc_url = format!("https://news.ycombinator.com/item?id={id}");
-            let text = val["text"].as_str().map(|s| s.to_string());
+            let text = val["text"].as_str().map(str::to_string);
+            let author = val["by"].as_str().map(str::to_string);
+
+            let pub_timestamp = val["time"]
+                .as_u64()
+                .map(format_utc_timestamp)
+                .unwrap_or_else(|| "2026-11-02T11:00:00+00:00".to_string());
+
             let mut extra = HashMap::new();
-            if let Some(by) = val["by"].as_str() {
-                extra.insert("by".to_string(), Value::String(by.to_string()));
+            if let Some(ref by) = author {
+                extra.insert("by".to_string(), Value::String(by.clone()));
             }
             if let Some(score) = val["score"].as_i64() {
                 extra.insert("score".to_string(), Value::Number(score.into()));
             }
+            if let Some(comments) = val["descendants"].as_i64() {
+                extra.insert("comments".to_string(), Value::Number(comments.into()));
+            }
+            extra.insert(
+                "discussion_url".to_string(),
+                Value::String(disc_url.clone()),
+            );
 
             items.push(RawNewsItem {
                 id: format!("hn_{id}"),
                 url: orig_url,
                 title,
-                published_at: "2026-11-02T11:00:00+00:00".to_string(),
-                publisher: Some("Hacker News".to_string()),
+                published_at: pub_timestamp,
+                publisher: Some(publisher),
+                author,
                 description: text.clone(),
                 body: text,
                 discussion_url: Some(disc_url),

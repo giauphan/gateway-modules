@@ -18,24 +18,41 @@ impl CandidateScorer {
     pub fn score_candidate(&self, candidate: &NormalizedCandidate) -> CandidateScoring {
         let (w_f, w_a, w_d, w_v, w_i, w_fe) = self.weights;
 
-        let freshness = 0.95; // Fresh items within window
+        let freshness = 0.95;
         let pub_authority = match candidate.normalized_publisher.to_lowercase().as_str() {
             "anthropic" | "openai" | "google" | "deepmind" => 1.0,
-            "github" | "arxiv" | "nature" | "science" => 0.85,
-            "hacker news" | "techcrunch" | "the verge" => 0.70,
+            "github" | "arxiv" | "nature" | "science" | "syscall.sh" => 0.85,
+            "news.ycombinator.com" | "techcrunch" | "the verge" | "wired" => 0.70,
             _ => 0.50,
         };
-        let fact_density = if candidate.body.as_deref().unwrap_or("").len() > 200 {
-            0.8
+        let fact_density = if candidate.body.as_deref().unwrap_or("").len() > 150 {
+            0.75
         } else {
-            0.5
+            0.50
         };
         let visual_potential = if candidate.discussion_url.is_some() {
-            0.6
+            0.60
         } else {
-            0.4
+            0.40
         };
-        let audience_interest = 0.8;
+
+        // Audience interest calculated from provenance upvotes and comments
+        let audience_interest = {
+            let score = candidate
+                .raw_provenance
+                .extra
+                .get("score")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(10.0);
+            let comments = candidate
+                .raw_provenance
+                .extra
+                .get("comments")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(2.0);
+            let total_engagement = score + (comments * 2.0);
+            (total_engagement / 80.0).clamp(0.40, 1.0)
+        };
         let feasibility = 1.0;
 
         let total = (freshness * w_f)
@@ -46,13 +63,13 @@ impl CandidateScorer {
             + (feasibility * w_fe);
 
         CandidateScoring {
-            total_score: (total * 100.0).round() / 100.0,
+            total_score: (total * 1000.0).round() / 1000.0,
             axes: ScoringAxes {
                 freshness,
                 publisher_authority: pub_authority,
                 fact_density,
                 visual_potential,
-                audience_interest,
+                audience_interest: (audience_interest * 100.0).round() / 100.0,
                 feasibility,
             },
         }
