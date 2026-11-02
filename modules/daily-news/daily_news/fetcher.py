@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .providers.redis_provider import RedisFeedProvider
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCES = ("hackernews", "github", "producthunt", "reddit", "arxiv")
@@ -27,10 +29,25 @@ class FeedFetcher:
         self,
         newsnow_base_url: str = "http://127.0.0.1:4444",
         timeout_seconds: float = 15.0,
+        redis_provider: Optional[RedisFeedProvider] = None,
+        redis_url: Optional[str] = None,
+        redis_key: Optional[str] = None,
+        redis_type: Optional[str] = None,
     ) -> None:
         self.newsnow_base_url = newsnow_base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.base_dir = Path(__file__).resolve().parent
+        if redis_provider is not None:
+            self.redis_provider = redis_provider
+        elif redis_url or redis_key:
+            self.redis_provider = RedisFeedProvider(
+                redis_url=redis_url or "redis://localhost:6379/0",
+                key=redis_key or "news:incoming",
+                channel_type=redis_type or "stream",
+                timeout_seconds=min(3.0, timeout_seconds),
+            )
+        else:
+            self.redis_provider = None
 
     @staticmethod
     def _extract_published_at(raw_item: Dict[str, Any], payload: Dict[str, Any]) -> Optional[str]:
@@ -44,6 +61,12 @@ class FeedFetcher:
     @staticmethod
     def _host(url: str) -> str:
         return urlparse(url).hostname or "newsnow"
+
+    def fetch_redis_feed(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Fetch items directly from configured Redis provider."""
+        if self.redis_provider:
+            return self.redis_provider.fetch_items(limit=limit)
+        return []
 
     def fetch_official_sources(self) -> List[Dict[str, Any]]:
         """Fetch verified official technical sources (MCP, Anthropic, GitHub, Git, SWE-bench)."""
@@ -65,11 +88,20 @@ class FeedFetcher:
         self,
         sources: Sequence[str] = DEFAULT_SOURCES,
     ) -> List[Dict[str, Any]]:
-        """Fetch items across multiple NewsNow sources (hackernews, github, producthunt, reddit, etc.)."""
+        """Fetch items across multiple NewsNow sources and optional Redis stream."""
         items: List[Dict[str, Any]] = []
         seen_urls: set[str] = set()
 
-        for source in sources:
+        if "redis" in sources and self.redis_provider:
+            redis_items = self.fetch_redis_feed(limit=15)
+            for r_item in redis_items:
+                u_key = str(r_item.get("url") or "").lower().rstrip("/")
+                if u_key:
+                    seen_urls.add(u_key)
+                items.append(r_item)
+
+        active_sources = [s for s in sources if s != "redis"]
+        for source in active_sources:
             endpoint = f"{self.newsnow_base_url}/api/s?id={source}"
             try:
                 req = Request(endpoint, headers={"Accept": "application/json", "User-Agent": "toolcase-daily-news/1.0"})

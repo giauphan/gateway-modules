@@ -37,10 +37,11 @@ gateway-modules/
 
 | Module ID | Name | Version | Namespace | Capabilities | Path |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`daily-news`** | **Daily News & Content Discovery Service** | `1.1.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
+| **`daily-news`** | **Daily News & Content Discovery Service** | `1.2.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models`, `redis` | [`modules/daily-news`](modules/daily-news) |
 
 ### Module Highlights: `daily-news`
 - **Multi-Source Ingestion**: Ingests breaking updates from Hacker News, GitHub Trending/Releases, Product Hunt, Reddit, and ArXiv.
+- **Redis Queue / Stream Provider**: Ingests articles directly from Redis Streams (`XREVRANGE`) or Redis Lists (`LRANGE`) via configurable `redis://` connection URL.
 - **Official Specification Feeds**: Ingests official documentation and specs from `modelcontextprotocol.io`, `docs.anthropic.com`, `docs.github.com`, and `git-scm.com`.
 - **SSRF Safety & URL Canonicalization**: Bounded HTTPS checking, loopback/private IP blocking, and tracking parameter stripping (`utm_*`, `fbclid`).
 - **Deterministic Deduplication**: Computes SHA-256 `title_hash` and `content_hash` to eliminate duplicates.

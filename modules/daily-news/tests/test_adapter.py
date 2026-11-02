@@ -176,6 +176,36 @@ class TestAdapter(unittest.TestCase):
         body_inv = json.loads(resp_inverted["body"])
         self.assertEqual(body_inv["status"], "INVALID_DATE_RANGE")
 
+    def test_adapter_redis_config_and_feed(self):
+        # 1. Update config with Redis settings
+        req_cfg = {
+            "path": "/api/v1/config",
+            "method": "POST",
+            "body": json.dumps({
+                "redis_enabled": True,
+                "redis_url": "redis://127.0.0.1:6379/1",
+                "redis_key": "custom:news:stream",
+                "redis_type": "stream",
+            }),
+        }
+        resp_cfg = handle_request(req_cfg)
+        self.assertEqual(resp_cfg["status"], 200)
+        cfg = json.loads(resp_cfg["body"])["config"]
+        self.assertEqual(cfg["redis_enabled"], True)
+        self.assertEqual(cfg["redis_key"], "custom:news:stream")
+
+        # 2. Query /api/v1/feed with sources=["redis"]
+        # Redis is offline locally, so it must return 0 items gracefully without raising 500
+        req_feed = {
+            "path": "/api/v1/feed",
+            "method": "POST",
+            "body": json.dumps({"sources": ["redis"]}),
+        }
+        resp_feed = handle_request(req_feed)
+        self.assertEqual(resp_feed["status"], 200)
+        feed_body = json.loads(resp_feed["body"])
+        self.assertEqual(isinstance(feed_body["items"], list), True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,12 @@ class FeedFetcherPort(Protocol):
     ) -> List[Dict[str, Any]]:
         ...
 
+    def fetch_redis_feed(
+        self,
+        limit: int = 15,
+    ) -> List[Dict[str, Any]]:
+        ...
+
 
 class NewsStateStorePort(Protocol):
     """Outbound port for state persistence and consumed candidate tracking."""

@@ -25,6 +25,7 @@ from .ports import (
     NewsNormalizerPort,
     NewsStateStorePort,
 )
+from .providers import RedisFeedProvider
 from .scoring import CandidateScorer
 from .discovery import TieredContentDiscovery
 from .storage import NewsStateStore
@@ -46,6 +47,7 @@ __all__ = [
     "DEFAULT_SOURCES",
     "FeedFetcher",
     "FeedFetcherPort",
+    "RedisFeedProvider",
     "NewsNormalizer",
     "NewsNormalizerPort",
     "CandidateScorer",

@@ -39,6 +39,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "max_age_days": int(os.environ.get("NEWS_MAX_AGE_DAYS", "7")),
     "require_latest_news": True,
     "default_sources": ["hackernews", "github", "producthunt", "reddit", "arxiv"],
+    "redis_url": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+    "redis_key": os.environ.get("REDIS_KEY", "news:incoming"),
+    "redis_type": os.environ.get("REDIS_TYPE", "stream"),
+    "redis_enabled": bool(os.environ.get("REDIS_ENABLED", "false").lower() in ("1", "true", "yes")),
 }
 
 
@@ -110,7 +114,12 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         body = raw_body
 
     cfg = get_active_config()
-    fetcher = FeedFetcher(newsnow_base_url=cfg["newsnow_url"])
+    fetcher = FeedFetcher(
+        newsnow_base_url=cfg["newsnow_url"],
+        redis_url=cfg.get("redis_url"),
+        redis_key=cfg.get("redis_key"),
+        redis_type=cfg.get("redis_type"),
+    )
     normalizer = NewsNormalizer(
         freshness_window_hours=cfg["freshness_window_hours"],
         require_latest_news=cfg["require_latest_news"],
@@ -138,10 +147,11 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return json_resp(200, {
             "status": "healthy",
             "module": MODULE_ID,
-            "version": "1.1.0",
+            "version": "1.2.0",
             "cached_candidates": len(store.get_cached_candidates()),
             "consumed_count": len(store.get_consumed_ids()),
             "newsnow_url": cfg["newsnow_url"],
+            "redis_enabled": cfg.get("redis_enabled", False),
         })
 
     # 3. OpenAI Models
@@ -202,7 +212,10 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
 
     # 5. Raw Feed Endpoint
     if path.endswith("/api/v1/feed"):
-        sources = body.get("sources") or cfg.get("default_sources", ["hackernews", "github", "producthunt"])
+        default_srcs = list(cfg.get("default_sources", ["hackernews", "github", "producthunt"]))
+        if cfg.get("redis_enabled") and "redis" not in default_srcs:
+            default_srcs.append("redis")
+        sources = body.get("sources") or default_srcs
         raw = fetcher.fetch_newsnow_feed(sources=sources)
         return json_resp(200, {"count": len(raw), "items": raw})
 
@@ -286,7 +299,16 @@ def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     # 9. Config Get/Set
     if path.endswith("/api/v1/config"):
         if method == "POST":
-            for k in ("newsnow_url", "freshness_window_hours", "max_age_days", "require_latest_news"):
+            for k in (
+                "newsnow_url",
+                "freshness_window_hours",
+                "max_age_days",
+                "require_latest_news",
+                "redis_url",
+                "redis_key",
+                "redis_type",
+                "redis_enabled",
+            ):
                 if k in body:
                     cfg[k] = body[k]
             store.save_config(cfg)

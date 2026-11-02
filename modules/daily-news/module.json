@@ -2,7 +2,7 @@
   "id": "daily-news",
   "name": "Daily News & Content Discovery Service",
   "short_name": "Daily News",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "namespace": "/custom/daily-news",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -10,7 +10,8 @@
     "news",
     "content_discovery",
     "chat_completions",
-    "models"
+    "models",
+    "redis"
   ],
   "icon": "📰",
   "config_schema": {
@@ -52,6 +53,34 @@
         "type": "text",
         "placeholder": "hackernews,github,producthunt",
         "description": "Comma-separated list of feed sources to query"
+      },
+      {
+        "key": "redis_enabled",
+        "label": "Enable Redis Ingestion",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable ingesting articles directly from Redis Stream or List"
+      },
+      {
+        "key": "redis_url",
+        "label": "Redis Server URL",
+        "type": "text",
+        "placeholder": "redis://localhost:6379/0",
+        "description": "Redis connection URL with host, port, and database index"
+      },
+      {
+        "key": "redis_key",
+        "label": "Redis Target Key",
+        "type": "text",
+        "placeholder": "news:incoming",
+        "description": "Redis Stream key or List key to consume"
+      },
+      {
+        "key": "redis_type",
+        "label": "Redis Structure Type",
+        "type": "text",
+        "placeholder": "stream",
+        "description": "Redis data structure: stream (XREVRANGE) or list (LRANGE)"
       }
     ]
   },

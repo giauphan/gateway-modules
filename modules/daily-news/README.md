@@ -42,6 +42,10 @@ A standalone provider module for **Toolcase Gateway**, extracted from OpenMontag
 | `max_age_days` | Number | `7` | Maximum age in days for tiered content discovery |
 | `require_latest_news` | Boolean | `true` | Prioritize latest breaking news with verified publication timestamps |
 | `default_sources` | List[String] | `["hackernews", "github", "producthunt"]` | Upstream feed IDs to query |
+| `redis_enabled` | Boolean | `false` | Enable ingesting articles from Redis Stream or List |
+| `redis_url` | String | `redis://localhost:6379/0` | Redis server connection URL |
+| `redis_key` | String | `news:incoming` | Redis Stream or List key to read |
+| `redis_type` | String | `stream` | Redis structure type: `stream` (XREVRANGE) or `list` (LRANGE) |
 
 ---
 
