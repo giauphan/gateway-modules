@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCES = ("hackernews", "github", "producthunt")
+DEFAULT_SOURCES = ("hackernews", "github", "producthunt", "reddit", "arxiv")
 
 
 class FeedFetcher:
@@ -64,7 +64,7 @@ class FeedFetcher:
         self,
         sources: Sequence[str] = DEFAULT_SOURCES,
     ) -> List[Dict[str, Any]]:
-        """Fetch items across multiple NewsNow sources."""
+        """Fetch items across multiple NewsNow sources (hackernews, github, producthunt, reddit, etc.)."""
         items: List[Dict[str, Any]] = []
         seen_urls: set[str] = set()
 

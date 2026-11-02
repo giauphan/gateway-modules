@@ -37,7 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "freshness_window_hours": float(os.environ.get("FRESHNESS_WINDOW_HOURS", "48.0")),
     "max_age_days": int(os.environ.get("NEWS_MAX_AGE_DAYS", "7")),
     "require_latest_news": True,
-    "default_sources": ["hackernews", "github", "producthunt"],
+    "default_sources": ["hackernews", "github", "producthunt", "reddit", "arxiv"],
 }
 
 

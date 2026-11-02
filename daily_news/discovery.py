@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 from .domain import DiscoveryResult, NormalizedCandidate
-from .fetcher import FeedFetcher
+from .fetcher import DEFAULT_SOURCES, FeedFetcher
 from .normalizer import NewsNormalizer
 from .scoring import CandidateScorer
 from .storage import NewsStateStore
@@ -113,11 +113,11 @@ class TieredContentDiscovery:
                 diagnostics=diagnostics,
             )
 
-        # --- Tier 2: Automated Live Feed ---
+        # --- Tier 2: Automated Live Feed (HackerNews, GitHub, ProductHunt, Reddit, ArXiv) ---
         diagnostics["tier_2_checked"] = True
-        active_sources = [s for s in (feed_sources or ("hackernews", "github", "producthunt")) if s != "official"]
+        active_sources = [s for s in (feed_sources or DEFAULT_SOURCES) if s != "official"]
         if not active_sources:
-            active_sources = ["hackernews", "github", "producthunt"]
+            active_sources = list(DEFAULT_SOURCES)
 
         live_raw = self.fetcher.fetch_newsnow_feed(sources=active_sources)
         diagnostics["tier_2_raw_count"] = len(live_raw)
