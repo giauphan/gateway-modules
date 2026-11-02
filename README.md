@@ -1,65 +1,96 @@
-# Daily News & Content Discovery Service Module
+# Toolcase Gateway Modules Storage Repository
 
-A standalone provider module for **Toolcase Gateway**, extracted from OpenMontage's daily news gathering, canonicalization, and tiered ranking pipeline.
+Welcome to the **Toolcase Gateway Modules** repository.
 
----
-
-## 1. Capabilities & Features
-
-- **Multi-Source News Ingestion**: Automatically pulls raw news items from NewsNow, Hacker News, GitHub, and Product Hunt.
-- **SSRF Protection & URL Canonicalization**: Enforces strict URL sanitization, domain allowlisting, and tracking parameter stripping (`utm_*`, `fbclid`, `gclid`).
-- **Deterministic Deduplication & Hashing**: Computes authoritative SHA-256 `title_hash` and `content_hash` signatures.
-- **Freshness Window Enforcement**: Rejects stale feeds and articles beyond the configurable window (default 48h).
-- **Multi-Axis Explainable Scoring**: Ranks content along six axes (freshness, publisher authority, fact density, visual potential, audience interest, feasibility).
-- **Tiered Content Discovery**: Cascades through Tier 1 (Curated queue) -> Tier 2 (Automated feed) -> Tier 3 (Fail-Closed safety).
-- **Standard Toolcase Gateway Protocol**: Speaks `stdio-stream` JSON-RPC over stdin/stdout with complete prefix isolation under `/custom/daily-news/*`.
+This repository serves as the centralized storage and distribution catalog for modular out-of-process provider extensions, adapters, and tools for [Toolcase Gateway](https://github.com/giauphan/toolcase-gateway).
 
 ---
 
-## 2. API Endpoints
+## 1. Repository Structure
 
-| Method | Path | Description |
-| :--- | :--- | :--- |
-| `GET` | `/custom/daily-news/` or `/ui` | Interactive responsive HTML status dashboard |
-| `GET` | `/custom/daily-news/health` | Health check and module operational statistics |
-| `GET` | `/custom/daily-news/models` | OpenAI-compatible models discovery |
-| `POST`| `/custom/daily-news/chat/completions` | Formatted daily news summary in chat format |
-| `GET` | `/custom/daily-news/api/v1/feed` | Raw ingested feed items |
-| `GET` | `/custom/daily-news/api/v1/candidates`| Normalized, scored, and ranked candidates |
-| `POST`| `/custom/daily-news/api/v1/discover` | Priority tiered discovery |
-| `POST`| `/custom/daily-news/api/v1/consume` | Mark candidates as consumed / processed |
-| `GET` | `/custom/daily-news/api/v1/config` | Read active configuration |
-| `POST`| `/custom/daily-news/api/v1/config` | Update active configuration |
-
----
-
-## 3. Configuration Reference
-
-| Key | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `newsnow_url` | String | `http://127.0.0.1:4444` | Upstream NewsNow feed service base URL |
-| `freshness_window_hours` | Number | `48.0` | Maximum age of news articles in hours to consider fresh |
-| `max_age_days` | Number | `7` | Maximum age in days for tiered content discovery |
-| `require_latest_news` | Boolean | `true` | Prioritize latest breaking news with verified publication timestamps |
-| `default_sources` | List[String] | `["hackernews", "github", "producthunt"]` | Upstream feed IDs to query |
-
----
-
-## 4. Architecture & Clean Layering
+All standalone feature modules reside under the [`modules/`](modules/) directory. Each module is completely self-contained with its own manifest, protocol adapter, dependencies, and test suite:
 
 ```text
-daily-news/
-├── module.json         # Toolcase Gateway manifest
-├── run.sh              # Entrypoint launcher
-├── adapter.py          # stdio-stream protocol adapter
-├── config.example.json # Configuration template
-├── daily_news/         # Domain & application service package
-│   ├── domain.py       # Core entities, value objects, URL canonicalizer
-│   ├── normalizer.py   # Schema normalization and batch deduplication
-│   ├── fetcher.py      # Upstream NewsNow and file feed fetcher
-│   ├── scoring.py      # Six-axis deterministic scoring & ranker
-│   ├── discovery.py    # Tiered cascading content discovery
-│   ├── storage.py      # Persistent cache and consumed tracker
-│   └── ui.py           # Dashboard HTML renderer
-└── tests/              # Unit and integration test suite
+gateway-modules/
+├── README.md                 # Repository overview and module index
+├── .gitignore
+└── modules/                  # Feature modules directory
+    ├── daily-news/           # Daily News & Content Discovery Service
+    │   ├── module.json       # Declarative manifest (ID, namespace, capabilities)
+    │   ├── run.sh            # Standard executable entrypoint launcher
+    │   ├── adapter.py        # stdio-stream protocol adapter
+    │   ├── config.example.json
+    │   ├── README.md         # Module documentation and API reference
+    │   ├── daily_news/       # Core Python domain and application package
+    │   └── tests/            # Module unit tests
+    │
+    └── <future-module>/      # Future feature modules can be added here
+        ├── module.json
+        ├── run.sh
+        ├── adapter.py
+        └── README.md
+```
+
+---
+
+## 2. Available Feature Modules
+
+| Module ID | Name | Namespace | Capabilities | Path |
+| :--- | :--- | :--- | :--- | :--- |
+| **`daily-news`** | **Daily News & Content Discovery Service** | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models` | [`modules/daily-news`](modules/daily-news) |
+
+### Module Highlights: `daily-news`
+- **Multi-Source Ingestion**: Ingests breaking updates from Hacker News, GitHub Trending/Releases, Product Hunt, Reddit, and ArXiv.
+- **Official Specification Feeds**: Ingests official documentation and specs from `modelcontextprotocol.io`, `docs.anthropic.com`, `docs.github.com`, and `git-scm.com`.
+- **SSRF Safety & URL Canonicalization**: Bounded HTTPS checking, loopback/private IP blocking, and tracking parameter stripping (`utm_*`, `fbclid`).
+- **Deterministic Deduplication**: Computes SHA-256 `title_hash` and `content_hash` to eliminate duplicates.
+- **Multi-Axis Scoring Engine**: Ranks content along six axes (freshness, publisher authority, fact density, visual potential, audience interest, feasibility).
+- **Tiered Discovery**: Priority cascading (Tier 1 Curated Specs $\to$ Tier 2 Automated Feeds $\to$ Tier 3 Fail-Closed).
+
+---
+
+## 3. How to Add a New Feature Module
+
+To add a new module to this repository:
+
+1. Create a dedicated folder under `modules/<your-module-id>/`:
+   ```bash
+   mkdir -p modules/my-feature-module
+   cd modules/my-feature-module
+   ```
+2. Define the declarative manifest `module.json`:
+   ```json
+   {
+     "id": "my-feature-module",
+     "name": "My Feature Module",
+     "version": "1.0.0",
+     "namespace": "/custom/my-feature",
+     "entrypoint": "run.sh",
+     "protocol": "stdio-stream",
+     "capabilities": ["models", "chat_completions"]
+   }
+   ```
+3. Provide the executable launcher `run.sh` (`chmod +x run.sh`):
+   ```bash
+   #!/bin/sh
+   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+   exec python3 "$SCRIPT_DIR/adapter.py" "$@"
+   ```
+4. Implement the `stdio-stream` JSON-RPC handler in `adapter.py` reading requests from `stdin` and returning responses on `stdout`.
+5. Add unit tests under `tests/` and document your module in `README.md`.
+6. Commit and push your changes to this repository.
+
+---
+
+## 4. Installation in Toolcase Gateway
+
+Modules in this repository can be installed into Toolcase Gateway via the web dashboard at `http://127.0.0.1:28130/dashboard` or via the gateway REST API:
+
+```bash
+curl -X POST http://127.0.0.1:28130/api/v1/dashboard/modules/install \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "https://github.com/giauphan/gateway-modules.git",
+    "id": "daily-news"
+  }'
 ```
