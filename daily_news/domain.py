@@ -22,6 +22,7 @@ DEFAULT_ALLOWED_DOMAINS: Set[str] = {
     "openai.com",
     "arxiv.org",
     "github.com",
+    "git-scm.com",
     "news.ycombinator.com",
     "producthunt.com",
     "techcrunch.com",
@@ -31,18 +32,17 @@ DEFAULT_ALLOWED_DOMAINS: Set[str] = {
     "venturebeat.com",
 }
 
+APPROVED_TOPIC_FAMILIES: List[str] = [
+    "context_memory",
+    "agent_tool_use",
+    "debugging_reliability",
+    "agent_evaluation",
+    "agent_architecture",
+]
+
 TRACKING_QUERY_PARAMS: Set[str] = {
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "fbclid",
-    "gclid",
-    "msclkid",
-    "ref",
-    "source",
-    "rss",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "msclkid", "ref", "source", "rss",
 }
 
 
@@ -84,16 +84,34 @@ class NormalizedCandidate:
     title_hash: str
     raw_provenance: Dict[str, Any]
     adapter_version: str = "1.0.0"
+    topic_family: str = "agent_architecture"
     author: Optional[str] = None
     description: Optional[str] = None
     body: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     language: Optional[str] = "en"
     image_url: Optional[str] = None
+    is_evergreen: bool = False
+    content_kind: str = "news"
+    summary: Optional[str] = None
+    hook: Optional[str] = None
+    viewer_question: Optional[str] = None
+    symptom: Optional[str] = None
+    root_cause: Optional[str] = None
+    remedy: Optional[str] = None
+    evidence_excerpt: Optional[str] = None
+    source_snapshot: Optional[str] = None
+    snapshot_sha256: Optional[str] = None
+    independent_fact_check: Optional[Dict[str, Any]] = None
     scoring: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["url"] = self.canonical_url
+        d["published_at"] = self.published_at_utc
+        if not d.get("summary"):
+            d["summary"] = self.description or (self.body[:300] if self.body else "")
+        return d
 
 
 @dataclass(frozen=True)
@@ -113,6 +131,20 @@ class DiscoveryResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def classify_topic_family(title: str, text: str = "") -> str:
+    """Classify candidate into one of the 5 approved topic families."""
+    combined = f"{title} {text}".lower()
+    if any(k in combined for k in ("prompt caching", "context window", "kv cache", "memory", "state loss", "token limit")):
+        return "context_memory"
+    if any(k in combined for k in ("tool call", "mcp", "schema", "function call", "tools", "payload parsing")):
+        return "agent_tool_use"
+    if any(k in combined for k in ("debug", "retry", "flaky", "reliability", "ci", "loop", "crash", "failure", "trace")):
+        return "debugging_reliability"
+    if any(k in combined for k in ("benchmark", "eval", "evaluation", "score", "metrics", "test suite")):
+        return "agent_evaluation"
+    return "agent_architecture"
 
 
 def canonicalize_url(url: str) -> str:
@@ -201,11 +233,9 @@ def is_safe_url(url: str, allowed_domains: Optional[Set[str]] = None) -> bool:
         if not host:
             return False
 
-        # Disallow loopback / private IP unless local newsnow
         try:
             ip = ipaddress.ip_address(host)
             if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-                # Permit localhost for internal container bridge testing if explicit
                 if host in ("127.0.0.1", "::1", "localhost"):
                     return True
                 return False

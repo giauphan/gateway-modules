@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .domain import (
     NormalizedCandidate,
     canonicalize_url,
+    classify_topic_family,
     compute_content_hash,
     compute_title_hash,
     is_safe_url,
@@ -36,9 +37,9 @@ class NewsNormalizer:
     def normalize_item(self, raw_item: Dict[str, Any]) -> NormalizedCandidate:
         """Transform a single raw item dict into a canonical NormalizedCandidate."""
         raw_id = str(raw_item.get("id") or "").strip()
-        orig_url = str(raw_item.get("url") or "").strip()
+        orig_url = str(raw_item.get("url") or raw_item.get("canonical_url") or "").strip()
         title = str(raw_item.get("title") or "").strip()
-        raw_published = str(raw_item.get("published_at") or "").strip()
+        raw_published = str(raw_item.get("published_at") or raw_item.get("published_at_utc") or "").strip()
 
         if not raw_id:
             raise ValueError("Raw item missing required 'id'")
@@ -56,12 +57,12 @@ class NewsNormalizer:
         norm_pub = normalize_publisher(raw_item.get("publisher"))
         pub_utc = parse_iso_utc(raw_published)
 
-        desc = str(raw_item.get("description") or "").strip() or None
+        desc = str(raw_item.get("description") or raw_item.get("summary") or "").strip() or None
         body = str(raw_item.get("body") or "").strip() or None
 
         content_h = compute_content_hash(title, body or desc, canonical_url)
         title_h = compute_title_hash(title)
-        candidate_id = f"cand_{content_h[:16]}"
+        candidate_id = raw_item.get("candidate_id") or f"cand_{content_h[:16]}"
 
         raw_provenance: Dict[str, Any] = {
             "source_id": raw_id,
@@ -71,6 +72,7 @@ class NewsNormalizer:
             raw_provenance["extra"] = raw_item["extra"]
 
         tags = [str(t).strip() for t in raw_item.get("tags", []) if str(t).strip()]
+        topic_fam = raw_item.get("topic_family") or classify_topic_family(title, f"{desc or ''} {body or ''}")
 
         return NormalizedCandidate(
             candidate_id=candidate_id,
@@ -84,12 +86,25 @@ class NewsNormalizer:
             title_hash=title_h,
             raw_provenance=raw_provenance,
             adapter_version=self.VERSION,
+            topic_family=topic_fam,
             author=raw_item.get("author"),
             description=desc,
             body=body,
             tags=tags,
             language=raw_item.get("language") or "en",
             image_url=raw_item.get("image_url"),
+            is_evergreen=bool(raw_item.get("is_evergreen", False)),
+            content_kind=str(raw_item.get("content_kind", "news")),
+            summary=raw_item.get("summary") or desc,
+            hook=raw_item.get("hook"),
+            viewer_question=raw_item.get("viewer_question"),
+            symptom=raw_item.get("symptom"),
+            root_cause=raw_item.get("root_cause"),
+            remedy=raw_item.get("remedy"),
+            evidence_excerpt=raw_item.get("evidence_excerpt"),
+            source_snapshot=raw_item.get("source_snapshot"),
+            snapshot_sha256=raw_item.get("snapshot_sha256"),
+            independent_fact_check=raw_item.get("independent_fact_check"),
         )
 
     def ingest_and_normalize(
@@ -117,7 +132,7 @@ class NewsNormalizer:
                 diagnostics.append({"reason": "invalid_format", "error": "Item must be a dictionary"})
                 continue
 
-            raw_id = str(item.get("id") or "missing_id")
+            raw_id = str(item.get("id") or item.get("candidate_id") or "missing_id")
             try:
                 candidate = self.normalize_item(item)
             except Exception as e:
