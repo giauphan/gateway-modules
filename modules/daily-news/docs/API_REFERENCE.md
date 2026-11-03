@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.3.0).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.5.0).
 
 ---
 
@@ -46,7 +46,7 @@ Every endpoint that accepts options supports unified parameter resolution: param
 | `from_date` | `since`, `start_date`, `from` | String | `None` | Lower bound date (`YYYY-MM-DD` or ISO 8601 UTC). Inclusive start of day (`00:00:00Z`). |
 | `to_date` | `until`, `end_date`, `to` | String | `None` | Upper bound date (`YYYY-MM-DD` or ISO 8601 UTC). Inclusive end of day (`23:59:59Z`). |
 | `topics` | `topic` | Array or CSV String | `None` | Topic filter (e.g. `["agent_tool_use"]` or `"agent_tool_use,context_memory"`). |
-| `sources` | `source` | Array or CSV String | Configured | Specific feed sources to query (e.g. `hackernews`, `redis`, `github`). |
+| `sources` | `source` | Array or CSV String | Configured | Specific feed sources to query (e.g. `hackernews`, `reddit`, `redis`, `github`). |
 | `curated_candidates`| `curated`, `items` | Array of Objects | `None` | Injected Tier-1 candidates for prioritized verification. |
 
 ---
@@ -69,12 +69,14 @@ curl -s http://127.0.0.1:28130/custom/daily-news/health
 {
   "status": "healthy",
   "module": "daily-news",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "engine": "rust-native",
   "consumed_count": 0,
   "cached_candidates": 5,
   "newsnow_url": "http://127.0.0.1:4444",
-  "redis_enabled": false
+  "redis_enabled": false,
+  "reddit_enabled": true,
+  "reddit_subreddits": ["LocalLLaMA", "MachineLearning", "artificial", "technology"]
 }
 ```
 
@@ -93,8 +95,8 @@ OpenAI-compatible models catalog identifying the module's model ID.
     {
       "id": "daily-news",
       "object": "model",
-      "created": 1730500000,
-      "owned_by": "toolcase-gateway"
+      "created": 1793618000,
+      "owned_by": "daily-news-rs"
     }
   ]
 }
@@ -134,16 +136,15 @@ curl -s http://127.0.0.1:28130/custom/daily-news/chat/completions \
 #### Example Response (200 OK)
 ```json
 {
-  "id": "chatcmpl-daily-news-1730559600",
+  "id": "chatcmpl-a1b2c3d4",
   "object": "chat.completion",
-  "created": 1730559600,
   "model": "daily-news",
   "choices": [
     {
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "### 📰 Daily AI News Digest\n\n1. **Dynamic MCP Tool Scoping** (Anthropic)\n   * [Article](https://docs.anthropic.com/agent-tools) | [Discussion](https://news.ycombinator.com/item?id=50334704)\n   * Score: 0.88 | Topic: `agent_tool_use`"
+        "content": "### Daily News Briefing (3 items):\n\n1. **Dynamic MCP Tool Scoping** (Anthropic) [Score: 0.88]\n   https://docs.anthropic.com/agent-tools\n   Discussion: https://news.ycombinator.com/item?id=50334704"
       },
       "finish_reason": "stop"
     }
@@ -269,12 +270,58 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/candidates \
 ### 3.7. Raw Feed Ingestion
 Returns raw news items from configured feeds prior to normalization or scoring.
 
-- **Route**: `GET /api/v1/feed`
+- **Route**: `GET /api/v1/feed` or `POST /api/v1/feed`
 - **Gateway**: `/custom/daily-news/api/v1/feed?limit=10`
 
 ---
 
-### 3.8. Mark Consumed
+### 3.8. Discussion Thread Inspection
+Fetches an in-depth, structured discussion thread (from Reddit or Hacker News) including author, score, post selftext, and recursive comment trees.
+
+- **Route**: `GET /api/v1/discussion` or `POST /api/v1/discussion`
+- **Gateway**: `/custom/daily-news/api/v1/discussion`
+
+#### Request Parameters
+- `url` or `discussion_url` or `id`: Hacker News item ID (e.g. `50346981`, `hn_50346981`, or full HN URL) or Reddit URL / Post ID (e.g. `1xmitzx`, `reddit_LocalLLaMA_1xmitzx`, `https://reddit.com/r/LocalLLaMA/comments/1xmitzx/...`).
+- `limit`: (Optional) Maximum number of top-level comments to retrieve (default: 20 for HN, 50 for Reddit).
+
+#### Example Request
+```bash
+curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/discussion \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://news.ycombinator.com/item?id=50346981", "limit": 5}'
+```
+
+#### Example Response (200 OK)
+```json
+{
+  "id": "50346981",
+  "subreddit": "hackernews",
+  "title": "Show HN: Hacker Times",
+  "author": "nytimes_dev",
+  "permalink": "https://news.ycombinator.com/item?id=50346981",
+  "url": "https://hackertimes.com",
+  "selftext": null,
+  "score": 142,
+  "num_comments": 38,
+  "comments": [
+    {
+      "id": "50347100",
+      "author": "alice",
+      "body": "Love the serif typography and layout density!",
+      "score": 15,
+      "created_utc": 1730545800,
+      "created_at": "2026-11-02T11:10:00+00:00",
+      "permalink": "https://news.ycombinator.com/item?id=50347100",
+      "replies": []
+    }
+  ]
+}
+```
+
+---
+
+### 3.9. Mark Consumed
 Marks candidate IDs as consumed in the persistent store (`.state/consumed.json`). Consumed candidates are never re-served by the discovery cascade.
 
 - **Route**: `POST /api/v1/consume`
@@ -291,20 +338,19 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/consume \
 ```json
 {
   "status": "consumed",
-  "consumed": 1,
-  "total_consumed": 1
+  "count": 1
 }
 ```
 
 ---
 
-### 3.9. Configuration Management
+### 3.10. Configuration Management
 Inspect or update runtime settings dynamically without restarting the gateway process.
 
 - **Route**: `GET /api/v1/config` (Read) or `POST /api/v1/config` (Update)
 - **Gateway**: `/custom/daily-news/api/v1/config`
 
-#### Example Request (Update Redis Settings)
+#### Example Request (Update Settings)
 ```bash
 curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/config \
   -H "Content-Type: application/json" \
@@ -312,7 +358,9 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/config \
     "redis_enabled": true,
     "redis_url": "redis://127.0.0.1:6379/0",
     "redis_key": "news:incoming",
-    "redis_type": "stream"
+    "redis_type": "stream",
+    "reddit_enabled": true,
+    "reddit_subreddits": ["LocalLLaMA", "MachineLearning", "artificial"]
   }'
 ```
 
@@ -325,11 +373,16 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/config \
     "freshness_window_hours": 48.0,
     "max_age_days": 7,
     "require_latest_news": true,
-    "default_sources": ["hackernews", "github", "producthunt"],
+    "default_sources": ["hackernews", "reddit", "github", "producthunt"],
     "redis_enabled": true,
     "redis_url": "redis://127.0.0.1:6379/0",
     "redis_key": "news:incoming",
-    "redis_type": "stream"
+    "redis_type": "stream",
+    "reddit_enabled": true,
+    "reddit_subreddits": ["LocalLLaMA", "MachineLearning", "artificial"],
+    "reddit_client_id": null,
+    "reddit_client_secret": null,
+    "reddit_base_url": null
   }
 }
 ```
@@ -342,7 +395,8 @@ When a request cannot be fulfilled, the service returns standardized JSON error 
 
 | Error Code | HTTP Status | Trigger Condition | Example Response |
 | :--- | :--- | :--- | :--- |
-| `INVALID_DATE_RANGE` | `400 Bad Request` | `from_date` is later than `to_date`. | `{"error": "from_date (2026-11-05) cannot be later than to_date (2026-11-01)"}` |
-| `INVALID_DATE_FORMAT` | `400 Bad Request` | Date string cannot be parsed as `YYYY-MM-DD` or ISO 8601. | `{"error": "Invalid date format: 'bad-date'. Expected YYYY-MM-DD or ISO 8601."}` |
-| `NO_ELIGIBLE_TOPIC` | `200 OK (count: 0)` | Fails closed when no candidates match topic or date scope. | `{"tier": "none", "status": "NO_ELIGIBLE_TOPIC", "count": 0, "candidates": []}` |
+| `INVALID_DATE_RANGE` | `400 Bad Request` | `from_date` is later than `to_date`. | `{"tier": "none", "status": "INVALID_DATE_RANGE", "candidates": [], "reason": "from_date (\"2026-11-05\") must not be later than to_date (\"2026-11-01\")"}` |
+| `INVALID_DATE_FORMAT` | `400 Bad Request` | Date string cannot be parsed as `YYYY-MM-DD` or ISO 8601. | `{"tier": "none", "status": "INVALID_DATE_FORMAT", "candidates": [], "reason": "from_date error: Invalid date part: bad-date"}` |
+| `NO_ELIGIBLE_TOPIC` | `200 OK (count: 0)` | Fails closed when no candidates match topic or date scope. | `{"tier": "none", "status": "NO_ELIGIBLE_TOPIC", "count": 0, "candidates": [], "reason": "No eligible candidates matched the requested topic filter(s)..."}` |
 | `Route not found` | `404 Not Found` | Unrecognized subpath requested. | `{"error": "Route not found: /unknown"}` |
+| `Missing required parameter` | `400 Bad Request` | Discussion inspection missing required target URL or ID. | `{"error": "Missing required parameter: 'url', 'discussion_url', or 'id'"}` |

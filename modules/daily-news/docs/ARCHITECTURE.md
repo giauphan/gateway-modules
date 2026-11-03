@@ -16,38 +16,53 @@ flowchart TD
     end
 
     subgraph L3["Interface Adapters"]
-        C["fetcher.rs (LiveFeedFetcher / HTTP client)"]
-        D["storage.rs (FileStorageAdapter & InMemoryStorageAdapter)"]
-        E["redis.rs (RedisFeedProvider / RESP protocol)"]
-        F["ui.rs (HTML Dashboard Presenter)"]
+        C["fetcher.rs (LiveFeedFetcher / Feed orchestrator)"]
+        D["hn.rs (Hacker News Firebase API adapter)"]
+        E["reddit.rs (Reddit OAuth & Public JSON adapter)"]
+        F["arctic.rs (Arctic Shift archive fallback adapter)"]
+        G["discussion.rs (Discussion context & comment tree adapter)"]
+        H["redis.rs (RedisFeedProvider / RESP protocol)"]
+        I["storage.rs (FileStorageAdapter & InMemoryStorageAdapter)"]
+        J["ui.rs (HTML Dashboard Presenter)"]
     end
 
     subgraph L2["Application Business Rules (Use Cases)"]
-        G["service.rs (DailyNewsService)"]
-        H["scoring.rs (CandidateScorer)"]
+        K["service.rs (DailyNewsService)"]
+        L["scoring.rs (CandidateScorer)"]
+        M["discovery.rs (Cascading discovery & fail-closed logic)"]
     end
 
     subgraph L1["Enterprise Business Rules (Domain Core)"]
-        I["domain.rs (Entities: RawNewsItem, NormalizedCandidate)"]
-        J["domain.rs (Value Objects: StoryboardEvidence, ScoringAxes)"]
-        K["date.rs (Date boundary parser & Epoch calculations)"]
-        L["ports.rs (Inbound/Outbound Port Traits)"]
+        N["domain.rs (Entities: RawNewsItem, NormalizedCandidate, Config)"]
+        O["url.rs (URL canonicalizer, SHA-256 hasher, SSRF protection)"]
+        P["date.rs (Date boundary parser & Epoch calculations)"]
+        Q["ports.rs (Inbound/Outbound Port Traits)"]
     end
 
-    A --> G
-    G --> L
-    C -.->|implements| L
-    D -.->|implements| L
-    E -.-> C
-    G --> H
-    H --> I
-    G --> I
+    A --> K
+    K --> Q
+    C -.->|implements| Q
+    G -.->|implements| Q
+    I -.->|implements| Q
+    C --> D
+    C --> E
+    C --> H
+    E --> F
+    G --> D
+    G --> F
+    K --> L
+    K --> M
+    L --> N
+    K --> N
+    N --> O
+    N --> P
 ```
 
 ### Inward Dependency Rule
-- High-level business logic in `service.rs`, `scoring.rs`, and `domain.rs` has **zero dependencies** on external frameworks, database drivers, or wire transports.
+- High-level business logic in `service.rs`, `scoring.rs`, `discovery.rs`, and `domain.rs` has **zero dependencies** on external frameworks, database drivers, or wire transports.
 - Outbound interfaces are strictly governed by traits defined in `ports.rs`:
   - `FeedFetcherPort`: Outbound port for fetching raw news items from external feeds.
+  - `DiscussionFetcherPort`: Outbound port for on-demand discussion thread & comment tree inspection.
   - `StoragePort`: Outbound port for tracking consumed candidate IDs, candidate caching, and configuration persistence.
 
 ---
@@ -58,16 +73,22 @@ Every Rust source file adheres to strict modular sizing rules (target: **under 4
 
 | Source File | Line Count | Clean Architecture Role | Responsibilities |
 | :--- | :--- | :--- | :--- |
-| [`src/domain.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/domain.rs) | ~490 | Domain Entities & Value Objects | `RawNewsItem`, `NormalizedCandidate`, `StoryboardEvidence`, URL canonicalizer, SHA-256 hasher, SSRF filter. |
-| [`src/date.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/date.rs) | 152 | Domain Value Object & Math | ISO 8601 string parsing, midnight boundary calculations, epoch arithmetic. |
-| [`src/ports.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/ports.rs) | 40 | Domain Ports (Traits) | `FeedFetcherPort`, `StoragePort`. |
-| [`src/scoring.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/scoring.rs) | 321 | Domain Service | Deterministic 6-axis scoring engine, authority weighting, decay half-life curves. |
-| [`src/service.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/service.rs) | 471 | Application Service | Tiered cascade discovery use case, candidate normalization, topic filtering. |
+| [`src/domain.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/domain.rs) | 333 | Domain Entities & Models | `RawNewsItem`, `NormalizedCandidate`, `StoryboardEvidence`, `ModuleConfig`. |
+| [`src/url.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/url.rs) | 286 | Domain Logic & Security | URL canonicalization, tracking parameter stripping, SHA-256 hashing, SSRF boundaries. |
+| [`src/date.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/date.rs) | 160 | Domain Value Object & Math | ISO 8601 string parsing, midnight boundary calculations, epoch arithmetic. |
+| [`src/ports.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/ports.rs) | 50 | Domain Ports (Traits) | `FeedFetcherPort`, `DiscussionFetcherPort`, `StoragePort`. |
+| [`src/discovery.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/discovery.rs) | 91 | Application Logic | Cascade bounds validation, topic matching, fail-closed result construction. |
+| [`src/scoring.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/scoring.rs) | 321 | Domain Service | Deterministic 6-axis scoring engine, authority weighting, decay curves. |
+| [`src/service.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/service.rs) | 398 | Application Service | Tiered cascade discovery use case, candidate normalization, topic filtering. |
 | [`src/storage.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/storage.rs) | 198 | Secondary Adapter (Storage) | `InMemoryStorageAdapter`, `FileStorageAdapter` (persistent JSON state in `.state/`). |
-| [`src/fetcher.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/fetcher.rs) | 218 | Secondary Adapter (HTTP) | Network client for Hacker News Firebase API and upstream NewsNow instances. |
+| [`src/fetcher.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/fetcher.rs) | 374 | Secondary Adapter (Feeds) | Multi-source feed orchestrator linking HN, Reddit, Redis, and NewsNow. |
+| [`src/hn.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/hn.rs) | 308 | Secondary Adapter (Hacker News) | Live Hacker News Firebase API client and comment enrichment. |
+| [`src/reddit.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/reddit.rs) | 423 | Secondary Adapter (Reddit) | Reddit OAuth client-credentials, public JSON feed ingestion, and fallback. |
+| [`src/arctic.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/arctic.rs) | 248 | Secondary Adapter (Arctic Shift) | Zero-key Reddit search and archive API fallback for datacenter environments. |
+| [`src/discussion.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/discussion.rs) | 417 | Secondary Adapter (Discussion) | On-demand discussion thread & comment tree inspector across Reddit and HN. |
 | [`src/redis.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/redis.rs) | 332 | Secondary Adapter (Redis) | Native RESP parser, Redis Streams (`XREVRANGE`), Redis Lists (`LRANGE`). |
 | [`src/ui.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/ui.rs) | 157 | Primary Adapter (Presenter) | Standalone dark-mode HTML status dashboard. |
-| [`src/main.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/main.rs) | 397 | Frameworks & Drivers | Unix stdio-stream JSON-RPC event loop and request dispatcher. |
+| [`src/main.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/main.rs) | 416 | Frameworks & Drivers | Unix stdio-stream JSON-RPC event loop and request dispatcher. |
 
 ---
 

@@ -54,13 +54,19 @@ modules/daily-news/
 │   ├── VIDEO_PIPELINE_INTEGRATION.md # OpenMontage 6-beat storyboard contract
 │   └── ARCHITECTURE.md               # Clean architecture & storage design
 └── src/
-    ├── domain.rs       # Domain Entities, StoryboardEvidence VO, URL canonicalizer, SHA-256
+    ├── domain.rs       # Domain Entities, StoryboardEvidence VO, ModuleConfig
+    ├── url.rs          # URL canonicalizer, tracking stripper, SHA-256 hasher, SSRF protection
     ├── date.rs         # Date parser, midnight boundaries, epoch calculation
-    ├── ports.rs        # Outbound Port Traits (FeedFetcherPort, StoragePort)
+    ├── ports.rs        # Outbound Port Traits (FeedFetcherPort, DiscussionFetcherPort, StoragePort)
+    ├── discovery.rs    # Cascading discovery bounds validation, topic matching, fail-closed construction
     ├── scoring.rs      # Domain Service: Deterministic 6-axis scoring & ranker
     ├── service.rs      # Application Layer: Discovery, Consume, and Config use cases
     ├── storage.rs      # Storage Adapters: InMemoryStorageAdapter & FileStorageAdapter
-    ├── fetcher.rs      # Network Adapter: Live Hacker News & NewsNow HTTP client
+    ├── fetcher.rs      # Network Adapter: Multi-source feed orchestrator
+    ├── hn.rs           # Network Adapter: Live Hacker News Firebase API client & comment enrichment
+    ├── reddit.rs       # Network Adapter: Reddit OAuth & Public JSON feed provider
+    ├── arctic.rs       # Network Adapter: Zero-key Arctic Shift Reddit archive & search fallback
+    ├── discussion.rs   # Network Adapter: Discussion thread & comment tree inspector
     ├── redis.rs        # Network Adapter: Native RESP Redis stream & list client
     ├── ui.rs           # Presenter Adapter: Responsive HTML dashboard presenter
     ├── lib.rs          # Library facade and module re-exports
@@ -110,6 +116,7 @@ All endpoints are mounted under the Toolcase Gateway namespace prefix `/custom/d
 | `GET` | `/custom/daily-news/api/v1/candidates` | Returns currently ranked and scored candidates |
 | `POST` | `/custom/daily-news/api/v1/candidates` | Normalizes and scores custom injected raw items |
 | `GET` | `/custom/daily-news/api/v1/feed` | Raw ingested feed items before scoring |
+| `POST` | `/custom/daily-news/api/v1/discussion` | Structured comment tree & thread discussion inspection (Reddit / HN) |
 | `POST` | `/custom/daily-news/api/v1/consume` | Marks candidates as consumed/processed to avoid re-serving |
 | `GET` | `/custom/daily-news/api/v1/config` | Read active configuration |
 | `POST` | `/custom/daily-news/api/v1/config` | Update configuration parameters dynamically |
@@ -161,12 +168,12 @@ $$\text{Score} = (W_F \times F) + (W_A \times A) + (W_D \times D) + (W_V \times 
 
 | Axis | Weight | Calculation Criteria |
 | :--- | :--- | :--- |
-| **Freshness ($F$)** | 25% | $1.0$ for $<12\text{h}$, decays linearly to $0.0$ at $48\text{h}$. |
-| **Publisher Authority ($A$)** | 20% | Tier-1 AI labs ($1.0$), HN/TechCrunch ($0.70$), default ($0.50$). |
-| **Fact Density ($D$)** | 15% | Content length, technical density, code snippets. |
-| **Visual Potential ($V$)** | 15% | Discussion link presence, media richness. |
-| **Audience Interest ($I$)** | 15% | Community upvotes, comment velocity. |
-| **Feasibility ($\text{Fe}$)** | 10% | Reproducibility and open repo/API availability ($1.0$). |
+| **Freshness ($F$)** | 30% | $1.0$ for $<2\text{h}$, decays linearly to $0.5$ at $12\text{h}$, $0.2$ at $24\text{h}$, and $0.1$ at $>24\text{h}$. |
+| **Publisher Authority ($A$)** | 20% | Tier-1 AI labs & newsrooms ($1.0$), HN/TechCrunch/Verge ($0.80$), known ($0.50$), unknown ($0.20$). |
+| **Fact Density ($D$)** | 20% | Word count tiers (>400: $1.0$, >200: $0.8$, >50: $0.5$) with quotes ($+0.1$) & digits ($+0.1$) bonuses. |
+| **Visual Potential ($V$)** | 15% | Base ($0.30$) + image/discussion ($+0.30$) + visual keywords (chart, graph, demo, release, prototype: $+0.20$ or $+0.40$). |
+| **Audience Interest ($I$)** | 10% | Technical/AI taxonomy keywords ($0.10, 0.75, 1.0$) blended 70/30 with engagement metrics (upvotes + 2×comments). |
+| **Feasibility ($\text{Fe}$)** | 5% | Reproducibility, open repository availability, and valid actionable contract ($1.0$). |
 
 ---
 

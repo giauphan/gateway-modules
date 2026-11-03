@@ -145,7 +145,7 @@ fn handle_ui(service: &DailyNewsService, limit: usize) -> Value {
     let cfg = service.get_config();
     let candidates = service.get_candidates(limit.max(10));
     let html = render_dashboard_html(
-        "1.3.0",
+        "1.5.0",
         "rust-native",
         &cfg,
         service.consumed_count(),
