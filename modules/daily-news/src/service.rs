@@ -106,7 +106,7 @@ impl DailyNewsService {
                 source_feed: "daily-news".to_string(),
                 extra: raw.extra.clone(),
             },
-            adapter_version: "1.5.0".to_string(),
+            adapter_version: "1.5.1".to_string(),
             topic_family: topic,
             author: raw.author.clone(),
             description: raw.description.clone(),

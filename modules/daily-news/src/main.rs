@@ -141,7 +141,7 @@ fn handle_health(service: &DailyNewsService) -> Value {
         json!({
             "status": "healthy",
             "module": "daily-news",
-            "version": "1.5.0",
+            "version": "1.5.1",
             "engine": "rust-native",
             "consumed_count": service.consumed_count(),
             "cached_candidates": service.cached_candidates_count(),
@@ -172,7 +172,7 @@ fn handle_ui(service: &DailyNewsService, limit: usize) -> Value {
     let cfg = service.get_config();
     let candidates = service.get_candidates(limit.max(10));
     let html = render_dashboard_html(
-        "1.5.0",
+        "1.5.1",
         "rust-native",
         &cfg,
         service.consumed_count(),

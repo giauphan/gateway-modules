@@ -7,7 +7,7 @@ use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
 use serde_json::Value;
 use std::collections::HashMap;
 
-const DEFAULT_REDDIT_USER_AGENT: &str = "ToolcaseGateway-DailyNews/1.5.0 (by /u/toolcase)";
+const DEFAULT_REDDIT_USER_AGENT: &str = "ToolcaseGateway-DailyNews/1.5.1 (by /u/toolcase)";
 
 #[derive(Debug, Clone)]
 pub struct RedditFeedProvider {

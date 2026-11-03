@@ -43,7 +43,7 @@ impl LiveFeedFetcher {
         let val: Value = match crate::arctic::http_agent()
             .get(&endpoint)
             .header("Accept", "application/json")
-            .header("User-Agent", "toolcase-daily-news/1.5.0")
+            .header("User-Agent", "toolcase-daily-news/1.5.1")
             .call()
         {
             Ok(res) => res.into_body().read_json().unwrap_or_default(),
