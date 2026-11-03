@@ -58,3 +58,25 @@ This document establishes the architecture, language, and quality standards for 
   - Out-of-process protocol framing (`stdio-stream` JSON-RPC).
   - Failure modes and offline resilience.
 - Run `cargo test` and ensure all tests pass with zero warnings before committing changes.
+
+---
+
+## 4. Version Management & Single Source of Truth
+
+- **Mandatory Version Upgrade on Code Changes**:
+  - Every functional modification, bug fix, feature addition, or refactor MUST bump the module's semantic version (`MAJOR.MINOR.PATCH`).
+  - `PATCH` (`1.5.0` -> `1.5.1`): Bug fixes, hotfixes, and internal logic corrections.
+  - `MINOR` (`1.5.0` -> `1.6.0`): New capabilities, non-breaking endpoints, or configuration fields.
+  - `MAJOR` (`1.0.0` -> `2.0.0`): Breaking changes to payload schemas, protocol contracts, or namespace mounting.
+- **Single Source of Truth (`Cargo.toml`)**:
+  - The module's `Cargo.toml` (`version = "..."`) is the authoritative single source of truth for the version.
+  - Rust source files MUST NEVER hardcode version strings. Always reference the crate version at compile time via `env!("CARGO_PKG_VERSION")`.
+  - Non-Rust manifests (`module.json`), documentation (`docs/`), and precompiled binaries are synchronized from `Cargo.toml` using the automated script:
+    ```bash
+    # Option A: Bump version in Cargo.toml and synchronize all files
+    ./scripts/sync-version.sh <new_version>
+
+    # Option B: Synchronize all files after manually editing Cargo.toml
+    ./scripts/sync-version.sh
+    ```
+

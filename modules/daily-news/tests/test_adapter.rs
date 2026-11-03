@@ -36,7 +36,7 @@ fn test_adapter_health_endpoint() {
     assert_eq!(body["status"], "healthy");
     assert_eq!(body["module"], "daily-news");
     assert_eq!(body["engine"], "rust-native");
-    assert_eq!(body["version"], "1.5.1");
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(body["reddit_enabled"], true);
 }
 

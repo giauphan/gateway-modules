@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn test_render_dashboard() {
         let cfg = ModuleConfig::default();
-        let html = render_dashboard_html("1.5.1", "rust-native", &cfg, 5, &[]);
+        let html = render_dashboard_html(env!("CARGO_PKG_VERSION"), "rust-native", &cfg, 5, &[]);
         assert!(html.contains("Daily News"));
         assert!(html.contains("rust-native"));
         assert!(html.contains("Consumed Items"));
