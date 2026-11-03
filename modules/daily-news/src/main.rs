@@ -64,6 +64,33 @@ fn extract_topics(body: &Value) -> Option<Vec<String>> {
         })
 }
 
+fn extract_sources(body: &Value) -> Option<Vec<String>> {
+    if let Some(arr) = body["sources"].as_array().or_else(|| body["source"].as_array()) {
+        let items: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        if !items.is_empty() {
+            return Some(items);
+        }
+    }
+    body["sources"]
+        .as_str()
+        .or_else(|| body["source"].as_str())
+        .and_then(|s| {
+            let items: Vec<String> = s
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            if items.is_empty() {
+                None
+            } else {
+                Some(items)
+            }
+        })
+}
+
 fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {
     let from = body["from_date"]
         .as_str()
@@ -177,11 +204,7 @@ fn handle_discover(service: &DailyNewsService, body: &Value, limit: usize) -> Va
     let curated: Option<Vec<RawNewsItem>> = body["curated_candidates"]
         .as_array()
         .map(|arr| serde_json::from_value(json!(arr)).unwrap_or_default());
-    let sources: Option<Vec<String>> = body["sources"].as_array().map(|arr| {
-        arr.iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect()
-    });
+    let sources = extract_sources(body);
 
     match service.discover(
         limit,
@@ -234,16 +257,13 @@ fn handle_candidates(
 }
 
 fn handle_feed(service: &DailyNewsService, body: &Value, limit: usize) -> Value {
-    let sources: Option<Vec<String>> = body["sources"].as_array().map(|arr| {
-        arr.iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect()
-    });
-    let feed = if let Some(ref s) = sources {
+    let sources = extract_sources(body);
+    let mut feed = if let Some(ref s) = sources {
         service.get_feed_sources(s, limit)
     } else {
         service.get_feed(limit)
     };
+    feed.truncate(limit);
     let count = feed.len();
     make_json_resp(200, json!({ "count": count, "items": feed }))
 }

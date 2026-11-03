@@ -208,33 +208,58 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
     items
 }
 
+fn interleave_source_items(source_batches: Vec<Vec<RawNewsItem>>) -> Vec<RawNewsItem> {
+    let mut result = Vec::new();
+    let max_len = source_batches.iter().map(|b| b.len()).max().unwrap_or(0);
+    for i in 0..max_len {
+        for batch in &source_batches {
+            if let Some(item) = batch.get(i) {
+                result.push(item.clone());
+            }
+        }
+    }
+    result
+}
+
 impl FeedFetcherPort for LiveFeedFetcher {
     fn fetch_raw_items(&self, limit: usize) -> Result<Vec<RawNewsItem>, String> {
-        let mut items = Vec::new();
+        let mut batches = Vec::new();
         if let Some(ref redis) = self.redis_provider {
-            items.extend(redis.fetch_items(limit));
+            let redis_items = redis.fetch_items(limit);
+            if !redis_items.is_empty() {
+                batches.push(redis_items);
+            }
         }
 
         if let Some(ref reddit) = self.reddit_provider {
-            items.extend(reddit.fetch_posts(limit));
+            let reddit_items = reddit.fetch_posts(limit);
+            if !reddit_items.is_empty() {
+                batches.push(reddit_items);
+            }
         }
 
         let hn_items = self.fetch_hackernews(limit);
         if !hn_items.is_empty() {
-            items.extend(hn_items);
+            batches.push(hn_items);
         } else if let Some(ref nn_url) = self.newsnow_url {
-            items.extend(self.fetch_newsnow_source(nn_url, "hackernews", limit));
+            let nn_items = self.fetch_newsnow_source(nn_url, "hackernews", limit);
+            if !nn_items.is_empty() {
+                batches.push(nn_items);
+            }
         }
 
-        Ok(items)
+        Ok(interleave_source_items(batches))
     }
 
     fn fetch_sources(&self, sources: &[String], limit: usize) -> Result<Vec<RawNewsItem>, String> {
-        let mut items = Vec::new();
+        let mut batches = Vec::new();
 
         if sources.iter().any(|s| s == "redis") {
             if let Some(ref redis) = self.redis_provider {
-                items.extend(redis.fetch_items(limit));
+                let redis_items = redis.fetch_items(limit);
+                if !redis_items.is_empty() {
+                    batches.push(redis_items);
+                }
             }
         }
 
@@ -243,7 +268,7 @@ impl FeedFetcherPort for LiveFeedFetcher {
             if let Some(ref reddit) = self.reddit_provider {
                 let reddit_items = reddit.fetch_posts(limit);
                 if !reddit_items.is_empty() {
-                    items.extend(reddit_items);
+                    batches.push(reddit_items);
                     reddit_fetched = true;
                 }
             }
@@ -253,7 +278,7 @@ impl FeedFetcherPort for LiveFeedFetcher {
         if sources.is_empty() || sources.iter().any(|s| s == "hackernews" || s == "all") {
             let hn_items = self.fetch_hackernews(limit);
             if !hn_items.is_empty() {
-                items.extend(hn_items);
+                batches.push(hn_items);
                 hn_fetched = true;
             }
         }
@@ -269,11 +294,13 @@ impl FeedFetcherPort for LiveFeedFetcher {
         for &s in &non_special_sources {
             if let Some(ref nn_url) = self.newsnow_url {
                 let nn_items = self.fetch_newsnow_source(nn_url, s, limit);
-                items.extend(nn_items);
+                if !nn_items.is_empty() {
+                    batches.push(nn_items);
+                }
             }
         }
 
-        Ok(items)
+        Ok(interleave_source_items(batches))
     }
 }
 

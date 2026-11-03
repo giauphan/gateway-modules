@@ -63,19 +63,26 @@ pub fn fetch_hn_item_with_base(base_url: Option<&str>, id: u64) -> Option<RawNew
 }
 
 pub fn fetch_hackernews_top(limit: usize) -> Vec<RawNewsItem> {
+    if limit == 0 {
+        return Vec::new();
+    }
     let endpoint = format!("{DEFAULT_HN_BASE_URL}/topstories.json");
     let ids: Vec<u64> = match crate::arctic::http_agent().get(&endpoint).call() {
         Ok(res) => res.into_body().read_json().unwrap_or_default(),
         Err(_) => Vec::new(),
     };
 
-    let target_ids: Vec<u64> = ids.into_iter().take(limit.max(25)).collect();
+    let target_ids: Vec<u64> = ids.into_iter().take(limit.saturating_add(5)).collect();
     let mut items = Vec::new();
     for id in target_ids {
         if let Some(item) = fetch_hn_item(id) {
             items.push(item);
+            if items.len() >= limit {
+                break;
+            }
         }
     }
+    items.truncate(limit);
     items
 }
 

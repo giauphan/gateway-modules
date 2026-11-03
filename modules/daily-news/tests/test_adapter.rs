@@ -174,6 +174,48 @@ fn test_adapter_reddit_feed_endpoint() {
     assert_eq!(resp["status"], 200);
     let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
     assert!(body["items"].is_array());
+    let count = body["count"].as_u64().unwrap() as usize;
+    assert!(count <= 3);
+    assert_eq!(body["items"].as_array().unwrap().len(), count);
+}
+
+#[test]
+fn test_adapter_feed_endpoint_limit_enforcement() {
+    // 1. Gateway route with query limit=25 (matches user report)
+    let req = json!({
+        "path": "/custom/daily-news/api/v1/feed?limit=25",
+        "method": "GET"
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 200);
+    let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    let count = body["count"].as_u64().unwrap() as usize;
+    assert!(count <= 25, "Expected count <= 25, got {count}");
+    assert_eq!(body["items"].as_array().unwrap().len(), count);
+
+    // 2. Gateway route with low query limit=2
+    let req_small = json!({
+        "path": "/custom/daily-news/api/v1/feed?limit=2",
+        "method": "GET"
+    });
+    let resp_small = send_rpc_request(req_small);
+    assert_eq!(resp_small["status"], 200);
+    let body_small: Value = serde_json::from_str(resp_small["body"].as_str().unwrap()).unwrap();
+    let count_small = body_small["count"].as_u64().unwrap() as usize;
+    assert!(count_small <= 2, "Expected count <= 2, got {count_small}");
+    assert_eq!(body_small["items"].as_array().unwrap().len(), count_small);
+
+    // 3. Comma-separated sources in query
+    let req_csv = json!({
+        "path": "/custom/daily-news/api/v1/feed?sources=hackernews,reddit&limit=3",
+        "method": "GET"
+    });
+    let resp_csv = send_rpc_request(req_csv);
+    assert_eq!(resp_csv["status"], 200);
+    let body_csv: Value = serde_json::from_str(resp_csv["body"].as_str().unwrap()).unwrap();
+    let count_csv = body_csv["count"].as_u64().unwrap() as usize;
+    assert!(count_csv <= 3, "Expected count <= 3, got {count_csv}");
+    assert_eq!(body_csv["items"].as_array().unwrap().len(), count_csv);
 }
 
 #[test]

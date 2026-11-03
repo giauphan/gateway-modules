@@ -329,13 +329,18 @@ impl DailyNewsService {
     }
 
     pub fn get_feed(&self, limit: usize) -> Vec<RawNewsItem> {
-        self.fetcher.fetch_raw_items(limit).unwrap_or_default()
+        let mut items = self.fetcher.fetch_raw_items(limit).unwrap_or_default();
+        items.truncate(limit);
+        items
     }
 
     pub fn get_feed_sources(&self, sources: &[String], limit: usize) -> Vec<RawNewsItem> {
-        self.fetcher
+        let mut items = self
+            .fetcher
             .fetch_sources(sources, limit)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        items.truncate(limit);
+        items
     }
 
     pub fn get_candidates(&self, limit: usize) -> Vec<NormalizedCandidate> {
