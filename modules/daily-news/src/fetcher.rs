@@ -4,6 +4,7 @@
 
 use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
 use crate::ports::FeedFetcherPort;
+use crate::reddit::RedditFeedProvider;
 use crate::redis::RedisFeedProvider;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 pub struct LiveFeedFetcher {
     pub newsnow_url: Option<String>,
     pub redis_provider: Option<RedisFeedProvider>,
+    pub reddit_provider: Option<RedditFeedProvider>,
 }
 
 impl LiveFeedFetcher {
@@ -18,6 +20,7 @@ impl LiveFeedFetcher {
         Self {
             newsnow_url,
             redis_provider: None,
+            reddit_provider: None,
         }
     }
 
@@ -26,9 +29,15 @@ impl LiveFeedFetcher {
         self
     }
 
+    pub fn with_reddit(mut self, reddit: RedditFeedProvider) -> Self {
+        self.reddit_provider = Some(reddit);
+        self
+    }
+
     fn fetch_newsnow_source(&self, base_url: &str, source: &str, limit: usize) -> Vec<RawNewsItem> {
         let endpoint = format!("{}/api/s?id={source}", base_url.trim_end_matches('/'));
-        let val: Value = match ureq::get(&endpoint)
+        let val: Value = match crate::arctic::http_agent()
+            .get(&endpoint)
             .header("Accept", "application/json")
             .header("User-Agent", "toolcase-daily-news/1.3.0")
             .call()
@@ -81,7 +90,7 @@ impl LiveFeedFetcher {
 
     fn fetch_hackernews(&self, limit: usize) -> Vec<RawNewsItem> {
         let endpoint = "https://hacker-news.firebaseio.com/v0/topstories.json";
-        let ids: Vec<u64> = match ureq::get(endpoint).call() {
+        let ids: Vec<u64> = match crate::arctic::http_agent().get(endpoint).call() {
             Ok(res) => res.into_body().read_json().unwrap_or_default(),
             Err(_) => Vec::new(),
         };
@@ -91,7 +100,7 @@ impl LiveFeedFetcher {
 
         for id in target_ids {
             let item_url = format!("https://hacker-news.firebaseio.com/v0/item/{id}.json");
-            let val: Value = match ureq::get(&item_url).call() {
+            let val: Value = match crate::arctic::http_agent().get(&item_url).call() {
                 Ok(res) => res.into_body().read_json().unwrap_or_default(),
                 Err(_) => continue,
             };
@@ -157,6 +166,10 @@ impl FeedFetcherPort for LiveFeedFetcher {
             items.extend(redis.fetch_items(limit));
         }
 
+        if let Some(ref reddit) = self.reddit_provider {
+            items.extend(reddit.fetch_posts(limit));
+        }
+
         if let Some(ref nn_url) = self.newsnow_url {
             let nn_items = self.fetch_newsnow_source(nn_url, "hackernews", limit);
             items.extend(nn_items);
@@ -179,8 +192,22 @@ impl FeedFetcherPort for LiveFeedFetcher {
             }
         }
 
-        let non_redis_sources: Vec<&String> = sources.iter().filter(|&s| s != "redis").collect();
-        for &s in &non_redis_sources {
+        let mut reddit_fetched = false;
+        if sources.iter().any(|s| s == "reddit" || s == "all") {
+            if let Some(ref reddit) = self.reddit_provider {
+                let reddit_items = reddit.fetch_posts(limit);
+                if !reddit_items.is_empty() {
+                    items.extend(reddit_items);
+                    reddit_fetched = true;
+                }
+            }
+        }
+
+        let non_special_sources: Vec<&String> = sources
+            .iter()
+            .filter(|&s| s != "redis" && (s != "reddit" || !reddit_fetched))
+            .collect();
+        for &s in &non_special_sources {
             if let Some(ref nn_url) = self.newsnow_url {
                 let nn_items = self.fetch_newsnow_source(nn_url, s, limit);
                 items.extend(nn_items);
@@ -206,6 +233,7 @@ mod tests {
         let fetcher = LiveFeedFetcher::new(None);
         assert!(fetcher.newsnow_url.is_none());
         assert!(fetcher.redis_provider.is_none());
+        assert!(fetcher.reddit_provider.is_none());
     }
 
     #[test]
@@ -213,6 +241,15 @@ mod tests {
         let redis = RedisFeedProvider::new("redis://127.0.0.1:65534", "test:key", "stream");
         let fetcher = LiveFeedFetcher::new(None).with_redis(redis);
         let items = fetcher.fetch_sources(&["redis".to_string()], 5).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_fetch_sources_with_reddit_offline() {
+        let reddit = RedditFeedProvider::new(vec!["LocalLLaMA".to_string()])
+            .with_base_url(Some("http://127.0.0.1:65534".to_string()));
+        let fetcher = LiveFeedFetcher::new(None).with_reddit(reddit);
+        let items = fetcher.fetch_sources(&["reddit".to_string()], 5).unwrap();
         assert!(items.is_empty());
     }
 }

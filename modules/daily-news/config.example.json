@@ -10,5 +10,12 @@
     "producthunt",
     "reddit",
     "arxiv"
+  ],
+  "reddit_enabled": true,
+  "reddit_subreddits": [
+    "LocalLLaMA",
+    "MachineLearning",
+    "artificial",
+    "technology"
   ]
 }

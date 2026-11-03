@@ -23,8 +23,20 @@ fn default_require_latest() -> bool {
 fn default_sources() -> Vec<String> {
     vec![
         "hackernews".to_string(),
+        "reddit".to_string(),
         "github".to_string(),
         "producthunt".to_string(),
+    ]
+}
+fn default_reddit_enabled() -> bool {
+    true
+}
+fn default_reddit_subreddits() -> Vec<String> {
+    vec![
+        "LocalLLaMA".to_string(),
+        "MachineLearning".to_string(),
+        "artificial".to_string(),
+        "technology".to_string(),
     ]
 }
 fn default_redis_url() -> String {
@@ -57,6 +69,16 @@ pub struct ModuleConfig {
     pub redis_key: String,
     #[serde(default = "default_redis_type")]
     pub redis_type: String,
+    #[serde(default = "default_reddit_enabled")]
+    pub reddit_enabled: bool,
+    #[serde(default = "default_reddit_subreddits")]
+    pub reddit_subreddits: Vec<String>,
+    #[serde(default)]
+    pub reddit_client_id: Option<String>,
+    #[serde(default)]
+    pub reddit_client_secret: Option<String>,
+    #[serde(default)]
+    pub reddit_base_url: Option<String>,
 }
 
 impl Default for ModuleConfig {
@@ -71,6 +93,55 @@ impl Default for ModuleConfig {
             redis_url: default_redis_url(),
             redis_key: default_redis_key(),
             redis_type: default_redis_type(),
+            reddit_enabled: default_reddit_enabled(),
+            reddit_subreddits: default_reddit_subreddits(),
+            reddit_client_id: None,
+            reddit_client_secret: None,
+            reddit_base_url: None,
+        }
+    }
+}
+
+impl ModuleConfig {
+    pub fn apply_updates(&mut self, body: &serde_json::Value) {
+        if let Some(url) = body["newsnow_url"].as_str() {
+            self.newsnow_url = url.to_string();
+        }
+        if let Some(h) = body["freshness_window_hours"].as_f64() {
+            self.freshness_window_hours = h;
+        }
+        if let Some(d) = body["max_age_days"].as_u64() {
+            self.max_age_days = d as u32;
+        }
+        if let Some(b) = body["require_latest_news"].as_bool() {
+            self.require_latest_news = b;
+        }
+        if let Some(re) = body["redis_enabled"].as_bool() {
+            self.redis_enabled = re;
+        }
+        if let Some(ru) = body["redis_url"].as_str() {
+            self.redis_url = ru.to_string();
+        }
+        if let Some(rk) = body["redis_key"].as_str() {
+            self.redis_key = rk.to_string();
+        }
+        if let Some(rt) = body["redis_type"].as_str() {
+            self.redis_type = rt.to_string();
+        }
+        if let Some(re) = body["reddit_enabled"].as_bool() {
+            self.reddit_enabled = re;
+        }
+        if let Some(subs) = body["reddit_subreddits"].as_array() {
+            self.reddit_subreddits = subs
+                .iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect();
+        }
+        if let Some(cid) = body["reddit_client_id"].as_str() {
+            self.reddit_client_id = Some(cid.to_string()).filter(|s| !s.trim().is_empty());
+        }
+        if let Some(sec) = body["reddit_client_secret"].as_str() {
+            self.reddit_client_secret = Some(sec.to_string()).filter(|s| !s.trim().is_empty());
         }
     }
 }

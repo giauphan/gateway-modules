@@ -36,6 +36,8 @@ fn test_adapter_health_endpoint() {
     assert_eq!(body["status"], "healthy");
     assert_eq!(body["module"], "daily-news");
     assert_eq!(body["engine"], "rust-native");
+    assert_eq!(body["version"], "1.5.0");
+    assert_eq!(body["reddit_enabled"], true);
 }
 
 #[test]
@@ -159,4 +161,62 @@ fn test_adapter_chat_completions() {
     let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
     let content = body["choices"][0]["message"]["content"].as_str().unwrap();
     assert!(content.contains("Daily News Briefing"));
+}
+
+#[test]
+fn test_adapter_reddit_feed_endpoint() {
+    let req = json!({
+        "path": "/api/v1/feed",
+        "method": "POST",
+        "body": serde_json::to_string(&json!({ "sources": ["reddit"], "limit": 3 })).unwrap()
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 200);
+    let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert!(body["items"].is_array());
+}
+
+#[test]
+fn test_adapter_discussion_endpoint_missing_params() {
+    let req = json!({
+        "path": "/api/v1/discussion",
+        "method": "POST",
+        "body": "{}"
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 400);
+    let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Missing required parameter"));
+}
+
+#[test]
+fn test_adapter_discussion_endpoint_invalid_url() {
+    let req = json!({
+        "path": "/api/v1/discussion",
+        "method": "POST",
+        "body": serde_json::to_string(&json!({ "url": "https://example.com/not-reddit" })).unwrap()
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 404);
+}
+
+#[test]
+#[ignore = "requires live external internet access"]
+fn test_adapter_discussion_endpoint_live() {
+    let req = json!({
+        "path": "/api/v1/discussion",
+        "method": "POST",
+        "body": serde_json::to_string(&json!({
+            "url": "https://www.reddit.com/r/LocalLLaMA/comments/1xmitzx/alibabas_qwen_code_repo_just_leaked_qwen4max/",
+            "limit": 5
+        })).unwrap()
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 200);
+    let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["id"], "1xmitzx");
+    assert!(body["comments"].is_array());
 }

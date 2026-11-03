@@ -47,17 +47,21 @@ fn extract_topics(body: &Value) -> Option<Vec<String>> {
             return Some(items);
         }
     }
-    if let Some(s) = body["topics"].as_str().or_else(|| body["topic"].as_str()) {
-        let items: Vec<String> = s
-            .split(',')
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect();
-        if !items.is_empty() {
-            return Some(items);
-        }
-    }
-    None
+    body["topics"]
+        .as_str()
+        .or_else(|| body["topic"].as_str())
+        .and_then(|s| {
+            let items: Vec<String> = s
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            if items.is_empty() {
+                None
+            } else {
+                Some(items)
+            }
+        })
 }
 
 fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {
@@ -110,12 +114,14 @@ fn handle_health(service: &DailyNewsService) -> Value {
         json!({
             "status": "healthy",
             "module": "daily-news",
-            "version": "1.3.0",
+            "version": "1.5.0",
             "engine": "rust-native",
             "consumed_count": service.consumed_count(),
             "cached_candidates": service.cached_candidates_count(),
             "newsnow_url": cfg.newsnow_url,
-            "redis_enabled": cfg.redis_enabled
+            "redis_enabled": cfg.redis_enabled,
+            "reddit_enabled": cfg.reddit_enabled,
+            "reddit_subreddits": cfg.reddit_subreddits
         }),
     )
 }
@@ -259,37 +265,31 @@ fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
     }
 }
 
-fn apply_config_updates(cfg: &mut daily_news::domain::ModuleConfig, body: &Value) {
-    if let Some(url) = body["newsnow_url"].as_str() {
-        cfg.newsnow_url = url.to_string();
+fn handle_discussion(body: &Value) -> Value {
+    let url_or_id = body["url"]
+        .as_str()
+        .or_else(|| body["discussion_url"].as_str())
+        .or_else(|| body["id"].as_str())
+        .unwrap_or("");
+
+    if url_or_id.trim().is_empty() {
+        return make_json_resp(
+            400,
+            json!({ "error": "Missing required parameter: 'url', 'discussion_url', or 'id'" }),
+        );
     }
-    if let Some(h) = body["freshness_window_hours"].as_f64() {
-        cfg.freshness_window_hours = h;
-    }
-    if let Some(d) = body["max_age_days"].as_u64() {
-        cfg.max_age_days = d as u32;
-    }
-    if let Some(b) = body["require_latest_news"].as_bool() {
-        cfg.require_latest_news = b;
-    }
-    if let Some(re) = body["redis_enabled"].as_bool() {
-        cfg.redis_enabled = re;
-    }
-    if let Some(ru) = body["redis_url"].as_str() {
-        cfg.redis_url = ru.to_string();
-    }
-    if let Some(rk) = body["redis_key"].as_str() {
-        cfg.redis_key = rk.to_string();
-    }
-    if let Some(rt) = body["redis_type"].as_str() {
-        cfg.redis_type = rt.to_string();
+
+    let limit = body["limit"].as_u64().map(|v| v as usize);
+    match daily_news::discussion::fetch_discussion_thread(url_or_id, limit, None) {
+        Ok(thread) => make_json_resp(200, json!(thread)),
+        Err(e) => make_json_resp(404, json!({ "error": e })),
     }
 }
 
 fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Value {
     if method == "POST" {
         let mut cfg = service.get_config();
-        apply_config_updates(&mut cfg, body);
+        cfg.apply_updates(body);
         return match service.update_config(cfg) {
             Ok(updated) => make_json_resp(200, json!({ "status": "updated", "config": updated })),
             Err(e) => make_json_resp(500, json!({ "error": e })),
@@ -335,6 +335,9 @@ fn handle_request(req: Value, service: &DailyNewsService) -> Value {
     if path.ends_with("/api/v1/feed") {
         return handle_feed(service, &body, limit);
     }
+    if path.ends_with("/api/v1/discussion") {
+        return handle_discussion(&body);
+    }
     if path.ends_with("/api/v1/consume") {
         return handle_consume(service, &body);
     }
@@ -362,9 +365,25 @@ fn main() {
         None
     };
 
+    let reddit_provider = if initial_config.reddit_enabled {
+        Some(
+            daily_news::reddit::RedditFeedProvider::new(initial_config.reddit_subreddits.clone())
+                .with_credentials(
+                    initial_config.reddit_client_id.clone(),
+                    initial_config.reddit_client_secret.clone(),
+                )
+                .with_base_url(initial_config.reddit_base_url.clone()),
+        )
+    } else {
+        None
+    };
+
     let mut fetcher = LiveFeedFetcher::new(Some(initial_config.newsnow_url));
     if let Some(rp) = redis_provider {
         fetcher = fetcher.with_redis(rp);
+    }
+    if let Some(rp) = reddit_provider {
+        fetcher = fetcher.with_reddit(rp);
     }
     let fetcher = Arc::new(fetcher);
     let scorer = CandidateScorer::default();
