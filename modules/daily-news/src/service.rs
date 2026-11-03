@@ -6,12 +6,13 @@
 
 use crate::date::parse_iso_to_epoch;
 use crate::discovery::*;
+use crate::discussion::{DiscussionThread, LiveDiscussionFetcher};
 use crate::domain::{
     canonicalize_url, classify_topic_family, compute_content_hash, compute_title_hash, is_safe_url,
     normalize_publisher, DiscoveryResult, ModuleConfig, NormalizedCandidate, RawNewsItem,
     RawProvenance,
 };
-use crate::ports::{FeedFetcherPort, StoragePort};
+use crate::ports::{DiscussionFetcherPort, FeedFetcherPort, StoragePort};
 use crate::scoring::CandidateScorer;
 use serde_json::json;
 use std::collections::HashSet;
@@ -21,6 +22,7 @@ pub struct DailyNewsService {
     fetcher: Arc<dyn FeedFetcherPort>,
     storage: Arc<dyn StoragePort>,
     scorer: CandidateScorer,
+    discussion: Arc<dyn DiscussionFetcherPort>,
 }
 
 impl DailyNewsService {
@@ -33,7 +35,21 @@ impl DailyNewsService {
             fetcher,
             storage,
             scorer,
+            discussion: Arc::new(LiveDiscussionFetcher::new()),
         }
+    }
+
+    pub fn with_discussion_fetcher(mut self, discussion: Arc<dyn DiscussionFetcherPort>) -> Self {
+        self.discussion = discussion;
+        self
+    }
+
+    pub fn get_discussion(
+        &self,
+        url_or_id: &str,
+        limit: Option<usize>,
+    ) -> Result<DiscussionThread, String> {
+        self.discussion.fetch_thread(url_or_id, limit)
     }
 
     pub fn normalize_item(&self, raw: &RawNewsItem) -> Result<NormalizedCandidate, String> {

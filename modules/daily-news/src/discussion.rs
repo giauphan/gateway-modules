@@ -3,13 +3,42 @@
 //! Provides on-demand thread inspection (comments tree, authors, upvotes,
 //! discussion hierarchy) using Arctic Shift's zero-key APIs.
 
-use crate::domain::format_utc_timestamp;
+use crate::domain::{extract_hn_item_id, format_utc_timestamp};
+use crate::hn::fetch_hn_discussion_thread;
+use crate::ports::DiscussionFetcherPort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const DEFAULT_ARCTIC_BASE_URL: &str = "https://arctic-shift.photon-reddit.com";
 const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
+#[derive(Debug, Clone, Default)]
+pub struct LiveDiscussionFetcher {
+    pub base_url: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl LiveDiscussionFetcher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl DiscussionFetcherPort for LiveDiscussionFetcher {
+    fn fetch_thread(
+        &self,
+        url_or_id: &str,
+        limit: Option<usize>,
+    ) -> Result<DiscussionThread, String> {
+        fetch_discussion_thread_with_base(
+            self.base_url.as_deref(),
+            url_or_id,
+            limit,
+            self.user_agent.as_deref(),
+        )
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscussionComment {
@@ -98,8 +127,12 @@ pub fn fetch_discussion_thread_with_base(
     limit: Option<usize>,
     user_agent: Option<&str>,
 ) -> Result<DiscussionThread, String> {
+    if let Some(hn_id) = extract_hn_item_id(url_or_id) {
+        return fetch_hn_discussion_thread(base_url, hn_id, limit);
+    }
+
     let post_id = extract_post_id(url_or_id)
-        .ok_or_else(|| format!("Could not extract Reddit post ID from '{url_or_id}'"))?;
+        .ok_or_else(|| format!("Could not extract post ID from '{url_or_id}'"))?;
 
     let base = base_url.unwrap_or(DEFAULT_ARCTIC_BASE_URL);
     let ua = user_agent.unwrap_or(DEFAULT_USER_AGENT);

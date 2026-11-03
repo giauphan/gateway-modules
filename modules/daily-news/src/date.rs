@@ -85,6 +85,14 @@ pub fn parse_boundary_datetime(val: &str, is_end_of_day: bool) -> Result<u64, St
     parse_iso_to_epoch(s)
 }
 
+pub fn current_utc_timestamp() -> String {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1793618000);
+    format_utc_timestamp(epoch)
+}
+
 pub fn format_utc_timestamp(epoch_secs: u64) -> String {
     let days = epoch_secs / 86400;
     let rem_secs = epoch_secs % 86400;

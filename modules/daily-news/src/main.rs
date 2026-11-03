@@ -265,7 +265,7 @@ fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
     }
 }
 
-fn handle_discussion(body: &Value) -> Value {
+fn handle_discussion(service: &DailyNewsService, body: &Value) -> Value {
     let url_or_id = body["url"]
         .as_str()
         .or_else(|| body["discussion_url"].as_str())
@@ -280,7 +280,7 @@ fn handle_discussion(body: &Value) -> Value {
     }
 
     let limit = body["limit"].as_u64().map(|v| v as usize);
-    match daily_news::discussion::fetch_discussion_thread(url_or_id, limit, None) {
+    match service.get_discussion(url_or_id, limit) {
         Ok(thread) => make_json_resp(200, json!(thread)),
         Err(e) => make_json_resp(404, json!({ "error": e })),
     }
@@ -336,7 +336,7 @@ fn handle_request(req: Value, service: &DailyNewsService) -> Value {
         return handle_feed(service, &body, limit);
     }
     if path.ends_with("/api/v1/discussion") {
-        return handle_discussion(&body);
+        return handle_discussion(service, &body);
     }
     if path.ends_with("/api/v1/consume") {
         return handle_consume(service, &body);

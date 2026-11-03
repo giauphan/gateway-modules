@@ -38,6 +38,56 @@ pub const TRACKING_QUERY_PARAMS: &[&str] = &[
     "rss",
 ];
 
+pub fn clean_html_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    let mut tag_buf = String::new();
+    for ch in raw.chars() {
+        if ch == '<' {
+            in_tag = true;
+            tag_buf.clear();
+        } else if ch == '>' && in_tag {
+            in_tag = false;
+            let tag_lower = tag_buf.trim().to_ascii_lowercase();
+            if tag_lower == "p" || tag_lower == "/p" || tag_lower.starts_with("br") {
+                out.push(' ');
+            }
+        } else if in_tag {
+            tag_buf.push(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    let decoded = out
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&#x2F;", "/")
+        .replace("&#47;", "/")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+        .replace("&nbsp;", " ");
+    decoded.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+pub fn extract_hn_item_id(s: &str) -> Option<u64> {
+    let trimmed = s.trim();
+    if let Some(rest) = trimmed.strip_prefix("hn_") {
+        return rest.parse::<u64>().ok();
+    }
+    if let Some(rest) = trimmed.strip_prefix("newsnow_hackernews_") {
+        return rest.parse::<u64>().ok();
+    }
+    if trimmed.contains("news.ycombinator.com/item") {
+        if let Some((_, query)) = trimmed.split_once("id=") {
+            let digits: String = query.chars().take_while(|c| c.is_ascii_digit()).collect();
+            return digits.parse::<u64>().ok();
+        }
+    }
+    None
+}
+
 pub fn extract_domain(url: &str) -> String {
     let trimmed = url.trim();
     let without_scheme = if let Some(stripped) = trimmed.strip_prefix("https://") {

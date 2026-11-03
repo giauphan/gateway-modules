@@ -4,7 +4,17 @@
 //! Core application services depend on these traits, while external
 //! HTTP fetchers and storage adapters implement them.
 
+use crate::discussion::DiscussionThread;
 use crate::domain::{ModuleConfig, NormalizedCandidate, RawNewsItem};
+
+pub trait DiscussionFetcherPort: Send + Sync {
+    /// Inspect a discussion thread (Reddit or Hacker News) by URL or item ID.
+    fn fetch_thread(
+        &self,
+        url_or_id: &str,
+        limit: Option<usize>,
+    ) -> Result<DiscussionThread, String>;
+}
 
 pub trait FeedFetcherPort: Send + Sync {
     /// Ingest raw news items from external feeds (Hacker News, NewsNow, etc.).

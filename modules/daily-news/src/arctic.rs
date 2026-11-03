@@ -112,21 +112,26 @@ pub fn parse_arctic_json(val: &Value, subreddit: &str) -> Vec<RawNewsItem> {
 
         let pub_timestamp = format_utc_timestamp(created_utc);
         let author = d["author"].as_str().map(str::to_string);
+        let score = d["score"].as_i64().unwrap_or(0);
+        let comments = d["num_comments"].as_i64().unwrap_or(0);
         let selftext = d["selftext"]
             .as_str()
             .filter(|s| !s.trim().is_empty())
             .map(str::to_string);
 
+        let summary = selftext.unwrap_or_else(|| {
+            let by_str = author.as_deref().unwrap_or("community");
+            format!(
+                "{title} — posted in r/{subreddit} by u/{by_str} ({publisher}, {score} points, {comments} comments)."
+            )
+        });
+
         let mut extra = HashMap::new();
         if let Some(ref a) = author {
             extra.insert("author".to_string(), Value::String(a.clone()));
         }
-        if let Some(score) = d["score"].as_i64() {
-            extra.insert("score".to_string(), Value::Number(score.into()));
-        }
-        if let Some(comments) = d["num_comments"].as_i64() {
-            extra.insert("comments".to_string(), Value::Number(comments.into()));
-        }
+        extra.insert("score".to_string(), Value::Number(score.into()));
+        extra.insert("comments".to_string(), Value::Number(comments.into()));
         extra.insert(
             "subreddit".to_string(),
             Value::String(subreddit.to_string()),
@@ -148,9 +153,12 @@ pub fn parse_arctic_json(val: &Value, subreddit: &str) -> Vec<RawNewsItem> {
         );
         item.publisher = Some(publisher);
         item.author = author;
-        item.description = selftext.clone();
-        item.body = selftext;
+        item.description = Some(summary.clone());
+        item.body = Some(summary.clone());
         item.discussion_url = Some(disc_url);
+        item.content_kind = Some("news".to_string());
+        item.evidence.hook = Some(title.to_string());
+        item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
         item.tags = vec!["reddit".to_string(), subreddit.to_lowercase()];
         item.extra = extra;
 

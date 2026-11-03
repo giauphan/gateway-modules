@@ -2,7 +2,11 @@
 //!
 //! Pulls breaking stories from Hacker News, NewsNow, and Redis providers using `ureq`.
 
-use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
+use crate::domain::{
+    clean_html_text, current_utc_timestamp, extract_domain, extract_hn_item_id,
+    format_utc_timestamp, RawNewsItem,
+};
+use crate::hn::{fetch_hackernews_top, fetch_hn_item};
 use crate::ports::FeedFetcherPort;
 use crate::reddit::RedditFeedProvider;
 use crate::redis::RedisFeedProvider;
@@ -46,117 +50,162 @@ impl LiveFeedFetcher {
             Err(_) => return Vec::new(),
         };
 
-        let items_arr = match val["items"].as_array() {
-            Some(arr) => arr,
-            None => return Vec::new(),
-        };
-
-        let mut items = Vec::new();
-        for raw in items_arr.iter().take(limit) {
-            let title = raw["title"].as_str().unwrap_or("").trim().to_string();
-            let url = raw["url"].as_str().unwrap_or("").trim().to_string();
-            if title.is_empty() || url.is_empty() {
-                continue;
-            }
-            let item_id = raw["id"].as_str().unwrap_or(&url);
-            let publisher = extract_domain(&url);
-            let pub_timestamp = raw["published_at"]
-                .as_str()
-                .or_else(|| raw["pubDate"].as_str())
-                .unwrap_or("2026-11-02T11:00:00+00:00")
-                .to_string();
-
-            let disc_url = raw["discussion_url"]
-                .as_str()
-                .or_else(|| raw["comments_url"].as_str())
-                .map(str::to_string);
-
-            let mut item = RawNewsItem::new(
-                format!("newsnow_{source}_{item_id}"),
-                url,
-                title,
-                pub_timestamp,
-            );
-            item.publisher = Some(publisher);
-            item.author = raw["author"].as_str().map(str::to_string);
-            item.description = raw["description"].as_str().map(str::to_string);
-            item.body = raw["body"].as_str().map(str::to_string);
-            item.discussion_url = disc_url;
-            item.tags = vec![source.to_string()];
-            items.push(item);
+        let items = parse_newsnow_items(&val, source, limit);
+        if source == "hackernews" {
+            items
+                .into_iter()
+                .map(|item| {
+                    if let Some(hn_id) =
+                        extract_hn_item_id(&item.id).or_else(|| extract_hn_item_id(&item.url))
+                    {
+                        if let Some(mut enriched) = fetch_hn_item(hn_id) {
+                            enriched.id = item.id;
+                            return enriched;
+                        }
+                    }
+                    item
+                })
+                .collect()
+        } else {
+            items
         }
-        items
     }
 
     fn fetch_hackernews(&self, limit: usize) -> Vec<RawNewsItem> {
-        let endpoint = "https://hacker-news.firebaseio.com/v0/topstories.json";
-        let ids: Vec<u64> = match crate::arctic::http_agent().get(endpoint).call() {
-            Ok(res) => res.into_body().read_json().unwrap_or_default(),
-            Err(_) => Vec::new(),
+        fetch_hackernews_top(limit)
+    }
+}
+
+fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> String {
+    let candidates = [
+        &raw["published_at"],
+        &raw["pubDate"],
+        &raw["extra"]["date"],
+        &root["updatedTime"],
+    ];
+    for c in candidates {
+        if let Some(s) = c.as_str() {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                if let Ok(num) = trimmed.parse::<u64>() {
+                    let secs = if num > 100_000_000_000 {
+                        num / 1000
+                    } else {
+                        num
+                    };
+                    return format_utc_timestamp(secs);
+                }
+                return trimmed.to_string();
+            }
+        }
+        if let Some(num) = c.as_u64() {
+            let secs = if num > 100_000_000_000 {
+                num / 1000
+            } else {
+                num
+            };
+            return format_utc_timestamp(secs);
+        }
+    }
+    current_utc_timestamp()
+}
+
+pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNewsItem> {
+    let items_arr = match val["items"].as_array() {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+    for raw in items_arr.iter().take(limit) {
+        let title = raw["title"].as_str().unwrap_or("").trim().to_string();
+        let url = raw["url"].as_str().unwrap_or("").trim().to_string();
+        if title.is_empty() || url.is_empty() {
+            continue;
+        }
+        let item_id = if let Some(s) = raw["id"].as_str() {
+            s.trim().to_string()
+        } else if let Some(n) = raw["id"].as_u64() {
+            n.to_string()
+        } else if let Some(n) = raw["id"].as_i64() {
+            n.to_string()
+        } else {
+            url.clone()
         };
 
-        let target_ids: Vec<u64> = ids.into_iter().take(limit.max(25)).collect();
-        let mut items = Vec::new();
+        let publisher = extract_domain(&url);
+        let pub_timestamp = resolve_newsnow_timestamp(raw, val);
 
-        for id in target_ids {
-            let item_url = format!("https://hacker-news.firebaseio.com/v0/item/{id}.json");
-            let val: Value = match crate::arctic::http_agent().get(&item_url).call() {
-                Ok(res) => res.into_body().read_json().unwrap_or_default(),
-                Err(_) => continue,
-            };
-
-            let title = val["title"].as_str().unwrap_or("").trim().to_string();
-            let is_external = val["url"].is_string();
-            let orig_url = val["url"]
-                .as_str()
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| format!("https://news.ycombinator.com/item?id={id}"));
-            if title.is_empty() {
-                continue;
+        let mut extra = HashMap::new();
+        if let Some(obj) = raw["extra"].as_object() {
+            for (k, v) in obj {
+                extra.insert(k.clone(), v.clone());
             }
-
-            let publisher = if is_external {
-                extract_domain(&orig_url)
-            } else {
-                "news.ycombinator.com".to_string()
-            };
-
-            let disc_url = format!("https://news.ycombinator.com/item?id={id}");
-            let text = val["text"].as_str().map(str::to_string);
-            let author = val["by"].as_str().map(str::to_string);
-
-            let pub_timestamp = val["time"]
-                .as_u64()
-                .map(format_utc_timestamp)
-                .unwrap_or_else(|| "2026-11-02T11:00:00+00:00".to_string());
-
-            let mut extra = HashMap::new();
-            if let Some(ref by) = author {
-                extra.insert("by".to_string(), Value::String(by.clone()));
-            }
-            if let Some(score) = val["score"].as_i64() {
-                extra.insert("score".to_string(), Value::Number(score.into()));
-            }
-            if let Some(comments) = val["descendants"].as_i64() {
-                extra.insert("comments".to_string(), Value::Number(comments.into()));
-            }
-            extra.insert(
-                "discussion_url".to_string(),
-                Value::String(disc_url.clone()),
-            );
-
-            let mut item = RawNewsItem::new(format!("hn_{id}"), orig_url, title, pub_timestamp);
-            item.publisher = Some(publisher);
-            item.author = author;
-            item.description = text.clone();
-            item.body = text;
-            item.discussion_url = Some(disc_url);
-            item.tags = vec!["hackernews".to_string(), "tech".to_string()];
-            item.extra = extra;
-            items.push(item);
         }
-        items
+
+        let disc_url = raw["discussion_url"]
+            .as_str()
+            .or_else(|| raw["comments_url"].as_str())
+            .or_else(|| raw["extra"]["url"].as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                if url.contains("news.ycombinator.com/item") || url.contains("reddit.com/r/") {
+                    Some(url.clone())
+                } else {
+                    None
+                }
+            });
+
+        if let Some(ref d) = disc_url {
+            extra
+                .entry("discussion_url".to_string())
+                .or_insert_with(|| Value::String(d.clone()));
+        }
+
+        let author = raw["author"]
+            .as_str()
+            .or_else(|| raw["extra"]["by"].as_str())
+            .or_else(|| raw["extra"]["author"].as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let raw_desc = raw["description"]
+            .as_str()
+            .or_else(|| raw["extra"]["hover"].as_str())
+            .or_else(|| raw["extra"]["info"].as_str())
+            .map(clean_html_text)
+            .filter(|s| !s.is_empty());
+
+        let raw_body = raw["body"]
+            .as_str()
+            .map(clean_html_text)
+            .filter(|s| !s.is_empty());
+
+        let summary = raw_desc
+            .clone()
+            .or_else(|| raw_body.clone())
+            .unwrap_or_else(|| format!("{title} ({publisher})"));
+        let body = raw_body.or_else(|| Some(summary.clone()));
+
+        let mut item = RawNewsItem::new(
+            format!("newsnow_{source}_{item_id}"),
+            url,
+            title.clone(),
+            pub_timestamp,
+        );
+        item.publisher = Some(publisher);
+        item.author = author;
+        item.description = Some(summary.clone());
+        item.body = body;
+        item.discussion_url = disc_url;
+        item.content_kind = Some("news".to_string());
+        item.evidence.hook = Some(title);
+        item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
+        item.tags = vec![source.to_string()];
+        item.extra = extra;
+        items.push(item);
     }
+    items
 }
 
 impl FeedFetcherPort for LiveFeedFetcher {
@@ -170,14 +219,11 @@ impl FeedFetcherPort for LiveFeedFetcher {
             items.extend(reddit.fetch_posts(limit));
         }
 
-        if let Some(ref nn_url) = self.newsnow_url {
-            let nn_items = self.fetch_newsnow_source(nn_url, "hackernews", limit);
-            items.extend(nn_items);
-        }
-
-        if items.is_empty() {
-            let hn_items = self.fetch_hackernews(limit);
+        let hn_items = self.fetch_hackernews(limit);
+        if !hn_items.is_empty() {
             items.extend(hn_items);
+        } else if let Some(ref nn_url) = self.newsnow_url {
+            items.extend(self.fetch_newsnow_source(nn_url, "hackernews", limit));
         }
 
         Ok(items)
@@ -203,21 +249,28 @@ impl FeedFetcherPort for LiveFeedFetcher {
             }
         }
 
+        let mut hn_fetched = false;
+        if sources.is_empty() || sources.iter().any(|s| s == "hackernews" || s == "all") {
+            let hn_items = self.fetch_hackernews(limit);
+            if !hn_items.is_empty() {
+                items.extend(hn_items);
+                hn_fetched = true;
+            }
+        }
+
         let non_special_sources: Vec<&String> = sources
             .iter()
-            .filter(|&s| s != "redis" && (s != "reddit" || !reddit_fetched))
+            .filter(|&s| {
+                s != "redis"
+                    && (s != "reddit" || !reddit_fetched)
+                    && (s != "hackernews" || !hn_fetched)
+            })
             .collect();
         for &s in &non_special_sources {
             if let Some(ref nn_url) = self.newsnow_url {
                 let nn_items = self.fetch_newsnow_source(nn_url, s, limit);
                 items.extend(nn_items);
             }
-        }
-
-        if items.is_empty()
-            && (sources.is_empty() || sources.iter().any(|s| s == "hackernews" || s == "all"))
-        {
-            items.extend(self.fetch_hackernews(limit));
         }
 
         Ok(items)
@@ -227,6 +280,8 @@ impl FeedFetcherPort for LiveFeedFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hn::parse_hn_item_json;
+    use serde_json::json;
 
     #[test]
     fn test_fetcher_instantiation() {
@@ -251,5 +306,69 @@ mod tests {
         let fetcher = LiveFeedFetcher::new(None).with_reddit(reddit);
         let items = fetcher.fetch_sources(&["reddit".to_string()], 5).unwrap();
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_parse_hn_item_with_comments_and_fallback() {
+        let hn_json = json!({
+            "id": 50346981,
+            "by": "nytimes_dev",
+            "score": 142,
+            "descendants": 38,
+            "time": 1730545200,
+            "title": "Show HN: Hacker Times, a New York Times-inspired version of Hacker News",
+            "url": "https://hackertimes.com"
+        });
+        let comments = vec![
+            "alice: Love the serif typography and layout density!".to_string(),
+            "bob: Works great on mobile Safari.".to_string(),
+        ];
+        let item = parse_hn_item_json(&hn_json, 50346981, &comments).unwrap();
+        assert_eq!(item.id, "hn_50346981");
+        assert_eq!(item.author.as_deref(), Some("nytimes_dev"));
+        assert_eq!(item.publisher.as_deref(), Some("hackertimes.com"));
+        assert_eq!(
+            item.discussion_url.as_deref(),
+            Some("https://news.ycombinator.com/item?id=50346981")
+        );
+        assert_eq!(item.content_kind.as_deref(), Some("news"));
+        assert!(item
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("alice: Love the serif typography"));
+        assert_eq!(item.extra["score"], 142);
+        assert_eq!(item.extra["comments"], 38);
+    }
+
+    #[test]
+    fn test_parse_newsnow_items_populates_all_fields() {
+        let payload = json!({
+            "updatedTime": 1730548800000u64,
+            "items": [{
+                "id": 50346981,
+                "title": "Show HN: Hacker Times",
+                "url": "https://news.ycombinator.com/item?id=50346981",
+                "extra": {
+                    "info": "120 points by ny_author",
+                    "by": "ny_author"
+                }
+            }]
+        });
+        let items = parse_newsnow_items(&payload, "hackernews", 5);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "newsnow_hackernews_50346981");
+        assert_eq!(item.author.as_deref(), Some("ny_author"));
+        assert_eq!(item.description.as_deref(), Some("120 points by ny_author"));
+        assert_eq!(item.body.as_deref(), Some("120 points by ny_author"));
+        assert_eq!(
+            item.discussion_url.as_deref(),
+            Some("https://news.ycombinator.com/item?id=50346981")
+        );
+        assert_eq!(item.content_kind.as_deref(), Some("news"));
+        assert!(item.evidence.hook.is_some());
+        assert!(item.evidence.evidence_excerpt.is_some());
+        assert_ne!(item.published_at, "2026-11-02T11:00:00+00:00");
     }
 }
