@@ -2,7 +2,7 @@
 //!
 //! Implements `StoragePort` with in-memory caching and persistent JSON files.
 
-use crate::domain::{ModuleConfig, NormalizedCandidate};
+use crate::domain::{ModuleConfig, NormalizedCandidate, StoryboardEvidence};
 use crate::ports::StoragePort;
 use std::collections::HashSet;
 use std::fs;
@@ -27,6 +27,64 @@ impl InMemoryStorageAdapter {
             consumed: RwLock::new(HashSet::new()),
             cached_candidates: RwLock::new(Vec::new()),
         }
+    }
+}
+
+fn restore_preserved_verification(
+    target: &mut NormalizedCandidate,
+    preserved_fact_check: Option<serde_json::Value>,
+    preserved_evidence: StoryboardEvidence,
+) {
+    if target.independent_fact_check.is_none() {
+        target.independent_fact_check = preserved_fact_check;
+    }
+    if target.evidence.snapshot_sha256.is_none() {
+        target.evidence = preserved_evidence;
+    }
+}
+
+fn merge_candidate_with_evidence(
+    existing: &mut NormalizedCandidate,
+    incoming: &NormalizedCandidate,
+) {
+    let preserved_fact_check = existing.independent_fact_check.clone();
+    let preserved_evidence = existing.evidence.clone();
+    *existing = incoming.clone();
+    restore_preserved_verification(existing, preserved_fact_check, preserved_evidence);
+}
+
+fn merge_candidate_preserve_research(
+    existing: &mut NormalizedCandidate,
+    incoming: &NormalizedCandidate,
+) {
+    let preserved_research = existing.research.clone();
+    let preserved_fact_check = existing.independent_fact_check.clone();
+    let preserved_evidence = existing.evidence.clone();
+    let preserved_scoring = existing.scoring.clone();
+
+    *existing = incoming.clone();
+    existing.research = preserved_research;
+    restore_preserved_verification(existing, preserved_fact_check, preserved_evidence);
+    if existing.scoring.is_none() {
+        existing.scoring = preserved_scoring;
+    }
+}
+
+fn merge_candidate_entry(existing: &mut NormalizedCandidate, incoming: &NormalizedCandidate) {
+    let incoming_has_evidence =
+        incoming.research.primary_source.is_some() || !incoming.research.claims.is_empty();
+
+    if incoming_has_evidence || existing.research.primary_source.is_none() {
+        merge_candidate_with_evidence(existing, incoming);
+    } else {
+        merge_candidate_preserve_research(existing, incoming);
+    }
+}
+
+fn trim_candidate_cache(guard: &mut Vec<NormalizedCandidate>, max_size: usize) {
+    if guard.len() > max_size {
+        let excess = guard.len() - max_size;
+        guard.drain(0..excess);
     }
 }
 
@@ -70,49 +128,22 @@ impl StoragePort for InMemoryStorageAdapter {
     }
 
     fn upsert_candidates(&self, candidates: &[NormalizedCandidate]) {
-        if let Ok(mut guard) = self.cached_candidates.write() {
-            for incoming in candidates {
-                if let Some(pos) = guard.iter().position(|c| c.candidate_id == incoming.candidate_id) {
-                    let existing = &mut guard[pos];
-                    let incoming_has_evidence = incoming.research.primary_source.is_some()
-                        || !incoming.research.claims.is_empty();
+        let Ok(mut guard) = self.cached_candidates.write() else {
+            return;
+        };
 
-                    if incoming_has_evidence || existing.research.primary_source.is_none() {
-                        let preserved_fact_check = existing.independent_fact_check.clone();
-                        let preserved_evidence = existing.evidence.clone();
-                        *existing = incoming.clone();
-                        if existing.independent_fact_check.is_none() {
-                            existing.independent_fact_check = preserved_fact_check;
-                        }
-                        if existing.evidence.snapshot_sha256.is_none() {
-                            existing.evidence = preserved_evidence;
-                        }
-                    } else {
-                        let preserved_research = existing.research.clone();
-                        let preserved_fact_check = existing.independent_fact_check.clone();
-                        let preserved_evidence = existing.evidence.clone();
-                        let preserved_scoring = existing.scoring.clone();
-                        *existing = incoming.clone();
-                        existing.research = preserved_research;
-                        if existing.independent_fact_check.is_none() {
-                            existing.independent_fact_check = preserved_fact_check;
-                        }
-                        if existing.evidence.snapshot_sha256.is_none() {
-                            existing.evidence = preserved_evidence;
-                        }
-                        if existing.scoring.is_none() {
-                            existing.scoring = preserved_scoring;
-                        }
-                    }
-                } else {
-                    guard.push(incoming.clone());
-                }
-            }
-            if guard.len() > 300 {
-                let excess = guard.len() - 300;
-                guard.drain(0..excess);
+        for incoming in candidates {
+            if let Some(pos) = guard
+                .iter()
+                .position(|c| c.candidate_id == incoming.candidate_id)
+            {
+                merge_candidate_entry(&mut guard[pos], incoming);
+            } else {
+                guard.push(incoming.clone());
             }
         }
+
+        trim_candidate_cache(&mut guard, 300);
     }
 
     fn cache_candidates(&self, candidates: &[NormalizedCandidate]) {
@@ -204,9 +235,7 @@ impl FileStorageAdapter {
             .read()
             .map_err(|e| format!("Failed to acquire read lock on cached_candidates: {e}"))?;
         let unique_id = uuid::Uuid::new_v4();
-        let tmp_path = self
-            .state_dir
-            .join(format!("candidates.{unique_id}.tmp"));
+        let tmp_path = self.state_dir.join(format!("candidates.{unique_id}.tmp"));
         let json = serde_json::to_string_pretty(&*guard)
             .map_err(|e| format!("Failed to serialize candidates: {e}"))?;
         fs::write(&tmp_path, json).map_err(|e| {
@@ -292,7 +321,10 @@ mod tests {
 
     #[test]
     fn test_candidate_persistent_upsert_and_restart_recovery() {
-        let tmp = std::env::temp_dir().join(format!("test_dn_storage_candidates_{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "test_dn_storage_candidates_{}",
+            uuid::Uuid::new_v4()
+        ));
         {
             let storage = FileStorageAdapter::new(&tmp);
             assert_eq!(storage.get_cached_candidates().len(), 0);
@@ -300,10 +332,12 @@ mod tests {
             // 1. Insert 10 distinct candidates
             let mut candidates = Vec::new();
             for i in 1..=10 {
-                let mut c = NormalizedCandidate::default();
-                c.candidate_id = format!("cand_{i}");
-                c.title = format!("Candidate Title {i}");
-                c.canonical_url = format!("https://example.com/article/{i}");
+                let c = NormalizedCandidate {
+                    candidate_id: format!("cand_{i}"),
+                    title: format!("Candidate Title {i}"),
+                    canonical_url: format!("https://example.com/article/{i}"),
+                    ..Default::default()
+                };
                 candidates.push(c);
             }
             storage.cache_candidates(&candidates);
@@ -319,17 +353,32 @@ mod tests {
             let current = storage.get_cached_candidates();
             assert_eq!(current.len(), 10);
             let updated_3 = storage.get_candidate("cand_3").unwrap();
-            assert_eq!(updated_3.body.as_deref(), Some("Enriched technical content for candidate 3"));
+            assert_eq!(
+                updated_3.body.as_deref(),
+                Some("Enriched technical content for candidate 3")
+            );
         }
 
         // 3. Restart module: instantiate new adapter from same state directory
         {
             let restarted_storage = FileStorageAdapter::new(&tmp);
             let recovered = restarted_storage.get_cached_candidates();
-            assert_eq!(recovered.len(), 10, "All 10 candidates must survive restart");
-            let cand_3 = restarted_storage.get_candidate("cand_3").expect("cand_3 must survive");
-            assert_eq!(cand_3.body.as_deref(), Some("Enriched technical content for candidate 3"));
-            assert_eq!(cand_3.research.hook_origin.as_deref(), Some("verified_hook"));
+            assert_eq!(
+                recovered.len(),
+                10,
+                "All 10 candidates must survive restart"
+            );
+            let cand_3 = restarted_storage
+                .get_candidate("cand_3")
+                .expect("cand_3 must survive");
+            assert_eq!(
+                cand_3.body.as_deref(),
+                Some("Enriched technical content for candidate 3")
+            );
+            assert_eq!(
+                cand_3.research.hook_origin.as_deref(),
+                Some("verified_hook")
+            );
         }
 
         let _ = fs::remove_dir_all(tmp);
@@ -337,15 +386,18 @@ mod tests {
 
     #[test]
     fn test_save_candidates_error_propagation_on_write_failure() {
-        let tmp = std::env::temp_dir().join(format!("test_dn_storage_err_{}", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("test_dn_storage_err_{}", uuid::Uuid::new_v4()));
         let storage = FileStorageAdapter::new(&tmp);
 
         // Turn state_dir into a file to induce an I/O error during tmp file creation
         let _ = fs::remove_dir_all(&storage.state_dir);
         let _ = fs::write(&storage.state_dir, b"blocker");
 
-        let mut c = NormalizedCandidate::default();
-        c.candidate_id = "cand_err_test".to_string();
+        let c = NormalizedCandidate {
+            candidate_id: "cand_err_test".to_string(),
+            ..Default::default()
+        };
         let res = storage.save_candidates(&[c]);
         assert!(res.is_err(), "Must propagate I/O error to caller");
         assert!(res.unwrap_err().contains("Failed to write candidate state"));

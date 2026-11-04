@@ -350,9 +350,11 @@ fn test_rediscovery_preserves_enriched_candidate_state() {
     let tmp_dir = std::env::temp_dir().join(format!("test_rediscovery_{}", uuid::Uuid::new_v4()));
     let storage = FileStorageAdapter::new(&tmp_dir);
 
-    let mut candidate = NormalizedCandidate::default();
-    candidate.candidate_id = "cand_rediscovery_test".to_string();
-    candidate.title = "Enriched Candidate".to_string();
+    let mut candidate = NormalizedCandidate {
+        candidate_id: "cand_rediscovery_test".to_string(),
+        title: "Enriched Candidate".to_string(),
+        ..Default::default()
+    };
     candidate.research.primary_source = Some(PrimarySourceEvidence {
         url: "https://example.com/item".to_string(),
         snapshot_ref: Some(".state/evidence/item.html".to_string()),
@@ -392,17 +394,20 @@ fn test_rediscovery_preserves_enriched_candidate_state() {
     assert_eq!(initial[0].research.claims.len(), 1);
 
     // 2. Incoming raw discovery of same candidate_id with empty research and default readiness
-    let mut raw_rediscovered = NormalizedCandidate::default();
-    raw_rediscovered.candidate_id = "cand_rediscovery_test".to_string();
-    raw_rediscovered.title = "Enriched Candidate (Updated Feed Title)".to_string();
-    raw_rediscovered.research.primary_source = None;
-    raw_rediscovered.research.claims = vec![];
-    raw_rediscovered.research.research_readiness = Some(daily_news::domain::ResearchReadiness {
-        status: ReadinessStatus::NeedsSource,
-        reasons: vec!["Raw item".to_string()],
-        missing_fields: vec!["primary_source".to_string()],
-        contract_version: "2.0".to_string(),
-    });
+    let raw_rediscovered = NormalizedCandidate {
+        candidate_id: "cand_rediscovery_test".to_string(),
+        title: "Enriched Candidate (Updated Feed Title)".to_string(),
+        research: daily_news::domain::ResearchEvidenceFields {
+            research_readiness: Some(daily_news::domain::ResearchReadiness {
+                status: ReadinessStatus::NeedsSource,
+                reasons: vec!["Raw item".to_string()],
+                missing_fields: vec!["primary_source".to_string()],
+                contract_version: "2.0".to_string(),
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     storage.upsert_candidates(&[raw_rediscovered]);
     let after_rediscovery = storage.get_cached_candidates();
@@ -492,7 +497,7 @@ fn test_secondary_source_ref_must_match_strictly() {
     let readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_store(
         Some(&primary_source),
         Some(snapshot_text),
-        &[mismatched_claim.clone()],
+        std::slice::from_ref(&mismatched_claim),
         &visuals,
         ContentOrigin::Article,
         Some(&resolver),

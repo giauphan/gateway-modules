@@ -188,7 +188,7 @@ fn test_secondary_evidence_snapshot_artifact_verification() {
     let r_missing_artifact = evaluate_readiness_with_snapshot_store(
         Some(&primary_source),
         Some(primary_text),
-        &[claim.clone()],
+        std::slice::from_ref(&claim),
         &visuals,
         ContentOrigin::Article,
         None, // No secondary snapshot available
@@ -206,7 +206,7 @@ fn test_secondary_evidence_snapshot_artifact_verification() {
     let r_corrupted = evaluate_readiness_with_snapshot_store(
         Some(&primary_source),
         Some(primary_text),
-        &[claim.clone()],
+        std::slice::from_ref(&claim),
         &visuals,
         ContentOrigin::Article,
         Some(&corrupted_resolver),
@@ -278,7 +278,7 @@ fn test_visual_evidence_checksum_and_rights_enforcement() {
     let r1 = evaluate_readiness_with_snapshot_store(
         Some(&source),
         Some(text),
-        &[claim.clone()],
+        std::slice::from_ref(&claim),
         &[vis_no_checksum],
         ContentOrigin::Article,
         None,
@@ -291,7 +291,7 @@ fn test_visual_evidence_checksum_and_rights_enforcement() {
     let r2 = evaluate_readiness_with_snapshot_store(
         Some(&source),
         Some(text),
-        &[claim.clone()],
+        std::slice::from_ref(&claim),
         &[vis_no_lic_ref],
         ContentOrigin::Article,
         None,
@@ -304,7 +304,7 @@ fn test_visual_evidence_checksum_and_rights_enforcement() {
     let r3 = evaluate_readiness_with_snapshot_store(
         Some(&source),
         Some(text),
-        &[claim.clone()],
+        std::slice::from_ref(&claim),
         &[vis_no_rights],
         ContentOrigin::Article,
         None,

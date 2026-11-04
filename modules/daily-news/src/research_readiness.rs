@@ -29,6 +29,8 @@ impl ContentOrigin {
     }
 }
 
+pub type SecondaryResolver<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishedAtKind {
@@ -416,7 +418,7 @@ fn is_evidence_ref_grounded(
     primary_sha: &str,
     claim: &ClaimEvidence,
     snapshot_text: Option<&str>,
-    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
+    secondary_resolver: SecondaryResolver,
 ) -> bool {
     let has_locator = r.locator.as_deref().is_some_and(|loc| !loc.trim().is_empty());
     let has_excerpt = r.excerpt.trim().len() >= 10;
@@ -466,7 +468,7 @@ fn are_all_claims_grounded(
     claims: &[ClaimEvidence],
     primary_sha: &str,
     snapshot_text: Option<&str>,
-    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
+    secondary_resolver: SecondaryResolver,
 ) -> bool {
     claims.iter().all(|c| {
         let valid_status = c.verification_status == "SOURCE_SUPPORTED"
@@ -580,7 +582,7 @@ pub fn evaluate_readiness_with_snapshot_store(
     claims: &[ClaimEvidence],
     visuals: &[VisualEvidence],
     _origin: ContentOrigin,
-    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
+    secondary_resolver: SecondaryResolver,
 ) -> ResearchReadiness {
     let primary_sha = match check_primary_source(primary_source, snapshot_text) {
         Ok(sha) => sha,

@@ -49,8 +49,20 @@ pub const NAV_ONLY_PATTERNS: &[&str] = &[
 ];
 
 pub const NAV_MENU_TOKENS: &[&str] = &[
-    "home", "about", "services", "products", "contact", "careers", "pricing", "blog",
-    "faq", "terms", "privacy", "login", "sign in", "navigation",
+    "home",
+    "about",
+    "services",
+    "products",
+    "contact",
+    "careers",
+    "pricing",
+    "blog",
+    "faq",
+    "terms",
+    "privacy",
+    "login",
+    "sign in",
+    "navigation",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +122,120 @@ pub fn detect_content_category(
     }
 }
 
+fn check_interstitial_title(page_title: Option<&str>) -> Result<(), String> {
+    if let Some(title) = page_title {
+        let t_trimmed = title.trim().to_lowercase();
+        for &pattern in INTERSTITIAL_TITLES {
+            if t_trimmed == pattern {
+                return Err(format!(
+                    "anti_bot_challenge_detected: page title matched '{pattern}'"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_content_patterns(text_lower: &str, html_lower: &str) -> Result<(), String> {
+    for &pw in PAYWALL_PATTERNS {
+        if text_lower.contains(pw) {
+            return Err(format!(
+                "paywall_or_placeholder_detected: content matched '{pw}'"
+            ));
+        }
+    }
+
+    for &pattern in VISIBLE_CHALLENGE_PATTERNS {
+        if text_lower.contains(pattern) {
+            return Err(format!(
+                "anti_bot_challenge_detected: content matched '{pattern}'"
+            ));
+        }
+    }
+    if html_lower.contains("cf-browser-verification") {
+        return Err(
+            "anti_bot_challenge_detected: content matched 'cf-browser-verification'".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn check_minimum_length(
+    category: ContentCategory,
+    words: usize,
+    chars: usize,
+) -> Result<(), String> {
+    let (min_words, min_chars) = match category {
+        ContentCategory::ReleaseNotesOrBenchmark => (12, 75),
+        ContentCategory::RepositoryReadme => (25, 140),
+        ContentCategory::TechnicalPaperOrAdvisory => (50, 300),
+        ContentCategory::Article => (25, 140),
+    };
+
+    if words < min_words || chars < min_chars {
+        return Err(format!(
+            "insufficient_article_content: body has only {words} words / {chars} chars (minimum required for {category:?}: {min_words} words / {min_chars} chars)"
+        ));
+    }
+    Ok(())
+}
+
+fn check_navigation_shell(main_text: &str, text_lower: &str, words: usize) -> Result<(), String> {
+    if words >= 100 {
+        return Ok(());
+    }
+
+    for &nav in NAV_ONLY_PATTERNS {
+        if text_lower.contains(nav) && (words < 40 || text_lower.len() < 250) {
+            return Err(format!("nav_or_cookie_only: content matched '{nav}'"));
+        }
+    }
+    let clean_tokens: Vec<&str> = text_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let nav_count = clean_tokens
+        .iter()
+        .filter(|w| NAV_MENU_TOKENS.contains(w))
+        .count();
+    let has_sentence = main_text.chars().any(|c| matches!(c, '.' | '!' | '?'))
+        && clean_tokens.iter().any(|w| {
+            matches!(
+                *w,
+                "the"
+                    | "is"
+                    | "are"
+                    | "in"
+                    | "to"
+                    | "for"
+                    | "with"
+                    | "and"
+                    | "on"
+                    | "by"
+                    | "a"
+                    | "of"
+                    | "from"
+                    | "we"
+                    | "our"
+                    | "demonstrated"
+                    | "found"
+                    | "shows"
+                    | "uses"
+                    | "provides"
+                    | "fixes"
+            )
+        });
+
+    if !has_sentence || (nav_count > 0 && nav_count * 3 >= clean_tokens.len()) || nav_count >= 5 {
+        return Err(
+            "nav_or_cookie_only: content appears to be a navigation menu or empty shell"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 pub fn evaluate_content_quality(
     page_title: Option<&str>,
     html: &str,
@@ -124,67 +250,18 @@ pub fn evaluate_content_quality_with_source(
     main_text: &str,
     source_hint: Option<&str>,
 ) -> Result<String, String> {
-    if let Some(title) = page_title {
-        let t_trimmed = title.trim().to_lowercase();
-        for &pattern in INTERSTITIAL_TITLES {
-            if t_trimmed == pattern {
-                return Err(format!("anti_bot_challenge_detected: page title matched '{pattern}'"));
-            }
-        }
-    }
+    check_interstitial_title(page_title)?;
 
     let text_lower = main_text.to_lowercase();
     let html_lower = html.to_lowercase();
+    check_content_patterns(&text_lower, &html_lower)?;
+
     let words = main_text.split_whitespace().count();
     let chars = main_text.trim().chars().count();
-
-    for &pw in PAYWALL_PATTERNS {
-        if text_lower.contains(pw) {
-            return Err(format!("paywall_or_placeholder_detected: content matched '{pw}'"));
-        }
-    }
-
-    for &pattern in VISIBLE_CHALLENGE_PATTERNS {
-        if text_lower.contains(pattern) {
-            return Err(format!("anti_bot_challenge_detected: content matched '{pattern}'"));
-        }
-    }
-    if html_lower.contains("cf-browser-verification") {
-        return Err("anti_bot_challenge_detected: content matched 'cf-browser-verification'".to_string());
-    }
-
     let category = detect_content_category(page_title, html, main_text, source_hint);
-    let (min_words, min_chars) = match category {
-        ContentCategory::ReleaseNotesOrBenchmark => (12, 75),
-        ContentCategory::RepositoryReadme => (25, 140),
-        ContentCategory::TechnicalPaperOrAdvisory => (50, 300),
-        ContentCategory::Article => (25, 140),
-    };
+    check_minimum_length(category, words, chars)?;
 
-    if words < min_words || chars < min_chars {
-        return Err(format!(
-            "insufficient_article_content: body has only {words} words / {chars} chars (minimum required for {category:?}: {min_words} words / {min_chars} chars)"
-        ));
-    }
-
-    if words < 100 {
-        for &nav in NAV_ONLY_PATTERNS {
-            if text_lower.contains(nav) && (words < 40 || text_lower.len() < 250) {
-                return Err(format!("nav_or_cookie_only: content matched '{nav}'"));
-            }
-        }
-        let clean_tokens: Vec<&str> = text_lower
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let nav_count = clean_tokens.iter().filter(|w| NAV_MENU_TOKENS.contains(w)).count();
-        let has_sentence = main_text.chars().any(|c| c == '.' || c == '!' || c == '?')
-            && clean_tokens.iter().any(|w| matches!(*w, "the" | "is" | "are" | "in" | "to" | "for" | "with" | "and" | "on" | "by" | "a" | "of" | "from" | "we" | "our" | "demonstrated" | "found" | "shows" | "uses" | "provides" | "fixes"));
-
-        if !has_sentence || (nav_count > 0 && nav_count * 3 >= clean_tokens.len()) || nav_count >= 5 {
-            return Err("nav_or_cookie_only: content appears to be a navigation menu or empty shell".to_string());
-        }
-    }
+    check_navigation_shell(main_text, &text_lower, words)?;
 
     Ok("ARTICLE_CONTENT_VALID".to_string())
 }
@@ -227,12 +304,22 @@ mod tests {
         let title = "Security Advisory CVE-2026-9999 Vulnerability Report";
         let html = "<html><body><p>Short paragraph not enough for paper.</p></body></html>";
         let text = "Short paragraph not enough for paper.";
-        let res = evaluate_content_quality_with_source(Some(title), html, text, Some("https://example.com/advisory/cve-2026-9999"));
+        let res = evaluate_content_quality_with_source(
+            Some(title),
+            html,
+            text,
+            Some("https://example.com/advisory/cve-2026-9999"),
+        );
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("TechnicalPaperOrAdvisory"));
 
         let long_paper_text = "Security Advisory CVE-2026-9999: An integer overflow vulnerability in memory mapping was identified during routine fuzz testing. The flaw allows unauthorized process boundary escapes when processing crafted payloads. A security patch was introduced to strictly validate allocation bounds before memory alignment. Benchmarks confirm zero throughput degradation with this patch applied in production systems.";
-        let res_valid = evaluate_content_quality_with_source(Some(title), html, long_paper_text, Some("https://example.com/advisory/cve-2026-9999"));
+        let res_valid = evaluate_content_quality_with_source(
+            Some(title),
+            html,
+            long_paper_text,
+            Some("https://example.com/advisory/cve-2026-9999"),
+        );
         assert_eq!(res_valid.unwrap(), "ARTICLE_CONTENT_VALID");
     }
 }
