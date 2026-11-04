@@ -288,11 +288,24 @@ pub fn handle_jsonrpc_mcp_request(
             });
             make_json_resp(200, res)
         }
-        "notifications/initialized" | "ping" => {
+        // Notifications are fire-and-forget per MCP spec: no response body, HTTP 204
+        "notifications/initialized" => make_json_resp(204, Value::Null),
+        "ping" => {
             let res = json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {}
+            });
+            make_json_resp(200, res)
+        }
+        "resources/list" => {
+            // Module exposes no MCP resources; return empty list per spec
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "resources": []
+                }
             });
             make_json_resp(200, res)
         }

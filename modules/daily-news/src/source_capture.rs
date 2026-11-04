@@ -470,4 +470,13 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
         let path = self.evidence_dir.join(format!("{hash}.txt"));
         fs::read_to_string(path).ok()
     }
+
+    fn read_snapshot_bytes(&self, snapshot_ref: &str) -> Option<Vec<u8>> {
+        let hash = snapshot_ref
+            .trim_end_matches(".txt")
+            .split('/')
+            .next_back()?;
+        let path = self.evidence_dir.join(format!("{hash}.txt"));
+        fs::read(path).ok()
+    }
 }

@@ -248,7 +248,7 @@ fn test_fake_audit_hash_and_unverified_record_fails_closed() {
     assert_ne!(readiness_fake.status, ReadinessStatus::VideoReady);
 
     // Case 2: Genuine audit artifact exists with matching SHA and accredited verdict -> VIDEO_READY!
-    let audit_artifact_text = "Official Benchmarking Laboratory Audit Report: VERIFIED findings for Zero-copy serialization.";
+    let audit_artifact_text = "Official Benchmarking Laboratory Audit Report: VERIFIED findings confirmed for Zero-copy serialization reproducibility pass.";
     let real_audit_sha = compute_sha256(audit_artifact_text);
 
     let mut verified_claim = claim;
@@ -375,7 +375,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         extraction_method: None,
     };
 
-    let audit_text = "Verified report from Benchmarking Laboratory for compiler performance.";
+    let audit_text = "Verified report from Benchmarking Laboratory audit findings confirmed for compiler performance benchmarking.";
     let audit_sha = compute_sha256(audit_text);
     let claim = ClaimEvidence {
         claim_id: "c_valid".to_string(),

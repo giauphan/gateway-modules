@@ -326,7 +326,15 @@ impl DailyNewsService {
             .filter_map(|r| self.normalize_item(r).ok())
             .collect();
         let ranked = self.scorer.rank_candidates(candidates, limit);
-        self.storage.cache_candidates(&ranked);
+        // Propagate persistence error as eprintln; fall back to cached candidates on failure
+        // so callers (chat_completion, MCP dispatch) always get a usable list.
+        if let Err(e) = self.storage.save_candidates(&ranked) {
+            eprintln!(
+                "[daily-news] WARNING: get_candidates persistence failed, \
+                 serving stale cache. Error: {e}"
+            );
+            return self.storage.get_cached_candidates();
+        }
         ranked
     }
 

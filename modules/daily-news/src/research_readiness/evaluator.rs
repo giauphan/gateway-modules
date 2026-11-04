@@ -106,12 +106,32 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
     let stmt_lower = stmt_trimmed.to_lowercase();
     let exc_lower = exc_trimmed.to_lowercase();
 
-    // 1. Direct containment check
+    // 1. Negation / contradiction check runs FIRST — before any containment shortcut.
+    // If excerpt explicitly contradicts or negates, return Contradicted regardless of overlap.
+    const NEGATION_PATTERNS: &[&str] = &[
+        "not been benchmarked",
+        "has not been benchmarked",
+        "have not been benchmarked",
+        "has not been tested",
+        "untested",
+        "unbenchmarked",
+        "unproven",
+        "no evidence of",
+        "not yet tested",
+        "failed to reduce",
+        "did not decrease",
+        "did not improve",
+    ];
+    if NEGATION_PATTERNS.iter().any(|neg| exc_lower.contains(neg)) {
+        return ClaimGroundingStatus::Contradicted;
+    }
+
+    // 2. Direct containment check (safe after negation gate)
     if exc_lower.contains(&stmt_lower) || stmt_lower.contains(&exc_lower) {
         return ClaimGroundingStatus::ClaimEntailed;
     }
 
-    // 2. Check for empirical figures / metrics asserted in statement:
+    // 3. Check for empirical figures / metrics asserted in statement:
     // If a statement asserts numbers, percentages or multipliers, they must be corroborated.
     let stmt_tokens: Vec<&str> = stmt_lower.split_whitespace().collect();
     for &w in &stmt_tokens {
@@ -143,26 +163,7 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
         }
     }
 
-    // 3. Negation & contradiction check
-    const NEGATION_PATTERNS: &[&str] = &[
-        "not been benchmarked",
-        "has not been benchmarked",
-        "have not been benchmarked",
-        "has not been tested",
-        "untested",
-        "unbenchmarked",
-        "unproven",
-        "no evidence of",
-        "not yet tested",
-        "failed to reduce",
-        "did not decrease",
-        "did not improve",
-    ];
-    if NEGATION_PATTERNS.iter().any(|neg| exc_lower.contains(neg)) {
-        return ClaimGroundingStatus::Contradicted;
-    }
-
-    // 4. Informative term overlap check
+    // 3. Informative term overlap check
     let content_statement = if let Some((_, rest)) = stmt_trimmed.split_once(':') {
         rest.trim()
     } else {

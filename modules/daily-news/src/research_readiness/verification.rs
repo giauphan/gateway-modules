@@ -161,7 +161,8 @@ pub fn is_audit_artifact_corroborated(
     claim: &ClaimEvidence,
 ) -> bool {
     let trimmed = audit_text.trim();
-    if trimmed.len() < 15 {
+    // Minimum meaningful audit document length
+    if trimmed.len() < 100 {
         return false;
     }
 
@@ -182,28 +183,39 @@ pub fn is_audit_artifact_corroborated(
         "laboratory",
     ];
 
-    let has_verdict = AUDIT_VERDICT_TOKENS.iter().any(|tok| lower.contains(tok));
+    // Require at least 2 distinct verdict tokens (not 1) to prevent keyword stuffing
+    let verdict_count = AUDIT_VERDICT_TOKENS
+        .iter()
+        .filter(|tok| lower.contains(*tok))
+        .count();
+    if verdict_count < 2 {
+        return false;
+    }
+
     let org_tokens: Vec<&str> = rec
         .organization
         .split_whitespace()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    let mentions_org = org_tokens
-        .iter()
-        .any(|tok| lower.contains(&tok.to_lowercase()));
+    let mentions_org = !org_tokens.is_empty()
+        && org_tokens
+            .iter()
+            .any(|tok| lower.contains(&tok.to_lowercase()));
 
     let claim_tokens: Vec<&str> = claim
         .statement
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| s.len() >= 4)
         .collect();
-    let mentions_claim = claim_tokens
-        .iter()
-        .any(|tok| lower.contains(&tok.to_lowercase()))
-        || lower.contains(&claim.claim_id.to_lowercase());
+    let mentions_claim = !claim_tokens.is_empty()
+        && (claim_tokens
+            .iter()
+            .any(|tok| lower.contains(&tok.to_lowercase()))
+            || lower.contains(&claim.claim_id.to_lowercase()));
 
-    has_verdict && (mentions_org || mentions_claim)
+    // Require BOTH org mention AND claim mention (AND not OR) to prevent cross-claim spoofing
+    mentions_org && mentions_claim
 }
 
 pub fn is_claim_independently_verified_with_audit_resolver(

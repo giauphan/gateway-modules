@@ -123,6 +123,11 @@ fn test_enrich_candidate_workflow_state_transitions() {
         }),
     }];
 
+    let chart_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    let evidence_dir = tmp_dir.join(".state").join("evidence");
+    let _ = std::fs::create_dir_all(&evidence_dir);
+    let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), b"");
+
     let visuals = vec![VisualEvidence {
         asset_ref: "vis_compiler_benchmark".to_string(),
         kind: "chart".to_string(),
@@ -130,7 +135,7 @@ fn test_enrich_candidate_workflow_state_transitions() {
         source_snapshot_ref: None,
         license_status: Some("cc-by".to_string()),
         provenance_status: Some("verified".to_string()),
-        checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        checksum_sha256: Some(chart_sha.to_string()),
         license_evidence_ref: Some("https://example.com/license".to_string()),
         verified_rights: Some(true),
     }];

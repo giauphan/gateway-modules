@@ -5,8 +5,8 @@
 //! with real snapshot capture, grounded claim verification, and persistent cache storage.
 
 use crate::domain::{
-    evaluate_readiness_with_snapshot_store, ClaimEvidence, ContentOrigin, EvidenceRef,
-    NormalizedCandidate, StoryboardEvidence, VisualEvidence,
+    evaluate_readiness_full, ClaimEvidence, ContentOrigin, EvidenceRef, NormalizedCandidate,
+    StoryboardEvidence, VisualEvidence,
 };
 use crate::ports::{SourceCapturePort, StoragePort};
 use crate::scoring::{CandidateScorer, ProductionReadinessScoring};
@@ -140,13 +140,23 @@ impl CandidateEnrichmentWorkflow {
                 .and_then(|cap| cap.read_snapshot_text(hash))
         };
 
-        let readiness = evaluate_readiness_with_snapshot_store(
+        // Wire real asset byte resolver so visual provenance gate validates actual bytes
+        let capture_ref = self.capture.clone();
+        let asset_reader = move |sha: &str| -> Option<Vec<u8>> {
+            capture_ref
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_bytes(sha))
+        };
+
+        let readiness = evaluate_readiness_full(
             candidate.primary_source.as_ref(),
             snapshot_text.as_deref(),
             &candidate.claims,
             &candidate.visual_evidence,
             candidate.content_origin,
             Some(&secondary_reader),
+            None, // audit_resolver: trusted audit store not wired yet
+            Some(&asset_reader),
         );
         let new_status = readiness.status.as_str().to_string();
         candidate.research_readiness = Some(readiness);

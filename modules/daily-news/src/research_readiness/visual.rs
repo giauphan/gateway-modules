@@ -100,7 +100,15 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
 
     let valid_license_evidence = v.license_evidence_ref.as_deref().is_some_and(|r| {
         let tr = r.trim();
-        !tr.is_empty() && !tr.contains("..") && !tr.contains('\\')
+        if tr.is_empty() || tr.contains("..") || tr.contains('\\') {
+            return false;
+        }
+        // Must be an HTTPS URL or a 64-hex SHA-256 snapshot reference
+        let is_https_url = tr.to_lowercase().starts_with("https://")
+            && crate::url::is_safe_url(tr, None);
+        let is_snapshot_hash =
+            tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit());
+        is_https_url || is_snapshot_hash
     });
 
     let verified_rights = v.verified_rights.unwrap_or(false);

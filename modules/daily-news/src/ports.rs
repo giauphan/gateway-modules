@@ -88,4 +88,12 @@ pub trait SourceCapturePort: Send + Sync {
     fn read_snapshot_text(&self, _snapshot_ref: &str) -> Option<String> {
         None
     }
+
+    /// Read raw bytes of a stored snapshot by SHA-256 reference or hash.
+    /// Used by the visual asset byte-verification gate.
+    fn read_snapshot_bytes(&self, _snapshot_ref: &str) -> Option<Vec<u8>> {
+        // Default: convert text to bytes; concrete adapters may override with direct I/O
+        self.read_snapshot_text(_snapshot_ref)
+            .map(|s| s.into_bytes())
+    }
 }
