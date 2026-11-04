@@ -163,6 +163,157 @@ pub fn find_accredited_issuer(text: &str) -> Option<&'static str> {
         .find(|&accred| lower.contains(accred))
 }
 
+fn is_negation_token(raw: &str) -> bool {
+    let clean = raw.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}');
+    matches!(
+        clean,
+        "not" | "never" | "no" | "without" | "none" | "cannot" | "neither" | "nor"
+    ) || clean.contains("n't")
+        || clean.contains("n\u{2019}t")
+}
+
+fn is_status_negation_token(raw: &str) -> bool {
+    let clean = raw.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}');
+    matches!(
+        clean,
+        "failed" | "pending" | "withdrawn" | "revoked" | "incomplete" | "declined"
+    )
+}
+
+fn contains_non_auditor_role(clause: &str) -> bool {
+    const NON_AUDITOR_ROLES: &[&str] = &[
+        "sponsored",
+        "funded",
+        "commissioned",
+        "contracted",
+        "observed",
+        "watched",
+        "witnessed",
+        "supplied",
+        "provided data",
+        "data provider",
+        "benchmark data",
+        "citing",
+        "methodology",
+        "guidelines",
+        "standard",
+    ];
+    NON_AUDITOR_ROLES.iter().any(|role| clause.contains(role))
+}
+
+fn is_affirmative_auditor_relation(clause: &str, accred: &str) -> bool {
+    const PASSIVE_AUDIT_PHRASES: &[&str] = &[
+        "audited by",
+        "verified by",
+        "confirmed by",
+        "certified by",
+        "conducted by",
+        "performed by",
+        "evaluated by",
+        "tested by",
+        "report from",
+        "report by",
+        "audit from",
+        "audit by",
+        "issued by",
+    ];
+
+    if PASSIVE_AUDIT_PHRASES
+        .iter()
+        .any(|phrase| clause.contains(&format!("{phrase} {accred}")))
+    {
+        return true;
+    }
+
+    if clause.contains(&format!("{accred} audit"))
+        || clause.contains(&format!("{accred} independent audit"))
+        || clause.contains(&format!("{accred} evaluation"))
+        || clause.contains(&format!("{accred} certification"))
+    {
+        return true;
+    }
+
+    // Active verbal relation: accred [modifier]* [verb]
+    if let Some(pos) = clause.find(accred) {
+        let after = &clause[pos + accred.len()..];
+        let tokens = after.split_whitespace();
+        let mut skipped = 0;
+        const MODIFIERS: &[&str] = &[
+            "independently", "formally", "officially", "also", "diligently",
+            "successfully", "recently", "has", "have", "had", "further", "directly",
+        ];
+        const ACTIVE_VERBS: &[&str] = &[
+            "audited", "verified", "confirmed", "certified", "reproduced",
+            "conducted", "performed", "tested", "evaluated",
+        ];
+
+        for tok in tokens {
+            let clean = tok.trim_matches(|c: char| !c.is_alphanumeric());
+            if ACTIVE_VERBS.contains(&clean) {
+                return true;
+            }
+            if MODIFIERS.contains(&clean) && skipped < 2 {
+                skipped += 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    false
+}
+
+fn has_auditor_attribution(text: &str, accred: &str) -> bool {
+    // Sentence / clause-level attribution: examine clauses containing `accred`
+    for sentence in text.split(['.', ';', '\n', '!']) {
+        let trimmed_sentence = sentence.trim();
+        if !trimmed_sentence.contains(accred) {
+            continue;
+        }
+
+        // 1. Non-auditor roles (sponsoring, witnessing, methodology citation) reject attribution
+        if contains_non_auditor_role(trimmed_sentence) {
+            continue;
+        }
+
+        // 2. Clause-level negation check
+        if trimmed_sentence.split_whitespace().any(is_negation_token) {
+            continue;
+        }
+
+        // 3. Status-negation tokens anywhere in the clause (withdrawn, revoked, pending, ...)
+        if trimmed_sentence
+            .split_whitespace()
+            .any(is_status_negation_token)
+        {
+            continue;
+        }
+
+        // 4. If another accredited organization is explicitly named in this same clause (excluding aliases), require direct phrase
+        let mentions_other_accred = ACCREDITED_ORGANIZATIONS.iter().any(|&other| {
+            other != accred
+                && !accred.contains(other)
+                && !other.contains(accred)
+                && trimmed_sentence.contains(other)
+        });
+        if mentions_other_accred {
+            let has_direct = trimmed_sentence.contains(&format!("audited by {accred}"))
+                || trimmed_sentence.contains(&format!("verified by {accred}"))
+                || trimmed_sentence.contains(&format!("confirmed by {accred}"))
+                || trimmed_sentence.contains(&format!("certified by {accred}"));
+            if !has_direct {
+                continue;
+            }
+        }
+
+        if is_affirmative_auditor_relation(trimmed_sentence, accred) {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn is_audit_artifact_corroborated(
     audit_text: &str,
     rec: &VerificationRecord,
@@ -174,20 +325,25 @@ pub fn is_audit_artifact_corroborated(
         return false;
     }
 
-    let lower = trimmed.to_lowercase();
+    let lower = trimmed.to_lowercase().replace('\u{2019}', "'");
 
-    // 1. Must identify a recognized accredited issuer from ACCREDITED_ORGANIZATIONS
-    let Some(issuer) = find_accredited_issuer(&lower) else {
+    // 1. Must identify a recognized accredited issuer matching the declared verification organization
+    let org_lower = rec.organization.trim().to_lowercase();
+    if org_lower.is_empty() {
+        return false;
+    }
+    let declared_accred = ACCREDITED_ORGANIZATIONS
+        .iter()
+        .find(|&&a| org_lower.contains(a) && lower.contains(a));
+    let Some(&accred_name) = declared_accred else {
         return false;
     };
 
-    // 2. The identified accredited issuer must match the declared verification organization
-    let org_lower = rec.organization.trim().to_lowercase();
-    if !org_lower.contains(issuer) && !issuer.contains(&org_lower) {
+    if !has_auditor_attribution(&lower, accred_name) {
         return false;
     }
 
-    // 3. Must not contain disclaimer/unverified markers
+    // 2. Must not contain disclaimer/unverified markers
     const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
         "not an official report",
         "self-certified",

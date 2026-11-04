@@ -382,6 +382,11 @@ pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -
     });
 
     let route = path.strip_prefix("/custom/daily-news").unwrap_or(path);
+    let mount = if path.starts_with("/custom/daily-news") {
+        "/custom/daily-news"
+    } else {
+        ""
+    };
 
     match route {
         "/mcp" | "/api/v1/mcp" | "/tools/call" | "/api/v1/tools/call" => {
@@ -397,7 +402,7 @@ pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -
                         "connection": "keep-alive",
                         "x-module-engine": "rust-native"
                     },
-                    "body": "event: endpoint\ndata: /mcp\n\n"
+                    "body": format!("event: endpoint\ndata: {mount}/mcp\n\n")
                 })
             } else {
                 handle_mcp_tool_request(service, base_dir, &body, header_tool)

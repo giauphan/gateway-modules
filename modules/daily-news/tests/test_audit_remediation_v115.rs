@@ -92,6 +92,122 @@ fn test_v115_audit_artifact_requires_accredited_issuer_match() {
         !is_audit_artifact_corroborated(draft_text, &accredited_rec, &claim),
         "Audit artifact marked with draft or unverified tokens must fail closed"
     );
+
+    // Document mentions multiple accredited bodies: declared org is later in ACCREDITED_ORGANIZATIONS
+    let multi_rec = VerificationRecord {
+        record_id: "rec_certik".to_string(),
+        reviewer_id: "certik_sec".to_string(),
+        organization: "CertiK".to_string(),
+        verified_at: "2026-11-04T10:00:00Z".to_string(),
+        method: "artifact_evaluation".to_string(),
+        audit_trail_ref: Some("evidence/audit_certik.txt".to_string()),
+        secondary_source_ref: None,
+    };
+    let multi_text = "Earlier reporting by Reuters mentioned benchmark claims. Method artifact_evaluation verified reproducible throughput speedup independently audited by CertiK engineers.";
+    assert!(
+        is_audit_artifact_corroborated(multi_text, &multi_rec, &claim),
+        "Declared organization must match its own accredited occurrence regardless of list order"
+    );
+
+    // Negative test: document mentions two organizations, but declared org is merely a passive data supplier
+    let passive_provider_rec = VerificationRecord {
+        record_id: "rec_csail_passive".to_string(),
+        reviewer_id: "csail_dev".to_string(),
+        organization: "MIT CSAIL".to_string(),
+        verified_at: "2026-11-04T10:00:00Z".to_string(),
+        method: "artifact_evaluation".to_string(),
+        audit_trail_ref: Some("evidence/audit_reuters.txt".to_string()),
+        secondary_source_ref: None,
+    };
+    let passive_provider_text = "Reuters conducted the independent audit and verified reproducible throughput speedup. MIT CSAIL supplied benchmark data for this study.";
+    assert!(
+        !is_audit_artifact_corroborated(passive_provider_text, &passive_provider_rec, &claim),
+        "Declared organization must be attributed as auditor/issuer, not merely as passive data supplier"
+    );
+
+    // Negative test: negated direct pattern ("not audited by CertiK", "has not been audited by CertiK")
+    let negated_certik_text = "Method artifact_evaluation confirmed throughput speedup findings, but this implementation was not audited by CertiK at any point.";
+    assert!(
+        !is_audit_artifact_corroborated(negated_certik_text, &multi_rec, &claim),
+        "Negated direct attribution must be rejected"
+    );
+
+    let intervening_negation_text = "Method artifact_evaluation confirmed throughput speedup findings, but the system has not been audited by CertiK.";
+    assert!(
+        !is_audit_artifact_corroborated(intervening_negation_text, &multi_rec, &claim),
+        "Intervening negation in direct pattern must be rejected"
+    );
+
+    let clause_negation_text = "CertiK did not audit this claim, although previous throughput speedup findings were discussed in several public reports and benchmark publications.";
+    assert!(
+        !is_audit_artifact_corroborated(clause_negation_text, &multi_rec, &claim),
+        "Clause negation with auxiliary verb must be rejected"
+    );
+
+    let typographic_negation_text = "Method artifact_evaluation confirmed throughput speedup findings, but the system wasn\u{2019}t audited by CertiK in this release cycle.";
+    assert!(
+        !is_audit_artifact_corroborated(typographic_negation_text, &multi_rec, &claim),
+        "Contraction with typographic apostrophe must be recognized as negation and rejected"
+    );
+
+    let punct_negation_text = "Method artifact_evaluation confirmed throughput speedup findings, which were not, in fact, audited by CertiK.";
+    assert!(
+        !is_audit_artifact_corroborated(punct_negation_text, &multi_rec, &claim),
+        "Negation with trailing punctuation must be rejected"
+    );
+
+    let trailing_negation_text = "Method artifact_evaluation confirmed throughput speedup findings, but the CertiK audit was not completed before publication.";
+    assert!(
+        !is_audit_artifact_corroborated(trailing_negation_text, &multi_rec, &claim),
+        "Trailing negation after direct pattern must be rejected"
+    );
+
+    let leading_status_negation_text = "Withdrawn report from CertiK confirmed the throughput speedup benchmark findings across multiple production edge testbeds.";
+    assert!(
+        !is_audit_artifact_corroborated(leading_status_negation_text, &multi_rec, &claim),
+        "Leading status negation token (withdrawn) before organization must be rejected"
+    );
+
+    let distant_status_negation_text = "The CertiK audit, which found the throughput speedup findings fully reproducible, was subsequently revoked and withdrawn.";
+    assert!(
+        !is_audit_artifact_corroborated(distant_status_negation_text, &multi_rec, &claim),
+        "Distant status negation token (revoked/withdrawn) anywhere in the clause must be rejected"
+    );
+
+    // Negative test: declared organization only sponsored, observed, or was cited for methodology
+    let sponsor_text = "CertiK sponsored the audit, while an independent community team verified the throughput speedup benchmark results.";
+    assert!(
+        !is_audit_artifact_corroborated(sponsor_text, &multi_rec, &claim),
+        "Sponsor or funding role must not be accepted as auditor attribution"
+    );
+
+    let observer_text = "CertiK observed the independent audit, while another laboratory team verified the throughput speedup benchmark findings.";
+    assert!(
+        !is_audit_artifact_corroborated(observer_text, &multi_rec, &claim),
+        "Observer role must not be accepted as auditor attribution"
+    );
+
+    let citing_methodology_text = "Random Blog Lab ran the audit and confirmed throughput speedup, citing CertiK methodology as a reference standard.";
+    assert!(
+        !is_audit_artifact_corroborated(citing_methodology_text, &multi_rec, &claim),
+        "Merely citing methodology of an accredited organization must not count as their audit"
+    );
+
+    // Positive test: overlapping alias ("benchmarking laboratory" vs "benchmarking lab")
+    let bench_rec = VerificationRecord {
+        record_id: "rec_bench_lab".to_string(),
+        reviewer_id: "bench_auditor".to_string(),
+        organization: "Benchmarking Laboratory".to_string(),
+        verified_at: "2026-11-04T10:00:00Z".to_string(),
+        method: "artifact_evaluation".to_string(),
+        audit_trail_ref: Some("evidence/audit_bench.txt".to_string()),
+        secondary_source_ref: None,
+    };
+    let bench_text = "The benchmarking laboratory certified the reproducible throughput speedup across all test clusters with high confidence.";
+    assert!(
+        is_audit_artifact_corroborated(bench_text, &bench_rec, &claim),
+        "Overlapping alias in accredited organization list must not cause self-conflict"
+    );
 }
 
 /// P1: Visual asset with valid checksum but unusable content must fail closed
@@ -372,5 +488,20 @@ fn test_v115_mcp_batch_requests_and_sse_routes() {
     assert_eq!(
         sse_root_resp["headers"]["content-type"],
         "text/event-stream"
+    );
+
+    // 5. GET /custom/daily-news/mcp/sse preserves gateway mount prefix in endpoint
+    let sse_mounted_req = json!({
+        "path": "/custom/daily-news/mcp/sse",
+        "method": "GET"
+    });
+    let sse_mounted_resp = handle_request(sse_mounted_req, &service, &tmp);
+    assert_eq!(sse_mounted_resp["status"], 200);
+    assert!(
+        sse_mounted_resp["body"]
+            .as_str()
+            .unwrap()
+            .contains("data: /custom/daily-news/mcp\n\n"),
+        "Mounted SSE request must include mount prefix in data endpoint"
     );
 }

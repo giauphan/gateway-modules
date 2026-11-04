@@ -2,7 +2,7 @@
   "id": "daily-news",
   "name": "Daily News & Content Discovery Service",
   "short_name": "Daily News",
-  "version": "1.15.0",
+  "version": "1.15.1",
   "namespace": "/custom/daily-news",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",

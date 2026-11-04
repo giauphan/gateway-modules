@@ -244,6 +244,10 @@ impl FileStorageAdapter {
     }
 
     fn persist_consumed(&self) -> Result<(), String> {
+        let _persist_lock = self
+            .persist_mutex
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let _ = fs::create_dir_all(&self.state_dir);
         let consumed_path = self.state_dir.join("consumed.json");
         let unique_id = uuid::Uuid::new_v4();
@@ -294,6 +298,10 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn save_config(&self, config: &ModuleConfig) -> Result<(), String> {
+        let _persist_lock = self
+            .persist_mutex
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let _ = fs::create_dir_all(&self.state_dir);
         self.inner.save_config(config)?;
         let json = serde_json::to_string_pretty(config)
