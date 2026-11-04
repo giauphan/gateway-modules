@@ -92,7 +92,10 @@ pub fn render_dashboard_html(
     <div class="container">
         <header>
             <h1>📰 Daily News & Content Discovery Service <span class="badge-engine">{}</span></h1>
-            <div>Version {}</div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <a href="/flow" target="_blank" class="badge-engine" style="text-decoration: none; padding: 0.3rem 0.75rem;">Interactive Flowchart ➔</a>
+                <div>Version {}</div>
+            </div>
         </header>
 
         <div class="grid">

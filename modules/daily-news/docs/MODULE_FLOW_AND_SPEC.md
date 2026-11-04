@@ -1,10 +1,11 @@
 # Daily News & Content Discovery Service (`daily-news`)
 ## Comprehensive Flow & Architecture Specification
 
-**Module Version**: 1.6.1  
+**Module Version**: 1.7.0  
 **Implementation**: 100% Native Rust (Zero Python, Zero Async Runtimes)  
 **Protocol**: `stdio-stream` JSON-RPC over Standard Input/Output  
 **Mount Namespace**: `/custom/daily-news/*`  
+**Interactive Visualizer**: Embedded at `/flow` and [`flowchart.html`](./flowchart.html)  
 
 ---
 

@@ -65,6 +65,10 @@ fn handle_ui(service: &DailyNewsService, limit: usize) -> Value {
     make_html_resp(200, &html)
 }
 
+fn handle_flowchart() -> Value {
+    make_html_resp(200, include_str!("../docs/flowchart.html"))
+}
+
 fn handle_chat_completions(service: &DailyNewsService, limit: usize) -> Value {
     let content = service.chat_completion(limit);
     make_json_resp(
@@ -295,6 +299,7 @@ fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Va
         "/health" | "/api/v1/health" => handle_health(service),
         "/models" | "/api/v1/models" => handle_models(),
         "" | "/ui" => handle_ui(service, limit),
+        "/flow" | "/flowchart" => handle_flowchart(),
         "/chat/completions" | "/v1/chat/completions" => handle_chat_completions(service, limit),
         "/api/v1/discover" | "/discover" => handle_discover(service, &body, limit),
         "/api/v1/candidates" | "/candidates" => handle_candidates(service, &method, &body, limit),

@@ -104,6 +104,38 @@ fn test_adapter_ui_endpoint() {
 }
 
 #[test]
+fn test_adapter_flowchart_endpoint() {
+    for path in ["/flow", "/flowchart"] {
+        let req = json!({
+            "path": path,
+            "method": "GET"
+        });
+        let resp = send_rpc_request(req);
+        assert_eq!(resp["status"], 200, "path {} should return 200", path);
+        assert!(
+            resp["headers"]["content-type"]
+                .as_str()
+                .unwrap()
+                .contains("text/html"),
+            "path {} should return text/html",
+            path
+        );
+        let body = resp["body"].as_str().unwrap();
+        assert!(
+            body.contains("Daily News Architecture Explorer"),
+            "path {} missing title",
+            path
+        );
+        assert!(body.contains("<svg"), "path {} missing svg", path);
+        assert!(
+            body.contains("Clean Architecture"),
+            "path {} missing clean arch tab",
+            path
+        );
+    }
+}
+
+#[test]
 fn test_adapter_candidates_custom_items() {
     let raw_items = json!([
         {

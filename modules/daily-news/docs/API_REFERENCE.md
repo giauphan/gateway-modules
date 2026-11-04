@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.6.1).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.7.0).
 
 ---
 
@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:28130/custom/daily-news/health
 {
   "status": "healthy",
   "module": "daily-news",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "engine": "rust-native",
   "consumed_count": 0,
   "cached_candidates": 5,
@@ -117,7 +117,20 @@ curl -s http://127.0.0.1:28130/custom/daily-news/ui
 
 ---
 
-### 3.4. Chat Completions
+### 3.4. Interactive Architecture Flowchart
+Renders an interactive, standalone HTML5 + SVG architecture flowchart with 6 visual exploration tabs (Clean Architecture layers, multi-feed pipeline, cascading discovery, SSRF source capture, research readiness state machine, and 6-axis scoring).
+
+- **Route**: `GET /flow` or `GET /flowchart` (Gateway: `GET /custom/daily-news/flow` or `GET /custom/daily-news/flowchart`)
+- **Content-Type**: `text/html; charset=utf-8`
+
+#### Example Request
+```bash
+curl -s http://127.0.0.1:28130/custom/daily-news/flow
+```
+
+---
+
+### 3.5. Chat Completions
 OpenAI-compatible completion endpoint rendering ranked daily stories in conversational markdown.
 
 - **Route**: `POST /chat/completions` (Gateway: `POST /custom/daily-news/chat/completions`)

@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily News Module — Interactive Architecture & Feature Flowcharts</title>
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-surface: #111827;
+            --bg-card: #1e293b;
+            --bg-card-hover: #273549;
+            --border: #334155;
+            --border-bright: #475569;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+            
+            --c-driver: #f43f5e;
+            --c-adapter: #f59e0b;
+            --c-service: #06b6d4;
+            --c-port: #10b981;
+            --c-domain: #8b5cf6;
+            --c-accent: #38bdf8;
+            --c-success: #22c55e;
+            --c-warning: #eab308;
+            --c-danger: #ef4444;
+
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Top Bar */
+        header {
+            background: rgba(17, 24, 39, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 0.85rem 1.5rem;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .brand-cluster {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .brand-icon {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #0ea5e9, #6366f1);
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            font-size: 1.25rem;
+            box-shadow: 0 0 15px rgba(14, 165, 233, 0.4);
+        }
+
+        .brand-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .badge-version {
+            background: rgba(14, 165, 233, 0.15);
+            color: var(--c-accent);
+            border: 1px solid rgba(14, 165, 233, 0.35);
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+
+        .badge-engine {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--c-port);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn-action {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.4rem 0.85rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-action:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-main);
+            border-color: var(--border-bright);
+        }
+
+        /* Navigation Tab Bar */
+        nav.flow-tabs {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0.5rem 1.5rem;
+            display: flex;
+            gap: 0.5rem;
+            overflow-x: auto;
+            scrollbar-width: thin;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.88rem;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .tab-btn.active {
+            background: var(--bg-card);
+            color: var(--c-accent);
+            border-color: var(--border);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+
+        /* Main Workspace Layout */
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            flex: 1;
+            min-height: calc(100vh - 120px);
+            position: relative;
+        }
+
+        @media (max-width: 1024px) {
+            .workspace-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Flow Canvas Container */
+        .canvas-area {
+            padding: 1.5rem;
+            overflow: auto;
+            position: relative;
+            background: radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.3) 0%, transparent 80%),
+                        radial-gradient(#1e293b 1px, transparent 1px);
+            background-size: 100% 100%, 24px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .canvas-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .flow-view {
+            display: none;
+            flex-direction: column;
+            gap: 1.5rem;
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        .flow-view.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Card & Diagram Styles */
+        .diagram-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.85rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .card-desc {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            margin-bottom: 1.25rem;
+        }
+
+        /* SVG Flow Chart Styles */
+        svg.flow-svg {
+            width: 100%;
+            height: auto;
+            max-height: 820px;
+            background: var(--bg-base);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.5);
+            user-select: none;
+        }
+
+        .node-rect {
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .node-rect:hover {
+            filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.6));
+            stroke-width: 2.5px;
+        }
+
+        .node-active rect {
+            stroke: var(--c-accent) !important;
+            stroke-width: 3px !important;
+            filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.8));
+        }
+
+        .flow-line {
+            fill: none;
+            stroke: var(--border-bright);
+            stroke-width: 2;
+            stroke-dasharray: 6 3;
+            animation: dashMove 20s linear infinite;
+        }
+
+        @keyframes dashMove {
+            to { stroke-dashoffset: -100; }
+        }
+
+        .flow-line.solid {
+            stroke-dasharray: none;
+            animation: none;
+        }
+
+        .flow-line.accent {
+            stroke: var(--c-accent);
+            stroke-width: 2.5;
+        }
+
+        .flow-line.success {
+            stroke: var(--c-port);
+        }
+
+        .flow-line.danger {
+            stroke: var(--c-driver);
+        }
+
+        /* Side Inspector Panel */
+        aside.inspector-panel {
+            background: var(--bg-surface);
+            border-left: 1px solid var(--border);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            overflow-y: auto;
+        }
+
+        .inspector-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .inspector-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.15rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .prop-row {
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+            font-size: 0.85rem;
+        }
+
+        .prop-label {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .prop-val {
+            color: var(--text-main);
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        .prop-code {
+            font-family: var(--font-mono);
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            border: 1px solid var(--border);
+            display: inline-block;
+        }
+
+        .legend-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            font-size: 0.78rem;
+            margin-top: 0.5rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--text-muted);
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+        }
+
+        /* Metrics Grid */
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .metric-box {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .metric-num {
+            font-size: 1.6rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--c-accent);
+        }
+
+        .metric-lbl {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="brand-cluster">
+            <div class="brand-icon">⚡</div>
+            <div>
+                <div class="brand-title">
+                    Daily News Architecture Explorer
+                    <span class="badge-version">v1.6.1</span>
+                    <span class="badge-engine">rust-native</span>
+                </div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">
+                    Interactive Clean Architecture, DDD Layer Hierarchy & Runtime Flow Engine
+                </div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <a href="MODULE_FLOW_AND_SPEC.md" class="btn-action">📄 Module Spec</a>
+            <a href="API_REFERENCE.md" class="btn-action">🔌 API Reference</a>
+            <a href="/ui" class="btn-action">🖥️ Live Dashboard</a>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="flow-tabs">
+        <button class="tab-btn active" onclick="switchTab('arch')">
+            🏛️ Clean Architecture & Ports
+        </button>
+        <button class="tab-btn" onclick="switchTab('ingest')">
+            ⚡ Ingestion & Normalization
+        </button>
+        <button class="tab-btn" onclick="switchTab('discovery')">
+            🧭 Tiered Discovery Cascade
+        </button>
+        <button class="tab-btn" onclick="switchTab('capture')">
+            🛡️ Primary Source Capture (SSRF)
+        </button>
+        <button class="tab-btn" onclick="switchTab('readiness')">
+            🎬 Video Readiness Gate
+        </button>
+        <button class="tab-btn" onclick="switchTab('scoring')">
+            📊 Deterministic 6-Axis Scoring
+        </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="workspace-grid">
+        
+        <!-- Canvas Area -->
+        <section class="canvas-area">
+            
+            <!-- Quick Metrics Overview -->
+            <div class="metrics-row">
+                <div class="metric-box">
+                    <div class="metric-num">20</div>
+                    <div class="metric-lbl">Clean Arc Source Files</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-num">5,925</div>
+                    <div class="metric-lbl">Total Rust Lines (All &lt;450)</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-num">80 / 80</div>
+                    <div class="metric-lbl">Automated Test Suites Passed</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-num">0 ms</div>
+                    <div class="metric-lbl">Runtime GIL / Python Latency</div>
+                </div>
+            </div>
+
+            <!-- TAB 1: Clean Architecture & Ports -->
+            <div id="view-arch" class="flow-view active">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Concentric Clean Architecture Layer Separation</div>
+                            <div class="card-desc">Dependencies point strictly inward: Frameworks ➔ Adapters ➔ Application Use Cases ➔ Domain Ports ➔ Core Domain Entities.</div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive SVG: Clean Architecture Layers -->
+                    <svg class="flow-svg" viewBox="0 0 1000 660" id="svg-arch">
+                        <defs>
+                            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
+                            </marker>
+                            <marker id="arr-acc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+                            </marker>
+                        </defs>
+
+                        <!-- Layer 4: Frameworks & Drivers -->
+                        <rect x="30" y="25" width="940" height="95" rx="10" fill="rgba(244, 63, 94, 0.08)" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="4 4" />
+                        <text x="50" y="50" fill="#f43f5e" font-size="12" font-weight="700" letter-spacing="1">LAYER 4: FRAMEWORKS &amp; DRIVERS (COMPOSITION ROOT)</text>
+                        
+                        <g class="node-rect" onclick="inspectNode('main')">
+                            <rect x="60" y="60" width="260" height="45" rx="6" fill="#1e293b" stroke="#f43f5e" stroke-width="1.5" />
+                            <text x="75" y="87" fill="#f8fafc" font-size="13" font-weight="600">src/main.rs (JSON-RPC Loop)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('run_sh')">
+                            <rect x="340" y="60" width="220" height="45" rx="6" fill="#1e293b" stroke="#f43f5e" stroke-width="1.5" />
+                            <text x="355" y="87" fill="#f8fafc" font-size="13" font-weight="600">run.sh (Binary Launcher)</text>
+                        </g>
+
+                        <!-- Layer 3: Interface Adapters -->
+                        <rect x="30" y="145" width="940" height="150" rx="10" fill="rgba(245, 158, 11, 0.08)" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 4" />
+                        <text x="50" y="170" fill="#f59e0b" font-size="12" font-weight="700" letter-spacing="1">LAYER 3: INTERFACE ADAPTERS (TRANSLATORS &amp; PROVIDERS)</text>
+
+                        <g class="node-rect" onclick="inspectNode('fetcher')">
+                            <rect x="50" y="185" width="200" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="65" y="211" fill="#f8fafc" font-size="12" font-weight="600">fetcher.rs (Feed Orchestrator)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('hn')">
+                            <rect x="265" y="185" width="160" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="280" y="211" fill="#f8fafc" font-size="12" font-weight="600">hn.rs (Firebase Client)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('reddit')">
+                            <rect x="440" y="185" width="170" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="455" y="211" fill="#f8fafc" font-size="12" font-weight="600">reddit.rs (OAuth/Public)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('redis')">
+                            <rect x="625" y="185" width="170" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="640" y="211" fill="#f8fafc" font-size="12" font-weight="600">redis.rs (RESP Client)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('source_capture')">
+                            <rect x="810" y="185" width="145" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="822" y="211" fill="#f8fafc" font-size="11" font-weight="600">source_capture.rs</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('storage')">
+                            <rect x="50" y="238" width="200" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="65" y="264" fill="#f8fafc" font-size="12" font-weight="600">storage.rs (File &amp; Memory)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('discussion')">
+                            <rect x="265" y="238" width="200" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="278" y="264" fill="#f8fafc" font-size="12" font-weight="600">discussion.rs (Tree Parser)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('rpc')">
+                            <rect x="480" y="238" width="180" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="495" y="264" fill="#f8fafc" font-size="12" font-weight="600">rpc.rs (JSON Extractors)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('ui')">
+                            <rect x="675" y="238" width="160" height="42" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                            <text x="690" y="264" fill="#f8fafc" font-size="12" font-weight="600">ui.rs (HTML Dashboard)</text>
+                        </g>
+
+                        <!-- Layer 2: Application Use Cases -->
+                        <rect x="30" y="320" width="940" height="100" rx="10" fill="rgba(6, 182, 212, 0.08)" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4 4" />
+                        <text x="50" y="345" fill="#06b6d4" font-size="12" font-weight="700" letter-spacing="1">LAYER 2: APPLICATION SERVICES &amp; USE CASES</text>
+
+                        <g class="node-rect" onclick="inspectNode('service')">
+                            <rect x="50" y="360" width="290" height="45" rx="6" fill="#1e293b" stroke="#06b6d4" stroke-width="1.5" />
+                            <text x="65" y="387" fill="#f8fafc" font-size="13" font-weight="600">service.rs (DailyNewsService)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('discovery')">
+                            <rect x="360" y="360" width="280" height="45" rx="6" fill="#1e293b" stroke="#06b6d4" stroke-width="1.5" />
+                            <text x="375" y="387" fill="#f8fafc" font-size="13" font-weight="600">discovery.rs (Tiered Discovery)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('scoring')">
+                            <rect x="660" y="360" width="280" height="45" rx="6" fill="#1e293b" stroke="#06b6d4" stroke-width="1.5" />
+                            <text x="675" y="387" fill="#f8fafc" font-size="13" font-weight="600">scoring.rs (6-Axis Ranker)</text>
+                        </g>
+
+                        <!-- Inward Port Boundaries -->
+                        <rect x="30" y="445" width="940" height="85" rx="10" fill="rgba(16, 185, 129, 0.08)" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4 4" />
+                        <text x="50" y="470" fill="#10b981" font-size="12" font-weight="700" letter-spacing="1">DOMAIN PORTS (INBOUND / OUTBOUND TRAITS)</text>
+
+                        <g class="node-rect" onclick="inspectNode('ports')">
+                            <rect x="50" y="482" width="210" height="38" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                            <text x="65" y="506" fill="#f8fafc" font-size="12" font-weight="600">FeedFetcherPort</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('ports')">
+                            <rect x="280" y="482" width="200" height="38" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                            <text x="295" y="506" fill="#f8fafc" font-size="12" font-weight="600">StoragePort</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('ports')">
+                            <rect x="500" y="482" width="230" height="38" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                            <text x="515" y="506" fill="#f8fafc" font-size="12" font-weight="600">DiscussionFetcherPort</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('ports')">
+                            <rect x="750" y="482" width="200" height="38" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                            <text x="765" y="506" fill="#f8fafc" font-size="12" font-weight="600">SourceCapturePort</text>
+                        </g>
+
+                        <!-- Layer 1: Domain Core -->
+                        <rect x="30" y="555" width="940" height="85" rx="10" fill="rgba(139, 92, 246, 0.08)" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 4" />
+                        <text x="50" y="580" fill="#8b5cf6" font-size="12" font-weight="700" letter-spacing="1">LAYER 1: ENTERPRISE BUSINESS RULES (DOMAIN CORE)</text>
+
+                        <g class="node-rect" onclick="inspectNode('domain')">
+                            <rect x="50" y="592" width="210" height="38" rx="6" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5" />
+                            <text x="65" y="616" fill="#f8fafc" font-size="12" font-weight="600">domain.rs (Entities &amp; VOs)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('readiness')">
+                            <rect x="280" y="592" width="220" height="38" rx="6" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5" />
+                            <text x="292" y="616" fill="#f8fafc" font-size="11" font-weight="600">research_readiness.rs</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('date')">
+                            <rect x="520" y="592" width="190" height="38" rx="6" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5" />
+                            <text x="535" y="616" fill="#f8fafc" font-size="12" font-weight="600">date.rs (ISO 8601 Math)</text>
+                        </g>
+                        <g class="node-rect" onclick="inspectNode('url')">
+                            <rect x="730" y="592" width="220" height="38" rx="6" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5" />
+                            <text x="745" y="616" fill="#f8fafc" font-size="12" font-weight="600">url.rs (SSRF &amp; Canonical)</text>
+                        </g>
+
+                        <!-- Inward Dependency Flow Arrows -->
+                        <path d="M 190 105 L 190 360" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 190 405 L 190 482" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 150 227 L 150 482" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 150 280 L 380 482" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 880 227 L 850 482" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 610 280 L 610 482" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 155 520 L 155 592" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 380 520 L 380 592" class="flow-line accent" marker-end="url(#arr-acc)" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- TAB 2: Ingestion & Normalization -->
+            <div id="view-ingest" class="flow-view">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Real-Time News Ingestion &amp; Storyboard Normalization</div>
+                            <div class="card-desc">Multi-source parallel feed polling, strict boundary validation, dual-link separation, and 6-beat storyboard synthesis.</div>
+                        </div>
+                    </div>
+
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-ingest">
+                        <!-- Upstream Feeds -->
+                        <rect x="40" y="40" width="160" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="60" y="68" fill="#f8fafc" font-size="13" font-weight="700">Hacker News</text>
+                        <text x="60" y="86" fill="#94a3b8" font-size="11">Firebase Top/Best</text>
+
+                        <rect x="40" y="120" width="160" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="60" y="148" fill="#f8fafc" font-size="13" font-weight="700">Reddit Feeds</text>
+                        <text x="60" y="166" fill="#94a3b8" font-size="11">OAuth / Public JSON</text>
+
+                        <rect x="40" y="200" width="160" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="60" y="228" fill="#f8fafc" font-size="13" font-weight="700">Redis Streams</text>
+                        <text x="60" y="246" fill="#94a3b8" font-size="11">RESP XREAD/LPOP</text>
+
+                        <rect x="40" y="280" width="160" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="60" y="308" fill="#f8fafc" font-size="13" font-weight="700">NewsNow Ingest</text>
+                        <text x="60" y="326" fill="#94a3b8" font-size="11">Upstream RSS/API</text>
+
+                        <!-- Orchestrator Box -->
+                        <rect x="260" y="120" width="180" height="140" rx="8" fill="#1e293b" stroke="#06b6d4" stroke-width="2" />
+                        <text x="280" y="155" fill="#38bdf8" font-size="14" font-weight="700">LiveFeedFetcher</text>
+                        <text x="280" y="180" fill="#94a3b8" font-size="11">Cross-source Interleave</text>
+                        <text x="280" y="200" fill="#94a3b8" font-size="11">Round-robin Limit Pacing</text>
+                        <text x="280" y="220" fill="#94a3b8" font-size="11">Produces: RawNewsItem[]</text>
+
+                        <!-- Normalizer Box -->
+                        <rect x="500" y="70" width="220" height="240" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2" />
+                        <text x="520" y="100" fill="#10b981" font-size="14" font-weight="700">normalize_item()</text>
+                        <text x="520" y="125" fill="#f8fafc" font-size="11">• SSRF Host Filter (is_safe_url)</text>
+                        <text x="520" y="145" fill="#f8fafc" font-size="11">• Strip UTM / fbclid tracking</text>
+                        <text x="520" y="165" fill="#f8fafc" font-size="11">• Dual-link URL Resolution</text>
+                        <text x="520" y="185" fill="#f8fafc" font-size="11">• Token Word-Boundary Topics</text>
+                        <text x="520" y="205" fill="#f8fafc" font-size="11">• Content SHA-256 Hashing</text>
+                        <text x="520" y="225" fill="#f8fafc" font-size="11">• 6-Beat Storyboard Hooks</text>
+                        <text x="520" y="245" fill="#f8fafc" font-size="11">• evaluate_readiness() Gating</text>
+
+                        <!-- Output Entity -->
+                        <rect x="780" y="130" width="180" height="120" rx="8" fill="#1e293b" stroke="#8b5cf6" stroke-width="2" />
+                        <text x="800" y="165" fill="#a78bfa" font-size="14" font-weight="700">NormalizedCandidate</text>
+                        <text x="800" y="190" fill="#94a3b8" font-size="11">Deterministic cand_ ID</text>
+                        <text x="800" y="210" fill="#94a3b8" font-size="11">Canonical + Discussion URL</text>
+                        <text x="800" y="230" fill="#94a3b8" font-size="11">Immutable Provenance</text>
+
+                        <!-- Connectors -->
+                        <path d="M 200 70 L 260 150" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 200 150 L 260 170" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 200 230 L 260 210" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 200 310 L 260 230" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 440 190 L 500 190" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 720 190 L 780 190" class="flow-line accent" marker-end="url(#arr-acc)" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- TAB 3: Tiered Discovery Cascade -->
+            <div id="view-discovery" class="flow-view">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Tiered Cascading Discovery &amp; Fail-Closed Boundary</div>
+                            <div class="card-desc">Three progressive fallback tiers with strict date bounds and fail-closed diagnostics when no candidates match.</div>
+                        </div>
+                    </div>
+
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-discovery">
+                        <!-- Request Entry -->
+                        <rect x="40" y="200" width="180" height="90" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="1.5" />
+                        <text x="60" y="230" fill="#f8fafc" font-size="13" font-weight="700">Client / Gateway</text>
+                        <text x="60" y="250" fill="#94a3b8" font-size="11">POST /api/v1/discover</text>
+                        <text x="60" y="270" fill="#94a3b8" font-size="11">{limit, from, to, topics}</text>
+
+                        <!-- Bounds Validator -->
+                        <rect x="270" y="200" width="180" height="90" rx="8" fill="#1e293b" stroke="#06b6d4" stroke-width="2" />
+                        <text x="290" y="230" fill="#38bdf8" font-size="13" font-weight="700">validate_date_bounds()</text>
+                        <text x="290" y="252" fill="#94a3b8" font-size="11">from_date &lt;= to_date check</text>
+                        <text x="290" y="272" fill="#94a3b8" font-size="11">Fail: INVALID_DATE_RANGE</text>
+
+                        <!-- Tier 1 -->
+                        <rect x="520" y="50" width="220" height="80" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                        <text x="540" y="80" fill="#10b981" font-size="13" font-weight="700">Tier 1: Curated Candidates</text>
+                        <text x="540" y="100" fill="#94a3b8" font-size="11">Caller-injected batch filter</text>
+                        <text x="540" y="118" fill="#94a3b8" font-size="11">Status: tier_1_curated</text>
+
+                        <!-- Tier 2 -->
+                        <rect x="520" y="160" width="220" height="80" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                        <text x="540" y="190" fill="#10b981" font-size="13" font-weight="700">Tier 2: Automated Feeds</text>
+                        <text x="540" y="210" fill="#94a3b8" font-size="11">HN, Reddit, Redis multi-ingest</text>
+                        <text x="540" y="228" fill="#94a3b8" font-size="11">Status: tier_2_automated</text>
+
+                        <!-- Tier 3 -->
+                        <rect x="520" y="270" width="220" height="80" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                        <text x="540" y="300" fill="#10b981" font-size="13" font-weight="700">Tier 3: Cache Fallback</text>
+                        <text x="540" y="320" fill="#94a3b8" font-size="11">Non-consumed cached items</text>
+                        <text x="540" y="338" fill="#94a3b8" font-size="11">Status: tier_2_cache</text>
+
+                        <!-- Fail Closed -->
+                        <rect x="520" y="380" width="220" height="85" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="2" />
+                        <text x="540" y="410" fill="#f43f5e" font-size="13" font-weight="700">Fail-Closed Gate</text>
+                        <text x="540" y="430" fill="#94a3b8" font-size="11">status: NO_ELIGIBLE_TOPIC</text>
+                        <text x="540" y="450" fill="#94a3b8" font-size="11">Diagnostics: tier_3_fail_closed</text>
+
+                        <!-- Success Return -->
+                        <rect x="800" y="150" width="160" height="100" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2" />
+                        <text x="820" y="185" fill="#22c55e" font-size="13" font-weight="700">ELIGIBLE (200)</text>
+                        <text x="820" y="210" fill="#94a3b8" font-size="11">Ranked Candidates</text>
+                        <text x="820" y="230" fill="#94a3b8" font-size="11">Cached &amp; Scored</text>
+
+                        <!-- Paths -->
+                        <path d="M 220 245 L 270 245" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 450 220 L 520 90" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 450 245 L 520 200" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 450 260 L 520 310" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 450 280 L 520 420" class="flow-line danger" marker-end="url(#arr)" />
+
+                        <path d="M 740 90 L 800 170" class="flow-line success" marker-end="url(#arr)" />
+                        <path d="M 740 200 L 800 200" class="flow-line success" marker-end="url(#arr)" />
+                        <path d="M 740 310 L 800 220" class="flow-line success" marker-end="url(#arr)" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- TAB 4: Primary Source Capture & SSRF -->
+            <div id="view-capture" class="flow-view">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Primary Source Capture, SSRF Defense &amp; Snapshot Storage</div>
+                            <div class="card-desc">Single-resolution DNS pinning, comprehensive IPv4/IPv6 private range blocking, and atomic SHA-256 snapshot persistence.</div>
+                        </div>
+                    </div>
+
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-capture">
+                        <!-- Step 1: Intake -->
+                        <rect x="40" y="180" width="170" height="90" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="60" y="210" fill="#f8fafc" font-size="13" font-weight="700">1. URL Intake</text>
+                        <text x="60" y="232" fill="#94a3b8" font-size="11">POST /api/v1/enrich</text>
+                        <text x="60" y="252" fill="#94a3b8" font-size="11">Skip blank / fallback URL</text>
+
+                        <!-- Step 2: SSRF Guard -->
+                        <rect x="260" y="120" width="220" height="210" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="2" />
+                        <text x="280" y="150" fill="#f43f5e" font-size="13" font-weight="700">2. SSRF Defensive Guard</text>
+                        <text x="280" y="175" fill="#f8fafc" font-size="11">• Userinfo (@) blocked</text>
+                        <text x="280" y="195" fill="#f8fafc" font-size="11">• Reject numeric DWORD IPs</text>
+                        <text x="280" y="215" fill="#f8fafc" font-size="11">• Block IPv4 10/8, 172.16, 192.168</text>
+                        <text x="280" y="235" fill="#f8fafc" font-size="11">• Block Loopback 127/8, 169.254</text>
+                        <text x="280" y="255" fill="#f8fafc" font-size="11">• Block CGNAT 100.64.0.0/10</text>
+                        <text x="280" y="275" fill="#f8fafc" font-size="11">• Block IPv6 NAT64, 6to4, ::1</text>
+                        <text x="280" y="295" fill="#f8fafc" font-size="11">• SsrfSafeResolver DNS Pinning</text>
+
+                        <!-- Step 3: Fetcher -->
+                        <rect x="530" y="160" width="200" height="130" rx="8" fill="#1e293b" stroke="#06b6d4" stroke-width="2" />
+                        <text x="550" y="190" fill="#38bdf8" font-size="13" font-weight="700">3. Bounded Fetch</text>
+                        <text x="550" y="215" fill="#94a3b8" font-size="11">1 MB Payload Ceiling</text>
+                        <text x="550" y="235" fill="#94a3b8" font-size="11">Max 3 Redirects (re-verified)</text>
+                        <text x="550" y="255" fill="#94a3b8" font-size="11">Strip Script / Nav boilerplate</text>
+                        <text x="550" y="275" fill="#94a3b8" font-size="11">Extract Page Title &amp; Text</text>
+
+                        <!-- Step 4: Storage -->
+                        <rect x="780" y="160" width="180" height="130" rx="8" fill="#1e293b" stroke="#10b981" stroke-width="2" />
+                        <text x="800" y="190" fill="#10b981" font-size="13" font-weight="700">4. Atomic Snapshot</text>
+                        <text x="800" y="215" fill="#94a3b8" font-size="11">SHA-256 over exact bytes</text>
+                        <text x="800" y="235" fill="#94a3b8" font-size="11">Write .tmp ➔ sync_all()</text>
+                        <text x="800" y="255" fill="#94a3b8" font-size="11">Atomic rename()</text>
+                        <text x="800" y="275" fill="#94a3b8" font-size="11">.state/evidence/{hash}.txt</text>
+
+                        <!-- Connectors -->
+                        <path d="M 210 225 L 260 225" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 480 225 L 530 225" class="flow-line accent" marker-end="url(#arr-acc)" />
+                        <path d="M 730 225 L 780 225" class="flow-line success" marker-end="url(#arr)" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- TAB 5: Video Readiness Gate -->
+            <div id="view-readiness" class="flow-view">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Truthful Research Readiness State Machine</div>
+                            <div class="card-desc">Guarantees that unverified data, comments, or ungrounded claims never reach downstream automated vertical video renderers.</div>
+                        </div>
+                    </div>
+
+                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-readiness">
+                        <!-- State 1 -->
+                        <rect x="40" y="180" width="160" height="100" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="2" />
+                        <text x="60" y="210" fill="#f43f5e" font-size="13" font-weight="700">NEEDS_SOURCE</text>
+                        <text x="60" y="235" fill="#94a3b8" font-size="11">External article has no</text>
+                        <text x="60" y="255" fill="#94a3b8" font-size="11">verified snapshot hash.</text>
+
+                        <!-- State 2 -->
+                        <rect x="240" y="180" width="160" height="100" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2" />
+                        <text x="260" y="210" fill="#f59e0b" font-size="13" font-weight="700">NEEDS_RESEARCH</text>
+                        <text x="260" y="235" fill="#94a3b8" font-size="11">Source captured, but</text>
+                        <text x="260" y="255" fill="#94a3b8" font-size="11">no grounded claims.</text>
+
+                        <!-- State 3 -->
+                        <rect x="440" y="180" width="170" height="100" rx="8" fill="#1e293b" stroke="#eab308" stroke-width="2" />
+                        <text x="455" y="210" fill="#eab308" font-size="12" font-weight="700">NEEDS_VERIFICATION</text>
+                        <text x="455" y="235" fill="#94a3b8" font-size="11">Claims lack locators,</text>
+                        <text x="455" y="255" fill="#94a3b8" font-size="11">excerpts, or hash match.</text>
+
+                        <!-- State 4 -->
+                        <rect x="650" y="180" width="160" height="100" rx="8" fill="#1e293b" stroke="#06b6d4" stroke-width="2" />
+                        <text x="660" y="208" fill="#06b6d4" font-size="11" font-weight="700">NEEDS_VISUAL_EVIDENCE</text>
+                        <text x="660" y="232" fill="#94a3b8" font-size="11">Claims verified, but</text>
+                        <text x="660" y="252" fill="#94a3b8" font-size="11">lacks verified image assets.</text>
+
+                        <!-- State 5 -->
+                        <rect x="840" y="170" width="130" height="120" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="3" />
+                        <text x="850" y="215" fill="#22c55e" font-size="13" font-weight="700">VIDEO_READY</text>
+                        <text x="850" y="240" fill="#94a3b8" font-size="11">Authoritative Greenlight</text>
+                        <text x="850" y="260" fill="#94a3b8" font-size="11">Video Pipeline Safe</text>
+
+                        <!-- Connectors -->
+                        <path d="M 200 230 L 240 230" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 400 230 L 440 230" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 610 230 L 650 230" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 810 230 L 840 230" class="flow-line success" marker-end="url(#arr)" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- TAB 6: Deterministic 6-Axis Scoring -->
+            <div id="view-scoring" class="flow-view">
+                <div class="diagram-card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Deterministic 6-Axis Scoring &amp; Ranking Engine</div>
+                            <div class="card-desc">Weighted ranking combining freshness decay curves, publisher authority tiers, and grounded feasibility.</div>
+                        </div>
+                    </div>
+
+                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-scoring">
+                        <!-- Axis 1 -->
+                        <rect x="50" y="40" width="260" height="60" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5" />
+                        <text x="70" y="66" fill="#38bdf8" font-size="13" font-weight="700">Freshness (w=0.25)</text>
+                        <text x="70" y="86" fill="#94a3b8" font-size="11">Exponential 48h decay: exp(-ln(2)*age/48)</text>
+
+                        <!-- Axis 2 -->
+                        <rect x="50" y="110" width="260" height="60" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5" />
+                        <text x="70" y="136" fill="#10b981" font-size="13" font-weight="700">Publisher Authority (w=0.20)</text>
+                        <text x="70" y="156" fill="#94a3b8" font-size="11">Tier 1 (1.0), Tier 2 (0.85), Tier 3 (0.65)</text>
+
+                        <!-- Axis 3 -->
+                        <rect x="50" y="180" width="260" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
+                        <text x="70" y="206" fill="#f59e0b" font-size="13" font-weight="700">Fact Density (w=0.15)</text>
+                        <text x="70" y="226" fill="#94a3b8" font-size="11">Benchmarks, code snippets, numbers</text>
+
+                        <!-- Axis 4 -->
+                        <rect x="50" y="250" width="260" height="60" rx="6" fill="#1e293b" stroke="#a78bfa" stroke-width="1.5" />
+                        <text x="70" y="276" fill="#a78bfa" font-size="13" font-weight="700">Visual Potential (w=0.15)</text>
+                        <text x="70" y="296" fill="#94a3b8" font-size="11">Valid images only (no discussion bonus)</text>
+
+                        <!-- Axis 5 -->
+                        <rect x="50" y="320" width="260" height="60" rx="6" fill="#1e293b" stroke="#f43f5e" stroke-width="1.5" />
+                        <text x="70" y="346" fill="#f43f5e" font-size="13" font-weight="700">Audience Interest (w=0.15)</text>
+                        <text x="70" y="366" fill="#94a3b8" font-size="11">Logarithmic upvotes &amp; comment velocity</text>
+
+                        <!-- Axis 6 -->
+                        <rect x="50" y="390" width="260" height="60" rx="6" fill="#1e293b" stroke="#06b6d4" stroke-width="1.5" />
+                        <text x="70" y="416" fill="#06b6d4" font-size="13" font-weight="700">Feasibility (w=0.10)</text>
+                        <text x="70" y="436" fill="#94a3b8" font-size="11">0.2 unverified, 0.6 self-post, 1.0 snapshot</text>
+
+                        <!-- Scorer Engine -->
+                        <rect x="420" y="170" width="240" height="140" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="2" />
+                        <text x="445" y="210" fill="#38bdf8" font-size="14" font-weight="700">CandidateScorer Engine</text>
+                        <text x="445" y="235" fill="#94a3b8" font-size="11">Deterministic Weighted Sum</text>
+                        <text x="445" y="255" fill="#94a3b8" font-size="11">Total Score ∈ [0.0, 1.0]</text>
+                        <text x="445" y="275" fill="#94a3b8" font-size="11">sort_by(total_score.desc())</text>
+
+                        <!-- Output -->
+                        <rect x="760" y="190" width="180" height="100" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2" />
+                        <text x="780" y="225" fill="#22c55e" font-size="13" font-weight="700">Top Ranked Output</text>
+                        <text x="780" y="250" fill="#94a3b8" font-size="11">Cached in .state/</text>
+                        <text x="780" y="270" fill="#94a3b8" font-size="11">Ready for Video Pipeline</text>
+
+                        <!-- Connectors -->
+                        <path d="M 310 70 L 420 200" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 310 140 L 420 220" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 310 210 L 420 240" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 310 280 L 420 250" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 310 350 L 420 260" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 310 420 L 420 280" class="flow-line" marker-end="url(#arr)" />
+                        <path d="M 660 240 L 760 240" class="flow-line success" marker-end="url(#arr)" />
+                    </svg>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- Side Inspector Panel -->
+        <aside class="inspector-panel" id="inspector">
+            <div class="inspector-title">
+                🔍 Node Inspector
+            </div>
+
+            <div class="inspector-card" id="inspector-content">
+                <div style="color: var(--text-muted); font-size: 0.88rem;">
+                    Click on any component or layer in the diagram to inspect its Clean Architecture layer, responsibility, and source implementation.
+                </div>
+            </div>
+
+            <div class="inspector-title" style="margin-top: 1rem;">
+                🎨 Clean Arc Layer Legend
+            </div>
+
+            <div class="legend-grid">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-driver);"></div>
+                    <span>Drivers / Frameworks</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-adapter);"></div>
+                    <span>Interface Adapters</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-service);"></div>
+                    <span>Application Services</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-port);"></div>
+                    <span>Domain Ports</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-domain);"></div>
+                    <span>Domain Core Entities</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: var(--c-success);"></div>
+                    <span>Verified / Passing</span>
+                </div>
+            </div>
+
+            <div class="inspector-title" style="margin-top: 1.5rem;">
+                📌 Quick Commands
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div class="prop-code">cargo test --locked</div>
+                <div class="prop-code">cargo clippy -- -D warnings</div>
+                <div class="prop-code">./modules/daily-news/run.sh</div>
+            </div>
+        </aside>
+
+    </main>
+
+    <script>
+        const NODE_METADATA = {
+            main: {
+                title: "src/main.rs",
+                layer: "Layer 4: Frameworks & Drivers",
+                role: "Composition Root & Stdio JSON-RPC Event Loop",
+                lines: 400,
+                desc: "Listens on standard input for newline-delimited JSON envelopes. Instantiates concrete adapters and injects them into DailyNewsService. Dispatches via declarative match table.",
+                inbound: "Standard Input (stdin JSON-RPC)",
+                outbound: "Standard Output (stdout JSON-RPC)"
+            },
+            run_sh: {
+                title: "run.sh",
+                layer: "Layer 4: Frameworks & Drivers",
+                role: "Self-Healing Binary Launcher",
+                lines: 28,
+                desc: "POSIX entrypoint. Checks execution permissions, runs precompiled native Rust ELF binary with sub-millisecond startup, redirects errors to stderr (&gt;&amp;2).",
+                inbound: "Process invocation ($@)",
+                outbound: "exec ./daily-news"
+            },
+            service: {
+                title: "src/service.rs",
+                layer: "Layer 2: Application Use Cases",
+                role: "DailyNewsService Orchestrator",
+                lines: 420,
+                desc: "High-level business workflow orchestrator. Implements get_feed, discover, filter_and_score, get_candidates, consume, and chat_completion.",
+                inbound: "main.rs requests",
+                outbound: "FeedFetcherPort, StoragePort, DiscussionFetcherPort, SourceCapturePort"
+            },
+            discovery: {
+                title: "src/discovery.rs",
+                layer: "Layer 2: Application Use Cases",
+                role: "Tiered Discovery & Gating Engine",
+                lines: 131,
+                desc: "Enforces cascading tier execution (Curated -> Automated -> Cache) and fail-closed diagnostics (NO_ELIGIBLE_TOPIC). Evaluates candidate eligibility.",
+                inbound: "service.rs::discover()",
+                outbound: "DiscoveryResult"
+            },
+            scoring: {
+                title: "src/scoring.rs",
+                layer: "Layer 2: Application Use Cases",
+                role: "Deterministic 6-Axis Scorer",
+                lines: 344,
+                desc: "Ranks candidates via 6 weighted axes: Freshness, Publisher Authority, Fact Density, Visual Potential, Audience Interest, Feasibility.",
+                inbound: "Vec<NormalizedCandidate>",
+                outbound: "Ranked Vec<NormalizedCandidate>"
+            },
+            ports: {
+                title: "src/ports.rs",
+                layer: "Domain Ports",
+                role: "Inbound / Outbound Trait Contracts",
+                lines: 68,
+                desc: "Pure trait abstractions decoupling use cases from low-level adapters: FeedFetcherPort, StoragePort, DiscussionFetcherPort, SourceCapturePort, NoopDiscussionFetcher.",
+                inbound: "service.rs",
+                outbound: "Implemented by Adapters"
+            },
+            domain: {
+                title: "src/domain.rs",
+                layer: "Layer 1: Enterprise Domain Core",
+                role: "Entities, Value Objects & Storyboards",
+                lines: 425,
+                desc: "Zero-dependency business core: RawNewsItem, NormalizedCandidate, DiscussionThread, DiscussionComment, ModuleConfig, 6-beat storyboard contracts.",
+                inbound: "All application layers",
+                outbound: "None (Inward Sink)"
+            },
+            readiness: {
+                title: "src/research_readiness.rs",
+                layer: "Layer 1: Enterprise Domain Core",
+                role: "Truthful Video Readiness Gate",
+                lines: 332,
+                desc: "Authoritative state machine: NEEDS_SOURCE -> NEEDS_RESEARCH -> NEEDS_VERIFICATION -> NEEDS_VISUAL_EVIDENCE -> VIDEO_READY.",
+                inbound: "evaluate_readiness()",
+                outbound: "ResearchReadiness"
+            },
+            source_capture: {
+                title: "src/source_capture.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "SSRF-Safe HTTP Source Capture & Snapshot Store",
+                lines: 447,
+                desc: "Executes single-resolution DNS pinning via SsrfSafeResolver, validates all IPs against private ranges, and writes atomic SHA-256 snapshots to .state/evidence/.",
+                inbound: "SourceCapturePort::capture_source()",
+                outbound: "PrimarySourceEvidence & .state/evidence/{hash}.txt"
+            },
+            storage: {
+                title: "src/storage.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "File & Memory Storage Adapter",
+                lines: 198,
+                desc: "Implements StoragePort. Persists consumed candidate IDs to .state/consumed.json and active config to .state/config.json with thread-safe Mutex locks.",
+                inbound: "StoragePort calls",
+                outbound: "Disk I/O (.state/)"
+            },
+            fetcher: {
+                title: "src/fetcher.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "Multi-Source Feed Orchestrator",
+                lines: 418,
+                desc: "Implements FeedFetcherPort. Aggregates and interleaves live items from Hacker News, Reddit, and Redis stream providers.",
+                inbound: "FeedFetcherPort::fetch_sources()",
+                outbound: "RawNewsItem[]"
+            },
+            hn: {
+                title: "src/hn.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "Hacker News Firebase Client",
+                lines: 375,
+                desc: "Polls Firebase API for top and best stories. Correctly preserves comments in discussion rather than injecting fake bodies.",
+                inbound: "fetcher.rs",
+                outbound: "Hacker News JSON API"
+            },
+            reddit: {
+                title: "src/reddit.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "Reddit Provider (OAuth + Public)",
+                lines: 427,
+                desc: "Fetches technical subreddit listings with automatic OAuth client-credentials flow and unauthenticated public fallback.",
+                inbound: "fetcher.rs",
+                outbound: "Reddit API"
+            },
+            redis: {
+                title: "src/redis.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "Native RESP Redis Client",
+                lines: 365,
+                desc: "Direct TCP RESP socket implementation without external redis crates. Ingests from Redis Streams (XREAD) or Lists (LPOP).",
+                inbound: "fetcher.rs",
+                outbound: "Redis TCP Server"
+            },
+            discussion: {
+                title: "src/discussion.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "Live Discussion Thread Inspector",
+                lines: 391,
+                desc: "Implements DiscussionFetcherPort. Inspects Reddit and HN discussion threads, building nested comment trees.",
+                inbound: "DiscussionFetcherPort",
+                outbound: "DiscussionThread"
+            },
+            rpc: {
+                title: "src/rpc.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "JSON-RPC Framing & Extractors",
+                lines: 136,
+                desc: "Helper functions to construct standard HTTP-like JSON envelopes and extract date ranges, topics, and sources defensively.",
+                inbound: "main.rs",
+                outbound: "Parsed Value"
+            },
+            ui: {
+                title: "src/ui.rs",
+                layer: "Layer 3: Interface Adapters",
+                role: "HTML Dashboard Presenter",
+                lines: 157,
+                desc: "Renders responsive dashboard at /ui displaying candidates, total scores, publisher tags, and consumption status.",
+                inbound: "GET /ui",
+                outbound: "HTML Response"
+            },
+            date: {
+                title: "src/date.rs",
+                layer: "Layer 1: Enterprise Domain Core",
+                role: "ISO 8601 & Epoch Boundary Math",
+                lines: 160,
+                desc: "Pure date math without heavy chrono dependencies. Parses ISO 8601 strings and calculates start/end-of-day epoch timestamps.",
+                inbound: "All layers",
+                outbound: "u64 epoch timestamps"
+            },
+            url: {
+                title: "src/url.rs",
+                layer: "Layer 1: Enterprise Domain Core",
+                role: "URL Canonicalizer & SSRF IP Checks",
+                lines: 436,
+                desc: "Strips query tracking parameters, normalizes URLs, executes private IPv4/IPv6 CIDR range checks, and classifies topic families.",
+                inbound: "All layers",
+                outbound: "Safe canonical URLs"
+            }
+        };
+
+        function switchTab(viewId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.flow-view').forEach(view => view.classList.remove('active'));
+
+            const activeBtn = event.currentTarget;
+            if (activeBtn) activeBtn.classList.add('active');
+
+            const activeView = document.getElementById('view-' + viewId);
+            if (activeView) activeView.classList.add('active');
+        }
+
+        function inspectNode(nodeKey) {
+            const data = NODE_METADATA[nodeKey];
+            if (!data) return;
+
+            const panel = document.getElementById('inspector-content');
+            panel.innerHTML = `
+                <div style="font-size: 1.15rem; font-weight: 700; color: var(--c-accent);">${data.title}</div>
+                <div style="font-size: 0.8rem; font-weight: 600; color: var(--c-port);">${data.layer}</div>
+                <div style="font-size: 0.85rem; color: var(--text-main); margin-top: 0.25rem;">${data.desc}</div>
+                
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 0.5rem 0;" />
+                
+                <div class="prop-row">
+                    <span class="prop-label">Primary Role</span>
+                    <span class="prop-val">${data.role}</span>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Source Lines (Clean Arc &lt;450)</span>
+                    <span class="prop-val font-mono">${data.lines} lines</span>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Inbound Contract</span>
+                    <span class="prop-val font-mono">${data.inbound}</span>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Outbound Contract</span>
+                    <span class="prop-val font-mono">${data.outbound}</span>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
