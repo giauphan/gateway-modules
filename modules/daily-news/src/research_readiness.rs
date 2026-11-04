@@ -188,6 +188,66 @@ impl Default for ResearchReadiness {
     }
 }
 
+pub const ACCREDITED_REVIEWER_KEYWORDS: &[&str] = &[
+    "fact_checker", "fact-checker", "editorial", "editor", "lead", "analyst", "expert",
+    "lab", "laboratory", "qa", "reviewer", "auditor", "peer", "researcher", "curator",
+];
+
+pub const DENIED_REVIEWER_TOKENS: &[&str] = &[
+    "self", "unreviewed", "none", "anonymous", "user", "author", "unverified", "fake",
+];
+
+pub fn is_accredited_reviewer(reviewer: &str) -> bool {
+    let lower = reviewer.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        return false;
+    }
+
+    for token in &tokens {
+        for st in token.split(['_', '-']) {
+            if DENIED_REVIEWER_TOKENS.contains(&st) {
+                return false;
+            }
+        }
+    }
+
+    tokens.iter().any(|&token| {
+        ACCREDITED_REVIEWER_KEYWORDS.contains(&token)
+            || token.split(['_', '-']).any(|st| ACCREDITED_REVIEWER_KEYWORDS.contains(&st))
+    })
+}
+
+fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
+    let tr_excerpt = excerpt.trim();
+    if snapshot_text.contains(tr_excerpt) {
+        return true;
+    }
+    let mut cleaned = String::with_capacity(snapshot_text.len());
+    let mut in_tag = false;
+    for c in snapshot_text.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+            cleaned.push(' ');
+        } else if !in_tag {
+            cleaned.push(c);
+        }
+    }
+    let norm_clean = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
+    let norm_excerpt = tr_excerpt.split_whitespace().collect::<Vec<&str>>().join(" ");
+    norm_clean.contains(&norm_excerpt)
+}
+
 pub fn evaluate_readiness(
     primary_source: Option<&PrimarySourceEvidence>,
     claims: &[ClaimEvidence],
@@ -283,13 +343,16 @@ pub fn evaluate_readiness_with_snapshot_text(
                 .is_some_and(|loc| !loc.trim().is_empty());
             let has_excerpt = r.excerpt.trim().len() >= 10;
             let ref_str = r.source_ref.trim().to_ascii_lowercase();
-            let matches_source = primary_sha.as_deref() == Some(&ref_str)
-                || (ref_str.len() == 64 && ref_str.chars().all(|ch| ch.is_ascii_hexdigit()));
+            let is_primary = primary_sha.as_deref() == Some(&ref_str);
+            let is_verified_secondary = !is_primary
+                && ref_str.len() == 64
+                && ref_str.chars().all(|ch| ch.is_ascii_hexdigit())
+                && c.reviewer.as_deref().is_some_and(is_accredited_reviewer);
+
+            let matches_source = is_primary || is_verified_secondary;
 
             let excerpt_in_snapshot = match snapshot_text {
-                Some(text) if primary_sha.as_deref() == Some(&ref_str) => {
-                    text.contains(r.excerpt.trim())
-                }
+                Some(text) if is_primary => snapshot_contains_excerpt(text, &r.excerpt),
                 _ => true,
             };
 
@@ -312,26 +375,10 @@ pub fn evaluate_readiness_with_snapshot_text(
     }
 
     // Independent fact-check verification:
-    // Raw inputs cannot self-report INDEPENDENTLY_VERIFIED without an accredited reviewer or an independent secondary source!
+    // Raw inputs cannot self-report INDEPENDENTLY_VERIFIED without an accredited reviewer!
     let has_valid_independent_check = claims.iter().any(|c| {
-        if c.verification_status != "INDEPENDENTLY_VERIFIED" {
-            return false;
-        }
-
-        let has_independent_reviewer = c.reviewer.as_deref().is_some_and(|r| {
-            let tr = r.trim().to_lowercase();
-            !tr.is_empty() && tr != "self" && tr != "unreviewed" && tr != "none"
-        });
-
-        let has_secondary_source_ref = c.evidence_refs.iter().any(|r| {
-            let ref_str = r.source_ref.trim().to_ascii_lowercase();
-            match primary_sha.as_deref() {
-                Some(p_sha) => ref_str != p_sha && ref_str.len() == 64,
-                None => false,
-            }
-        });
-
-        has_independent_reviewer || has_secondary_source_ref
+        c.verification_status == "INDEPENDENTLY_VERIFIED"
+            && c.reviewer.as_deref().is_some_and(is_accredited_reviewer)
     });
 
     if !has_valid_independent_check {
@@ -365,24 +412,10 @@ pub fn evaluate_readiness_with_snapshot_text(
                 Some("verified") | Some("authoritative") | Some("licensed") | Some("approved")
             );
 
-            let approved_license =
-                match v.license_status.as_deref().map(|s| s.trim().to_lowercase()) {
-                    Some(lic) => matches!(
-                        lic.as_str(),
-                        "cc-by"
-                            | "cc-by-sa"
-                            | "cc0"
-                            | "public-domain"
-                            | "mit"
-                            | "apache-2.0"
-                            | "fair-use"
-                            | "licensed"
-                            | "approved"
-                            | "editorial"
-                            | "authorized"
-                    ),
-                    None => false,
-                };
+            let approved_license = match v.license_status.as_deref().map(|s| s.trim().to_lowercase()) {
+                Some(lic) => matches!(lic.as_str(), "cc-by" | "cc-by-sa" | "cc0" | "public-domain" | "mit" | "apache-2.0" | "fair-use" | "licensed" | "approved" | "editorial" | "authorized"),
+                None => false,
+            };
 
             has_asset && safe_url && valid_provenance && approved_license
         });

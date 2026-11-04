@@ -86,7 +86,12 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domai
         &raw["extra"]["date"],
         &root["updatedTime"],
     ];
-    for c in candidates {
+    for (idx, c) in candidates.into_iter().enumerate() {
+        let kind = if idx == 3 {
+            crate::domain::PublishedAtKind::FeedObserved
+        } else {
+            crate::domain::PublishedAtKind::ArticlePublication
+        };
         if let Some(s) = c.as_str() {
             let trimmed = s.trim();
             if !trimmed.is_empty() {
@@ -96,9 +101,9 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domai
                     } else {
                         num
                     };
-                    return (format_utc_timestamp(secs), crate::domain::PublishedAtKind::ArticlePublication);
+                    return (format_utc_timestamp(secs), kind);
                 }
-                return (trimmed.to_string(), crate::domain::PublishedAtKind::ArticlePublication);
+                return (trimmed.to_string(), kind);
             }
         }
         if let Some(num) = c.as_u64() {
@@ -107,7 +112,7 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domai
             } else {
                 num
             };
-            return (format_utc_timestamp(secs), crate::domain::PublishedAtKind::ArticlePublication);
+            return (format_utc_timestamp(secs), kind);
         }
     }
     (current_utc_timestamp(), crate::domain::PublishedAtKind::FeedObserved)

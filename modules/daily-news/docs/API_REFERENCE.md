@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.8.0).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.8.1).
 
 ---
 

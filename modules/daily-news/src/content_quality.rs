@@ -4,21 +4,40 @@
 //! Discards bot challenge interstitials, cookie consent walls, paywall placeholders,
 //! and empty navigation shells before marking source capture as valid.
 
-pub const ANTI_BOT_PATTERNS: &[&str] = &[
+pub const INTERSTITIAL_TITLES: &[&str] = &[
     "attention required! | cloudflare",
     "just a moment...",
     "checking your browser",
-    "verify you are human",
-    "cf-browser-verification",
-    "please enable javascript and cookies",
-    "security service to protect itself from online attacks",
+    "ddos-guard",
+    "security check",
     "access denied",
     "403 forbidden",
-    "ddos-guard",
-    "bot detection",
+];
+
+pub const VISIBLE_CHALLENGE_PATTERNS: &[&str] = &[
+    "verify you are human",
+    "checking your browser before accessing",
+    "checking your browser",
+    "please enable javascript and cookies",
+    "security service to protect itself from online attacks",
     "please complete the security check",
     "ray id:",
     "human verification",
+];
+
+pub const PAYWALL_PATTERNS: &[&str] = &[
+    "to continue reading, subscribe",
+    "this article is for subscribers only",
+    "create a free account to continue reading",
+    "you have reached your limit of free articles",
+    "subscribe now for unlimited access",
+    "become a member to read the full story",
+    "sign in to your subscription",
+    "sign in to continue reading",
+    "log in to continue reading",
+    "register to continue reading",
+    "sign up to continue reading",
+    "sign in to read the full article",
 ];
 
 pub const NAV_ONLY_PATTERNS: &[&str] = &[
@@ -27,6 +46,11 @@ pub const NAV_ONLY_PATTERNS: &[&str] = &[
     "you need to enable javascript",
     "cookie policy",
     "accept all cookies",
+];
+
+pub const NAV_MENU_TOKENS: &[&str] = &[
+    "home", "about", "services", "products", "contact", "careers", "pricing", "blog",
+    "faq", "terms", "privacy", "login", "sign in", "navigation",
 ];
 
 pub const MIN_ARTICLE_WORD_COUNT: usize = 5;
@@ -38,9 +62,9 @@ pub fn evaluate_content_quality(
     main_text: &str,
 ) -> Result<String, String> {
     if let Some(title) = page_title {
-        let t_lower = title.to_lowercase();
-        for &pattern in ANTI_BOT_PATTERNS {
-            if t_lower.contains(pattern) {
+        let t_trimmed = title.trim().to_lowercase();
+        for &pattern in INTERSTITIAL_TITLES {
+            if t_trimmed == pattern {
                 return Err(format!("anti_bot_challenge_detected: page title matched '{pattern}'"));
             }
         }
@@ -48,26 +72,46 @@ pub fn evaluate_content_quality(
 
     let text_lower = main_text.to_lowercase();
     let html_lower = html.to_lowercase();
+    let words = main_text.split_whitespace().count();
+    let chars = main_text.trim().chars().count();
 
-    for &pattern in ANTI_BOT_PATTERNS {
-        if text_lower.contains(pattern) || (pattern.len() > 15 && html_lower.contains(pattern)) {
-            return Err(format!("anti_bot_challenge_detected: content matched '{pattern}'"));
+    for &pw in PAYWALL_PATTERNS {
+        if text_lower.contains(pw) {
+            return Err(format!("paywall_or_placeholder_detected: content matched '{pw}'"));
         }
     }
 
-    let words = main_text.split_whitespace().count();
-    let chars = main_text.trim().chars().count();
+    for &pattern in VISIBLE_CHALLENGE_PATTERNS {
+        if text_lower.contains(pattern) {
+            return Err(format!("anti_bot_challenge_detected: content matched '{pattern}'"));
+        }
+    }
+    if html_lower.contains("cf-browser-verification") {
+        return Err("anti_bot_challenge_detected: content matched 'cf-browser-verification'".to_string());
+    }
+
     if words < MIN_ARTICLE_WORD_COUNT || chars < MIN_ARTICLE_CHAR_COUNT {
         return Err(format!(
             "insufficient_article_content: body has only {words} words / {chars} chars (minimum required: {MIN_ARTICLE_WORD_COUNT} words / {MIN_ARTICLE_CHAR_COUNT} chars)"
         ));
     }
 
-    if words < 25 {
+    if words < 100 {
         for &nav in NAV_ONLY_PATTERNS {
-            if text_lower.contains(nav) {
+            if text_lower.contains(nav) && (words < 40 || text_lower.len() < 250) {
                 return Err(format!("nav_or_cookie_only: content matched '{nav}'"));
             }
+        }
+        let clean_tokens: Vec<&str> = text_lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let nav_count = clean_tokens.iter().filter(|w| NAV_MENU_TOKENS.contains(w)).count();
+        let has_sentence = main_text.chars().any(|c| c == '.' || c == '!' || c == '?')
+            && clean_tokens.iter().any(|w| matches!(*w, "the" | "is" | "are" | "in" | "to" | "for" | "with" | "and" | "on" | "by" | "a" | "of" | "from" | "we" | "our" | "demonstrated" | "found" | "shows"));
+
+        if !has_sentence || (nav_count > 0 && nav_count * 2 >= clean_tokens.len()) || nav_count >= 5 {
+            return Err("nav_or_cookie_only: content appears to be a navigation menu or empty shell".to_string());
         }
     }
 

@@ -401,10 +401,7 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
             if bytes.len() > self.max_bytes {
                 return Ok(PrimarySourceEvidence {
                     url: current_url,
-                    fetch_status: format!(
-                        "PAYLOAD_TOO_LARGE: exceeded {} byte limit",
-                        self.max_bytes
-                    ),
+                    fetch_status: format!("PAYLOAD_TOO_LARGE: exceeded {} byte limit", self.max_bytes),
                     content_type: Some(content_type),
                     ..Default::default()
                 });
@@ -439,5 +436,11 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
                 extraction_method: Some("conservative_html".to_string()),
             });
         }
+    }
+
+    fn read_snapshot_text(&self, snapshot_ref: &str) -> Option<String> {
+        let hash = snapshot_ref.trim_end_matches(".txt").split('/').next_back()?;
+        let path = self.evidence_dir.join(format!("{hash}.txt"));
+        fs::read_to_string(path).ok()
     }
 }

@@ -218,15 +218,10 @@ mod tests {
             content_kind: "news".to_string(),
             updated_at: None,
             discussion_url: Some("javascript:alert('discussion_xss')".to_string()),
-            evidence: Default::default(),
-            independent_fact_check: None,
-            scoring: None,
-            content_origin: Default::default(),
-            published_at_kind: "unknown".to_string(),
-            research: Default::default(),
+            ..Default::default()
         };
 
-        let html = render_dashboard_html("1.8.0", "rust-native", &cfg, 1, &[malicious_candidate]);
+        let html = render_dashboard_html(env!("CARGO_PKG_VERSION"), "rust-native", &cfg, 1, &[malicious_candidate]);
 
         // Unescaped HTML tags and javascript hrefs MUST NOT exist in rendered HTML
         assert!(!html.contains("<script>"));

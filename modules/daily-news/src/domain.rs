@@ -317,7 +317,7 @@ impl RawNewsItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NormalizedCandidate {
     pub candidate_id: String,
     pub canonical_url: String,

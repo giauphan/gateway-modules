@@ -160,15 +160,10 @@ fn handle_feed(service: &DailyNewsService, body: &Value, limit: usize) -> Value 
 }
 
 fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
-    let ids: Vec<String> = if let Some(arr) = body["candidate_ids"].as_array() {
-        arr.iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect()
-    } else if let Some(single) = body["candidate_id"].as_str() {
-        vec![single.to_string()]
-    } else {
-        Vec::new()
-    };
+    let ids: Vec<String> = body["candidate_ids"].as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .or_else(|| body["candidate_id"].as_str().map(|s| vec![s.to_string()]))
+        .unwrap_or_default();
 
     match service.consume(&ids) {
         Ok(count) => make_json_resp(200, json!({ "status": "consumed", "count": count })),
@@ -197,49 +192,58 @@ fn handle_discussion(service: &DailyNewsService, body: &Value) -> Value {
     }
 }
 
-fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
-    if let Some(cid) = body["candidate_id"].as_str().filter(|s| !s.trim().is_empty()) {
-        return handle_enrich_candidate(service, cid, body);
-    }
-
-    let url = body["url"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| body["source_url"].as_str().filter(|s| !s.trim().is_empty()))
-        .or_else(|| {
-            body["canonical_url"]
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-        })
+fn handle_capture(service: &DailyNewsService, body: &Value) -> Value {
+    let extract_url = |k: &str| body[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let url = extract_url("url")
+        .or_else(|| extract_url("source_url"))
+        .or_else(|| extract_url("canonical_url"))
         .unwrap_or("");
-
-    if url.trim().is_empty() {
-        return make_json_resp(
-            400,
-            json!({ "error": "Missing required parameter: 'candidate_id', 'url', 'source_url', or 'canonical_url'" }),
-        );
+    if url.is_empty() {
+        return make_json_resp(400, json!({ "error": "Missing required parameter: 'url', 'source_url', or 'canonical_url'" }));
     }
-
     match service.capture_primary_source(url) {
         Ok(evidence) => make_json_resp(200, json!(evidence)),
         Err(e) => make_json_resp(400, json!({ "error": e })),
     }
 }
 
+fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
+    if let Some(cid_val) = body.get("candidate_id") {
+        let cid = cid_val.as_str().unwrap_or("").trim();
+        if cid.is_empty() {
+            return make_json_resp(400, json!({ "error": "Missing required parameter: 'candidate_id'" }));
+        }
+        return handle_enrich_candidate(service, cid, body);
+    }
+    handle_capture(service, body)
+}
+
 fn handle_enrich_candidate(service: &DailyNewsService, candidate_id: &str, body: &Value) -> Value {
-    let override_url = body["url"]
+    let override_url = body["override_url"]
         .as_str()
-        .or_else(|| body["override_url"].as_str())
-        .filter(|s| !s.trim().is_empty());
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| body["url"].as_str().filter(|s| !s.trim().is_empty()));
 
-    let claims = body["claims"]
-        .as_array()
-        .and_then(|arr| serde_json::from_value(json!(arr)).ok());
+    let claims = match body.get("claims").filter(|v| !v.is_null()) {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(c) => Some(c),
+            Err(e) => return make_json_resp(400, json!({ "error": format!("Invalid 'claims': {e}") })),
+        },
+        None => None,
+    };
 
-    let visuals = body["visual_evidence"]
-        .as_array()
-        .or_else(|| body["visuals"].as_array())
-        .and_then(|arr| serde_json::from_value(json!(arr)).ok());
+    let visuals_val = body
+        .get("visual_evidence")
+        .filter(|v| !v.is_null())
+        .or_else(|| body.get("visuals").filter(|v| !v.is_null()));
+
+    let visuals = match visuals_val {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(vis) => Some(vis),
+            Err(e) => return make_json_resp(400, json!({ "error": format!("Invalid 'visual_evidence': {e}") })),
+        },
+        None => None,
+    };
 
     match service.enrich_candidate(candidate_id, override_url, claims, visuals) {
         Ok(resp) => make_json_resp(200, json!(resp)),
@@ -334,16 +338,15 @@ fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Va
         "/api/v1/feed" | "/feed" => handle_feed(service, &body, limit),
         "/api/v1/discussion" | "/discussion" => handle_discussion(service, &body),
         "/api/v1/enrich-candidate" | "/enrich-candidate" => {
-            let cid = body["candidate_id"].as_str().unwrap_or("");
-            if cid.trim().is_empty() {
+            let cid = body["candidate_id"].as_str().map(str::trim).unwrap_or("");
+            if cid.is_empty() {
                 make_json_resp(400, json!({ "error": "Missing required parameter: 'candidate_id'" }))
             } else {
                 handle_enrich_candidate(service, cid, &body)
             }
         }
-        "/api/v1/enrich" | "/enrich" | "/api/v1/capture" | "/capture" => {
-            handle_enrich(service, &body)
-        }
+        "/api/v1/capture" | "/capture" => handle_capture(service, &body),
+        "/api/v1/enrich" | "/enrich" => handle_enrich(service, &body),
         "/api/v1/evidence" | "/evidence" => handle_evidence(base_dir, &body),
         "/api/v1/consume" | "/consume" => handle_consume(service, &body),
         "/api/v1/config" | "/config" => handle_config(service, &method, &body),

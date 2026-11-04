@@ -65,4 +65,9 @@ pub trait StoragePort: Send + Sync {
 pub trait SourceCapturePort: Send + Sync {
     /// Capture an external primary source URL into an immutable, hashed snapshot.
     fn capture_source(&self, url: &str) -> Result<crate::domain::PrimarySourceEvidence, String>;
+
+    /// Read raw text of a stored snapshot by reference or hash.
+    fn read_snapshot_text(&self, _snapshot_ref: &str) -> Option<String> {
+        None
+    }
 }

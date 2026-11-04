@@ -347,7 +347,13 @@ impl CandidateScorer {
 
         let visual_readiness = if !candidate.visual_evidence.is_empty() {
             let valid = candidate.visual_evidence.iter().all(|v| {
-                v.provenance_status.as_deref().is_some_and(|s| s == "verified" || s == "licensed" || s == "authoritative")
+                matches!(
+                    v.provenance_status
+                        .as_deref()
+                        .map(|s| s.trim().to_lowercase())
+                        .as_deref(),
+                    Some("verified") | Some("authoritative") | Some("licensed") | Some("approved")
+                )
             });
             if valid { 1.0 } else { 0.5 }
         } else {

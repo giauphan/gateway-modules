@@ -5,8 +5,8 @@
 //! with real snapshot capture, grounded claim verification, and persistent cache storage.
 
 use crate::domain::{
-    evaluate_readiness, ClaimEvidence, ContentOrigin, EvidenceRef, NormalizedCandidate,
-    VisualEvidence,
+    evaluate_readiness_with_snapshot_text, ClaimEvidence, ContentOrigin, EvidenceRef,
+    NormalizedCandidate, VisualEvidence,
 };
 use crate::ports::{SourceCapturePort, StoragePort};
 use crate::scoring::{CandidateScorer, ProductionReadinessScoring};
@@ -77,8 +77,10 @@ impl CandidateEnrichmentWorkflow {
             && evidence.snapshot_sha256.is_some()
             && evidence.content_quality.as_deref() == Some("ARTICLE_CONTENT_VALID");
 
-        // 4. Attach primary source evidence to candidate
-        candidate.primary_source = Some(evidence.clone());
+        // 4. Attach primary source evidence (preserve valid prior capture if re-capture failed)
+        if has_valid_capture || candidate.primary_source.is_none() {
+            candidate.primary_source = Some(evidence.clone());
+        }
 
         if has_valid_capture {
             if candidate.content_origin == ContentOrigin::HeadlineOnly
@@ -87,7 +89,8 @@ impl CandidateEnrichmentWorkflow {
                 candidate.content_origin = ContentOrigin::Article;
             }
 
-            if candidate.body.is_none() || candidate.body.as_deref().unwrap_or("").trim().is_empty() {
+            let is_empty_body = candidate.body.as_deref().unwrap_or("").trim().is_empty();
+            if override_url.is_some() || is_empty_body {
                 candidate.body = evidence.excerpt.clone();
             }
 
@@ -102,7 +105,7 @@ impl CandidateEnrichmentWorkflow {
                         let sample_excerpt = exc.chars().take(150).collect::<String>();
                         candidate.claims = vec![ClaimEvidence {
                             claim_id: format!("{}_claim_1", candidate.candidate_id),
-                            statement: candidate.title.clone(),
+                            statement: sample_excerpt.clone(),
                             evidence_refs: vec![EvidenceRef {
                                 source_ref: sha.clone(),
                                 excerpt: sample_excerpt,
@@ -121,9 +124,20 @@ impl CandidateEnrichmentWorkflow {
             }
         }
 
-        // 7. Evaluate new research readiness status
-        let readiness = evaluate_readiness(
+        // 7. Evaluate new research readiness status using snapshot verification
+        let snapshot_text = candidate
+            .primary_source
+            .as_ref()
+            .and_then(|ps| ps.snapshot_ref.as_deref())
+            .and_then(|ref_str| {
+                self.capture
+                    .as_ref()
+                    .and_then(|cap| cap.read_snapshot_text(ref_str))
+            });
+
+        let readiness = evaluate_readiness_with_snapshot_text(
             candidate.primary_source.as_ref(),
+            snapshot_text.as_deref(),
             &candidate.claims,
             &candidate.visual_evidence,
             candidate.content_origin,
