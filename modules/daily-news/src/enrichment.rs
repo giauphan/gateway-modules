@@ -185,15 +185,53 @@ impl CandidateEnrichmentWorkflow {
     }
 }
 
-pub fn build_substantive_research_package(
-    candidate_id: &str,
-    sha: &str,
-    excerpt: &str,
-    title: &str,
-    snapshot_text: &str,
-    snapshot_ref: Option<&str>,
-) -> (Vec<ClaimEvidence>, StoryboardEvidence) {
-    let visible_text = crate::source_capture::extract_main_text(snapshot_text);
+const IMPLEMENTED_TOKENS: &[&str] = &[
+    "demonstrated",
+    "implemented",
+    "deployed",
+    "shipped",
+    "released",
+    "patched",
+    "optimized",
+    "built",
+    "engineered",
+    "integrated",
+];
+
+const PROPOSED_TOKENS: &[&str] = &[
+    "proposes",
+    "proposed",
+    "proposal",
+    "approach",
+    "algorithm",
+    "design",
+    "concept",
+    "rfc",
+    "spec",
+    "explores",
+    "suggests",
+    "hypothesizes",
+];
+
+const PROBLEM_TOKENS: &[&str] = &[
+    "challenge",
+    "problem",
+    "bottleneck",
+    "latency",
+    "limitation",
+    "vulnerability",
+    "issue",
+    "bug",
+    "overhead",
+    "flaw",
+    "inefficiency",
+    "slow",
+    "fail",
+    "difficult",
+    "risk",
+];
+
+fn extract_raw_sentences(visible_text: &str) -> Vec<&str> {
     let chars: Vec<(usize, char)> = visible_text.char_indices().collect();
     let mut raw_sentences: Vec<&str> = Vec::new();
     let mut start = 0usize;
@@ -214,80 +252,37 @@ pub fn build_substantive_research_package(
     if tail.len() >= 15 {
         raw_sentences.push(tail);
     }
+    raw_sentences
+}
 
-    let implemented_tokens = &[
-        "demonstrated",
-        "implemented",
-        "deployed",
-        "shipped",
-        "released",
-        "patched",
-        "optimized",
-        "built",
-        "engineered",
-        "integrated",
-    ];
-
-    let proposed_tokens = &[
-        "proposes",
-        "proposed",
-        "proposal",
-        "approach",
-        "algorithm",
-        "design",
-        "concept",
-        "rfc",
-        "spec",
-        "explores",
-        "suggests",
-        "hypothesizes",
-    ];
-
-    let problem_tokens = &[
-        "challenge",
-        "problem",
-        "bottleneck",
+fn has_empirical_metric(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    if lower.contains('%') {
+        return true;
+    }
+    const METRIC_WORDS: &[&str] = &[
+        "speedup",
+        "reduction",
         "latency",
-        "limitation",
-        "vulnerability",
-        "issue",
-        "bug",
+        "throughput",
+        "measured",
+        "benchmark",
+        "benchmarks",
         "overhead",
-        "flaw",
-        "inefficiency",
-        "slow",
-        "fail",
-        "difficult",
-        "risk",
+        "drop",
     ];
-
-    let has_empirical_metric = |s: &str| -> bool {
-        let lower = s.to_lowercase();
-        if lower.contains('%') {
-            return true;
+    lower.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        if let Some(rest) = w.strip_suffix('x') {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+        } else if let Some(rest) = w.strip_suffix("ms") {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+        } else {
+            METRIC_WORDS.contains(&w)
         }
-        const METRIC_WORDS: &[&str] = &[
-            "speedup",
-            "reduction",
-            "latency",
-            "throughput",
-            "measured",
-            "benchmark",
-            "benchmarks",
-            "overhead",
-            "drop",
-        ];
-        lower.split(|c: char| !c.is_alphanumeric()).any(|w| {
-            if let Some(rest) = w.strip_suffix('x') {
-                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-            } else if let Some(rest) = w.strip_suffix("ms") {
-                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-            } else {
-                METRIC_WORDS.contains(&w)
-            }
-        })
-    };
+    })
+}
 
+fn is_negated_or_hypothetical(s: &str) -> bool {
     const NEGATION_PATTERNS: &[&str] = &[
         "not been benchmarked",
         "has not been benchmarked",
@@ -311,53 +306,98 @@ pub fn build_substantive_research_package(
         "have not measured",
         "has not measured",
     ];
+    let lower = s.to_lowercase();
+    NEGATION_PATTERNS.iter().any(|pat| lower.contains(pat))
+}
 
-    let is_negated_or_hypothetical = |s: &str| -> bool {
-        let lower = s.to_lowercase();
-        NEGATION_PATTERNS.iter().any(|pat| lower.contains(pat))
-    };
-
-    let problem_sentence = raw_sentences
+fn select_problem_sentence<'a>(raw_sentences: &[&'a str], excerpt: &'a str) -> &'a str {
+    raw_sentences
         .iter()
         .find(|s| {
             let lower = s.to_lowercase();
-            problem_tokens.iter().any(|tok| lower.contains(tok))
+            PROBLEM_TOKENS.iter().any(|tok| lower.contains(tok))
         })
         .or_else(|| raw_sentences.first())
         .copied()
-        .unwrap_or(excerpt);
+        .unwrap_or(excerpt)
+}
 
-    let solution_sentence = raw_sentences
+fn select_solution_sentence<'a>(raw_sentences: &[&'a str], problem: &'a str) -> &'a str {
+    raw_sentences
         .iter()
         .find(|s| {
             let lower = s.to_lowercase();
-            *s != &problem_sentence
-                && (implemented_tokens.iter().any(|tok| lower.contains(tok))
-                    || proposed_tokens.iter().any(|tok| lower.contains(tok))
+            *s != &problem
+                && (IMPLEMENTED_TOKENS.iter().any(|tok| lower.contains(tok))
+                    || PROPOSED_TOKENS.iter().any(|tok| lower.contains(tok))
                     || lower.contains("solution")
                     || lower.contains("architecture"))
         })
         .or_else(|| raw_sentences.get(1))
         .copied()
-        .unwrap_or(problem_sentence);
+        .unwrap_or(problem)
+}
 
-    let outcome_sentence = raw_sentences
+fn matches_outcome_criteria(s: &str) -> bool {
+    !is_negated_or_hypothetical(s)
+        && has_empirical_metric(s)
+        && s.chars().any(|c| c.is_ascii_digit())
+}
+
+fn select_outcome_sentence<'a>(
+    raw_sentences: &[&'a str],
+    problem: &str,
+    solution: &str,
+) -> Option<&'a str> {
+    raw_sentences
         .iter()
+        .copied()
+        .find(|s| *s != problem && *s != solution && matches_outcome_criteria(s))
+        .or_else(|| raw_sentences.iter().copied().find(|s| matches_outcome_criteria(s)))
+}
+
+fn select_root_cause_sentence(raw_sentences: &[&str]) -> Option<String> {
+    const ROOT_CAUSE_TOKENS: &[&str] = &[
+        "root cause",
+        "due to",
+        "caused by",
+        "flaw in",
+        "bottleneck in",
+        "vulnerability in",
+    ];
+    const ROOT_CAUSE_NEGATIONS: &[&str] = &[
+        "not due to",
+        "not caused by",
+        "not the root cause",
+        "unrelated to",
+        "not a vulnerability",
+    ];
+
+    raw_sentences
+        .iter()
+        .copied()
         .find(|s| {
-            *s != &problem_sentence
-                && *s != &solution_sentence
-                && !is_negated_or_hypothetical(s)
-                && has_empirical_metric(s)
-                && s.chars().any(|c| c.is_ascii_digit())
+            let lower = s.to_lowercase();
+            ROOT_CAUSE_TOKENS.iter().any(|tok| lower.contains(tok))
+                && !ROOT_CAUSE_NEGATIONS.iter().any(|neg| lower.contains(neg))
         })
-        .or_else(|| {
-            raw_sentences.iter().find(|s| {
-                !is_negated_or_hypothetical(s)
-                    && has_empirical_metric(s)
-                    && s.chars().any(|c| c.is_ascii_digit())
-            })
-        })
-        .copied();
+        .map(str::to_string)
+}
+
+pub fn build_substantive_research_package(
+    candidate_id: &str,
+    sha: &str,
+    excerpt: &str,
+    title: &str,
+    snapshot_text: &str,
+    snapshot_ref: Option<&str>,
+) -> (Vec<ClaimEvidence>, StoryboardEvidence) {
+    let visible_text = crate::source_capture::extract_main_text(snapshot_text);
+    let raw_sentences = extract_raw_sentences(&visible_text);
+
+    let problem_sentence = select_problem_sentence(&raw_sentences, excerpt);
+    let solution_sentence = select_solution_sentence(&raw_sentences, problem_sentence);
+    let outcome_sentence = select_outcome_sentence(&raw_sentences, problem_sentence, solution_sentence);
 
     let mut claims = Vec::new();
 
@@ -378,8 +418,8 @@ pub fn build_substantive_research_package(
     // 2. Solution / Architecture claim with semantic modality distinction
     if solution_sentence != problem_sentence {
         let sol_lower = solution_sentence.to_lowercase();
-        let is_implemented = implemented_tokens.iter().any(|tok| sol_lower.contains(tok))
-            && !proposed_tokens.iter().any(|tok| sol_lower.contains(tok));
+        let is_implemented = IMPLEMENTED_TOKENS.iter().any(|tok| sol_lower.contains(tok))
+            && !PROPOSED_TOKENS.iter().any(|tok| sol_lower.contains(tok));
 
         let statement = if is_implemented {
             format!("Implemented architectural remedy: {solution_sentence}")
@@ -417,29 +457,7 @@ pub fn build_substantive_research_package(
         });
     }
 
-    let root_cause_tokens = &[
-        "root cause",
-        "due to",
-        "caused by",
-        "flaw in",
-        "bottleneck in",
-        "vulnerability in",
-    ];
-    const ROOT_CAUSE_NEGATIONS: &[&str] = &[
-        "not due to",
-        "not caused by",
-        "not the root cause",
-        "unrelated to",
-        "not a vulnerability",
-    ];
-    let root_cause_sentence = raw_sentences
-        .iter()
-        .find(|s| {
-            let lower = s.to_lowercase();
-            root_cause_tokens.iter().any(|tok| lower.contains(tok))
-                && !ROOT_CAUSE_NEGATIONS.iter().any(|neg| lower.contains(neg))
-        })
-        .map(|s| s.to_string());
+    let root_cause_sentence = select_root_cause_sentence(&raw_sentences);
 
     let remedy = if solution_sentence != problem_sentence
         && !is_negated_or_hypothetical(solution_sentence)

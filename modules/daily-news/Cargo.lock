@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "daily-news"
-version = "1.14.0"
+version = "1.14.1"
 dependencies = [
  "serde",
  "serde_json",

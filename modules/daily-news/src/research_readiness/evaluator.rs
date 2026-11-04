@@ -95,19 +95,7 @@ fn check_primary_source(
     Ok(primary_sha)
 }
 
-pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> ClaimGroundingStatus {
-    let stmt_trimmed = statement.trim();
-    let exc_trimmed = excerpt.trim();
-
-    if stmt_trimmed.is_empty() || exc_trimmed.is_empty() {
-        return ClaimGroundingStatus::ExcerptNotFound;
-    }
-
-    let stmt_lower = stmt_trimmed.to_lowercase();
-    let exc_lower = exc_trimmed.to_lowercase();
-
-    // 1. Negation / contradiction check runs FIRST — before any containment shortcut.
-    // If excerpt explicitly contradicts or negates, return Contradicted regardless of overlap.
+fn has_contradictory_negation(exc_lower: &str) -> bool {
     const NEGATION_PATTERNS: &[&str] = &[
         "not been benchmarked",
         "has not been benchmarked",
@@ -122,48 +110,40 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
         "did not decrease",
         "did not improve",
     ];
-    if NEGATION_PATTERNS.iter().any(|neg| exc_lower.contains(neg)) {
-        return ClaimGroundingStatus::Contradicted;
-    }
+    NEGATION_PATTERNS.iter().any(|neg| exc_lower.contains(neg))
+}
 
-    // 2. Direct containment check (safe after negation gate)
-    if exc_lower.contains(&stmt_lower) || stmt_lower.contains(&exc_lower) {
-        return ClaimGroundingStatus::ClaimEntailed;
+fn is_metric_token_corroborated(clean: &str, exc_lower: &str) -> bool {
+    if clean.contains('%') {
+        return exc_lower.contains(clean);
     }
-
-    // 3. Check for empirical figures / metrics asserted in statement:
-    // If a statement asserts numbers, percentages or multipliers, they must be corroborated.
-    let stmt_tokens: Vec<&str> = stmt_lower.split_whitespace().collect();
-    for &w in &stmt_tokens {
-        let clean = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '%');
-        if clean.contains('%') {
-            if !exc_lower.contains(clean) {
-                return ClaimGroundingStatus::ExcerptFound;
-            }
-        } else if let Some(multiplier) = clean.strip_suffix('x') {
-            if !multiplier.is_empty()
-                && multiplier.chars().all(|c| c.is_ascii_digit())
-                && !exc_lower.contains(clean)
-            {
-                return ClaimGroundingStatus::ExcerptFound;
-            }
-        } else if clean.ends_with("ms")
-            || clean.ends_with("kb")
-            || clean.ends_with("mb")
-            || clean.ends_with("gb")
-            || clean.ends_with("qps")
-        {
-            let num_part = clean.trim_end_matches(|c: char| c.is_alphabetic());
-            if !num_part.is_empty()
-                && num_part.chars().all(|c| c.is_ascii_digit())
-                && !exc_lower.contains(clean)
-            {
-                return ClaimGroundingStatus::ExcerptFound;
+    if let Some(multiplier) = clean.strip_suffix('x') {
+        if !multiplier.is_empty() && multiplier.chars().all(|c| c.is_ascii_digit()) {
+            return exc_lower.contains(clean);
+        }
+    }
+    const METRIC_SUFFIXES: &[&str] = &["ms", "kb", "mb", "gb", "qps"];
+    for suffix in METRIC_SUFFIXES {
+        if let Some(num_part) = clean.strip_suffix(suffix) {
+            if !num_part.is_empty() && num_part.chars().all(|c| c.is_ascii_digit()) {
+                return exc_lower.contains(clean);
             }
         }
     }
+    true
+}
 
-    // 3. Informative term overlap check
+fn are_empirical_metrics_corroborated(stmt_lower: &str, exc_lower: &str) -> bool {
+    for w in stmt_lower.split_whitespace() {
+        let clean = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '%');
+        if !is_metric_token_corroborated(clean, exc_lower) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_informative_overlap_entailed(stmt_trimmed: &str, exc_lower: &str) -> bool {
     let content_statement = if let Some((_, rest)) = stmt_trimmed.split_once(':') {
         rest.trim()
     } else {
@@ -183,12 +163,12 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
 
     let informative_tokens: Vec<&str> = content_lower
         .split(|c: char| !c.is_alphanumeric() && c != '%' && c != '-')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| s.len() >= 3 && !STOPWORDS.contains(s))
         .collect();
 
     if informative_tokens.is_empty() {
-        return ClaimGroundingStatus::ClaimEntailed;
+        return true;
     }
 
     let matching_count = informative_tokens
@@ -197,15 +177,43 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
         .count();
 
     let ratio = matching_count as f64 / informative_tokens.len() as f64;
-    let is_entailed = if informative_tokens.len() == 1 {
+    if informative_tokens.len() == 1 {
         matching_count == 1
     } else if informative_tokens.len() <= 3 {
         matching_count >= 1 && ratio >= 0.50
     } else {
         matching_count >= 2 && ratio >= 0.50
-    };
+    }
+}
 
-    if is_entailed {
+pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> ClaimGroundingStatus {
+    let stmt_trimmed = statement.trim();
+    let exc_trimmed = excerpt.trim();
+
+    if stmt_trimmed.is_empty() || exc_trimmed.is_empty() {
+        return ClaimGroundingStatus::ExcerptNotFound;
+    }
+
+    let stmt_lower = stmt_trimmed.to_lowercase();
+    let exc_lower = exc_trimmed.to_lowercase();
+
+    // 1. Negation / contradiction check runs FIRST — before any containment shortcut.
+    if has_contradictory_negation(&exc_lower) {
+        return ClaimGroundingStatus::Contradicted;
+    }
+
+    // 2. Direct containment check (safe after negation gate)
+    if exc_lower.contains(&stmt_lower) || stmt_lower.contains(&exc_lower) {
+        return ClaimGroundingStatus::ClaimEntailed;
+    }
+
+    // 3. Empirical metric assertions corroboration
+    if !are_empirical_metrics_corroborated(&stmt_lower, &exc_lower) {
+        return ClaimGroundingStatus::ExcerptFound;
+    }
+
+    // 4. Informative term overlap check
+    if is_informative_overlap_entailed(stmt_trimmed, &exc_lower) {
         ClaimGroundingStatus::ClaimEntailed
     } else {
         ClaimGroundingStatus::ExcerptFound
