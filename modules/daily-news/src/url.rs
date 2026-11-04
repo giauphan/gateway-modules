@@ -205,90 +205,11 @@ pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str
 }
 
 const TOPIC_FAMILIES: &[(&str, &[&str])] = &[
-    (
-        "context_memory",
-        &[
-            "prompt caching",
-            "context window",
-            "kv cache",
-            "memory",
-            "memories",
-            "caching",
-            "state loss",
-            "token limit",
-            "tokens",
-        ],
-    ),
-    (
-        "agent_tool_use",
-        &[
-            "tool call",
-            "tool calls",
-            "tool-calling",
-            "tool-call",
-            "mcp",
-            "schema",
-            "function call",
-            "tools",
-            "tooling",
-            "payload parsing",
-        ],
-    ),
-    (
-        "debugging_reliability",
-        &[
-            "debug",
-            "debugging",
-            "retry",
-            "retries",
-            "flaky",
-            "flakiness",
-            "reliability",
-            "ci",
-            "loop",
-            "loops",
-            "crash",
-            "crashes",
-            "crashing",
-            "failure",
-            "failures",
-            "failing",
-            "trace",
-            "traces",
-        ],
-    ),
-    (
-        "agent_evaluation",
-        &[
-            "benchmark",
-            "benchmarks",
-            "benchmarking",
-            "eval",
-            "evals",
-            "evaluation",
-            "evaluating",
-            "score",
-            "scores",
-            "metrics",
-            "metric",
-            "test suite",
-        ],
-    ),
-    (
-        "agent_architecture",
-        &[
-            "agent",
-            "agents",
-            "architecture",
-            "multi-agent",
-            "orchestrator",
-            "orchestration",
-            "workflow",
-            "system prompt",
-            "planning",
-            "reasoning",
-        ],
-    ),
+    ("context_memory", &["prompt caching", "context window", "kv cache", "memory", "memories", "caching", "state loss", "token limit", "tokens"]),
+    ("agent_tool_use", &["tool call", "tool calls", "tool-calling", "tool-call", "mcp", "schema", "function call", "tools", "tooling", "payload parsing"]),
+    ("debugging_reliability", &["debug", "debugging", "retry", "retries", "flaky", "flakiness", "reliability", "ci", "loop", "loops", "crash", "crashes", "crashing", "failure", "failures", "failing", "trace", "traces"]),
+    ("agent_evaluation", &["benchmark", "benchmarks", "benchmarking", "eval", "evals", "evaluation", "evaluating", "score", "scores", "metrics", "metric", "test suite"]),
+    ("agent_architecture", &["agent", "agents", "architecture", "multi-agent", "orchestrator", "orchestration", "workflow", "system prompt", "planning", "reasoning"]),
 ];
 
 pub fn classify_topic_family(title: &str, text: &str) -> String {
@@ -388,8 +309,14 @@ pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), Stri
         return Err("Capture target blocked: IPv6 loopback ::1".to_string());
     }
     let s = ip.segments();
-    if s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0xffff {
-        return is_restricted_ipv4(ipv4_from_segments(s[6], s[7]), allow_loopback);
+    let mapped_v4 = match (s[0], s[1], s[2], s[3], s[4], s[5]) {
+        (0, 0, 0, 0, 0, 0xffff) => Some(ipv4_from_segments(s[6], s[7])),
+        (0x0064, 0xff9b, 0, 0, 0, 0) => Some(ipv4_from_segments(s[6], s[7])),
+        (0x2002, ..) => Some(ipv4_from_segments(s[1], s[2])),
+        _ => None,
+    };
+    if let Some(v4) = mapped_v4 {
+        return is_restricted_ipv4(v4, allow_loopback);
     }
     if (s[0] & 0xffc0) == 0xfe80 {
         return Err("Capture target blocked: IPv6 link-local fe80::/10".to_string());
@@ -402,12 +329,6 @@ pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), Stri
     }
     if s[0] == 0x2001 && s[1] == 0x0db8 {
         return Err("Capture target blocked: IPv6 documentation 2001:db8::/32".to_string());
-    }
-    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&x| x == 0) {
-        return is_restricted_ipv4(ipv4_from_segments(s[6], s[7]), allow_loopback);
-    }
-    if s[0] == 0x2002 {
-        return is_restricted_ipv4(ipv4_from_segments(s[1], s[2]), allow_loopback);
     }
     Ok(())
 }
