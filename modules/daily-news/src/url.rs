@@ -4,7 +4,7 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 pub const DEFAULT_ALLOWED_DOMAINS: &[&str] = &[
     "docs.anthropic.com",
@@ -97,8 +97,20 @@ pub fn extract_domain(url: &str) -> String {
     } else {
         trimmed
     };
-    let host_part = without_scheme.split('/').next().unwrap_or(without_scheme);
-    let domain = host_part.split(':').next().unwrap_or(host_part);
+    let host_part = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
+    let host_without_user = host_part.rsplit('@').next().unwrap_or(host_part);
+    if host_without_user.starts_with('[') {
+        if let Some(end) = host_without_user.find(']') {
+            return host_without_user[..=end].to_lowercase();
+        }
+    }
+    let domain = host_without_user
+        .split(':')
+        .next()
+        .unwrap_or(host_without_user);
     domain.trim_start_matches("www.").to_lowercase()
 }
 
@@ -194,62 +206,119 @@ pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str
 
 pub fn classify_topic_family(title: &str, text: &str) -> String {
     let combined = format!("{title} {text}").to_lowercase();
+    let words: Vec<&str> = combined
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let matches_phrase_or_word = |k: &str| -> bool {
+        if k.contains(' ') {
+            combined.contains(k)
+        } else {
+            words.contains(&k)
+        }
+    };
+
     if [
         "prompt caching",
         "context window",
         "kv cache",
         "memory",
+        "memories",
+        "caching",
         "state loss",
         "token limit",
+        "tokens",
     ]
     .iter()
-    .any(|k| combined.contains(k))
+    .any(|&k| matches_phrase_or_word(k))
     {
         return "context_memory".to_string();
     }
+
     if [
         "tool call",
+        "tool calls",
+        "tool-calling",
+        "tool-call",
         "mcp",
         "schema",
         "function call",
         "tools",
+        "tooling",
         "payload parsing",
     ]
     .iter()
-    .any(|k| combined.contains(k))
+    .any(|&k| matches_phrase_or_word(k))
     {
         return "agent_tool_use".to_string();
     }
+
     if [
         "debug",
+        "debugging",
         "retry",
+        "retries",
         "flaky",
+        "flakiness",
         "reliability",
         "ci",
         "loop",
+        "loops",
         "crash",
+        "crashes",
+        "crashing",
         "failure",
+        "failures",
+        "failing",
         "trace",
+        "traces",
     ]
     .iter()
-    .any(|k| combined.contains(k))
+    .any(|&k| matches_phrase_or_word(k))
     {
         return "debugging_reliability".to_string();
     }
+
     if [
         "benchmark",
+        "benchmarks",
+        "benchmarking",
         "eval",
+        "evals",
         "evaluation",
+        "evaluating",
         "score",
+        "scores",
         "metrics",
+        "metric",
         "test suite",
     ]
     .iter()
-    .any(|k| combined.contains(k))
+    .any(|&k| matches_phrase_or_word(k))
     {
         return "agent_evaluation".to_string();
     }
-    "agent_architecture".to_string()
+
+    if [
+        "agent",
+        "agents",
+        "architecture",
+        "multi-agent",
+        "orchestrator",
+        "orchestration",
+        "workflow",
+        "system prompt",
+        "planning",
+        "reasoning",
+    ]
+    .iter()
+    .any(|&k| matches_phrase_or_word(k))
+    {
+        return "agent_architecture".to_string();
+    }
+
+    "unclassified".to_string()
 }
 
 pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool {
@@ -277,10 +346,91 @@ pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool
         }
     }
 
+    let clean_v6 = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = clean_v6.parse::<Ipv6Addr>() {
+        if is_restricted_ipv6(ip, true).is_err() {
+            return false;
+        }
+    }
+
     if let Some(allowed) = allowed_domains {
         return allowed
             .iter()
             .any(|d| host == *d || host.ends_with(&format!(".{d}")));
     }
     true
+}
+
+pub fn is_restricted_ipv4(ip: Ipv4Addr, allow_loopback: bool) -> Result<(), String> {
+    let o = ip.octets();
+    if !allow_loopback && o[0] == 127 {
+        return Err("Capture target blocked: loopback IPv4 127.0.0.0/8".to_string());
+    }
+    if o[0] == 0
+        || o[0] == 10
+        || (o[0] == 100 && (64..=127).contains(&o[1]))
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+        || (o[0] == 169 && o[1] == 254)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+        || (o[0] == 198 && (18..=19).contains(&o[1]))
+        || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+        || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+        || o[0] >= 224
+    {
+        return Err(format!(
+            "Capture target blocked: private/reserved IPv4 '{ip}'"
+        ));
+    }
+    Ok(())
+}
+
+pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), String> {
+    if ip.is_unspecified() {
+        return Err("Capture target blocked: IPv6 unspecified ::".to_string());
+    }
+    if !allow_loopback && ip.is_loopback() {
+        return Err("Capture target blocked: IPv6 loopback ::1".to_string());
+    }
+    let s = ip.segments();
+    if s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0xffff {
+        let v4 = Ipv4Addr::new(
+            (s[6] >> 8) as u8,
+            (s[6] & 0xff) as u8,
+            (s[7] >> 8) as u8,
+            (s[7] & 0xff) as u8,
+        );
+        return is_restricted_ipv4(v4, allow_loopback);
+    }
+    if (s[0] & 0xffc0) == 0xfe80 {
+        return Err("Capture target blocked: IPv6 link-local fe80::/10".to_string());
+    }
+    if (s[0] & 0xfe00) == 0xfc00 {
+        return Err("Capture target blocked: IPv6 unique local fc00::/7".to_string());
+    }
+    if (s[0] & 0xff00) == 0xff00 {
+        return Err("Capture target blocked: IPv6 multicast ff00::/8".to_string());
+    }
+    if s[0] == 0x2001 && s[1] == 0x0db8 {
+        return Err("Capture target blocked: IPv6 documentation 2001:db8::/32".to_string());
+    }
+    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&x| x == 0) {
+        let v4 = Ipv4Addr::new(
+            (s[6] >> 8) as u8,
+            (s[6] & 0xff) as u8,
+            (s[7] >> 8) as u8,
+            (s[7] & 0xff) as u8,
+        );
+        return is_restricted_ipv4(v4, allow_loopback);
+    }
+    if s[0] == 0x2002 {
+        let v4 = Ipv4Addr::new(
+            (s[1] >> 8) as u8,
+            (s[1] & 0xff) as u8,
+            (s[2] >> 8) as u8,
+            (s[2] & 0xff) as u8,
+        );
+        return is_restricted_ipv4(v4, allow_loopback);
+    }
+    Ok(())
 }

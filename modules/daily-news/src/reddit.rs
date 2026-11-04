@@ -7,8 +7,11 @@ use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
 use serde_json::Value;
 use std::collections::HashMap;
 
-const DEFAULT_REDDIT_USER_AGENT: &str =
-    concat!("ToolcaseGateway-DailyNews/", env!("CARGO_PKG_VERSION"), " (by /u/toolcase)");
+const DEFAULT_REDDIT_USER_AGENT: &str = concat!(
+    "ToolcaseGateway-DailyNews/",
+    env!("CARGO_PKG_VERSION"),
+    " (by /u/toolcase)"
+);
 
 #[derive(Debug, Clone)]
 pub struct RedditFeedProvider {

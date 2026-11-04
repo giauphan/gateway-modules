@@ -1,7 +1,7 @@
 # Daily News & Content Discovery Service (`daily-news`)
 ## Comprehensive Flow & Architecture Specification
 
-**Module Version**: 1.5.1  
+**Module Version**: 1.6.1  
 **Implementation**: 100% Native Rust (Zero Python, Zero Async Runtimes)  
 **Protocol**: `stdio-stream` JSON-RPC over Standard Input/Output  
 **Mount Namespace**: `/custom/daily-news/*`  
@@ -207,7 +207,10 @@ Implements a synchronous, non-panicking RESP client over `std::net::TcpStream` w
 - Parses JSON payloads or text entries into `RawNewsItem`, extracting timestamps from Redis stream IDs (`<timestamp_ms>-<seq>`).
 
 ### 4.4 Upstream NewsNow Ingestion (`fetcher.rs`)
-Queries upstream aggregators via `/api/s?id={source}`. If the source is `hackernews`, parses items and enriches them with authoritative IDs from Hacker News.
+Queries upstream instances of [newsnext/newsnow](https://github.com/newsnext/newsnow) via `GET /api/s?id={source}`.
+- **Contract Compatibility**: Directly maps NewsNow's JSON response (`updatedTime`, `items: [{ id, title, url, extra }]`) into `RawNewsItem`.
+- **Supported Feed Channels**: Pulls trending feeds from `github`, `producthunt`, `hackernews`, and other platforms registered in the upstream instance.
+- **Enrichment & Tracking**: Item IDs are namespaced as `newsnow_{source}_{item_id}`. When the source is `hackernews`, items are automatically cross-referenced with Firebase IDs for author, comment, and discussion tree enrichment.
 
 ---
 

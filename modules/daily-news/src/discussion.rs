@@ -6,7 +6,6 @@
 use crate::domain::{extract_hn_item_id, format_utc_timestamp};
 use crate::hn::fetch_hn_discussion_thread;
 use crate::ports::DiscussionFetcherPort;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const DEFAULT_ARCTIC_BASE_URL: &str = "https://arctic-shift.photon-reddit.com";
@@ -40,32 +39,7 @@ impl DiscussionFetcherPort for LiveDiscussionFetcher {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DiscussionComment {
-    pub id: String,
-    pub author: Option<String>,
-    pub body: String,
-    pub score: i64,
-    pub created_utc: u64,
-    pub created_at: String,
-    pub permalink: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub replies: Vec<DiscussionComment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DiscussionThread {
-    pub id: String,
-    pub subreddit: Option<String>,
-    pub title: Option<String>,
-    pub author: Option<String>,
-    pub permalink: String,
-    pub url: Option<String>,
-    pub selftext: Option<String>,
-    pub score: i64,
-    pub num_comments: i64,
-    pub comments: Vec<DiscussionComment>,
-}
+pub use crate::domain::{DiscussionComment, DiscussionThread};
 
 /// Extracts Reddit post ID from full URL, shortlink, or prefixed ID.
 pub fn extract_post_id(url_or_id: &str) -> Option<String> {

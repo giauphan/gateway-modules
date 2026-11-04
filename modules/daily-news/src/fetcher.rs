@@ -43,7 +43,10 @@ impl LiveFeedFetcher {
         let val: Value = match crate::arctic::http_agent()
             .get(&endpoint)
             .header("Accept", "application/json")
-            .header("User-Agent", concat!("toolcase-daily-news/", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                concat!("toolcase-daily-news/", env!("CARGO_PKG_VERSION")),
+            )
             .call()
         {
             Ok(res) => res.into_body().read_json().unwrap_or_default(),
@@ -181,11 +184,14 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
             .map(clean_html_text)
             .filter(|s| !s.is_empty());
 
-        let summary = raw_desc
-            .clone()
-            .or_else(|| raw_body.clone())
-            .unwrap_or_else(|| format!("{title} ({publisher})"));
-        let body = raw_body.or_else(|| Some(summary.clone()));
+        let has_full_body = raw_body.is_some();
+        let body = raw_body;
+        let summary = raw_desc.or_else(|| body.clone());
+        let origin = if has_full_body {
+            crate::domain::ContentOrigin::Article
+        } else {
+            crate::domain::ContentOrigin::HeadlineOnly
+        };
 
         let mut item = RawNewsItem::new(
             format!("newsnow_{source}_{item_id}"),
@@ -194,13 +200,19 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
             pub_timestamp,
         );
         item.publisher = Some(publisher);
-        item.author = author;
-        item.description = Some(summary.clone());
+        item.author = author.clone();
+        item.submission_author = author;
+        item.description = summary.clone();
         item.body = body;
         item.discussion_url = disc_url;
         item.content_kind = Some("news".to_string());
+        item.content_origin = origin;
+        item.published_at_kind = crate::domain::PublishedAtKind::FeedObserved;
         item.evidence.hook = Some(title);
-        item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
+        item.hook_origin = Some("raw_headline".to_string());
+        if has_full_body {
+            item.evidence.evidence_excerpt = summary.map(|s| s.chars().take(280).collect());
+        }
         item.tags = vec![source.to_string()];
         item.extra = extra;
         items.push(item);
@@ -359,11 +371,12 @@ mod tests {
             Some("https://news.ycombinator.com/item?id=50346981")
         );
         assert_eq!(item.content_kind.as_deref(), Some("news"));
-        assert!(item
-            .description
-            .as_deref()
-            .unwrap()
-            .contains("alice: Love the serif typography"));
+        assert!(item.body.is_none());
+        assert!(item.description.is_none());
+        assert!(item.discussion.is_some());
+        let disc = item.discussion.unwrap();
+        assert_eq!(disc.comments.len(), 2);
+        assert!(disc.comments[0].text.contains("Love the serif typography"));
         assert_eq!(item.extra["score"], 142);
         assert_eq!(item.extra["comments"], 38);
     }
@@ -376,6 +389,7 @@ mod tests {
                 "id": 50346981,
                 "title": "Show HN: Hacker Times",
                 "url": "https://news.ycombinator.com/item?id=50346981",
+                "body": "Full article body about Hacker Times.",
                 "extra": {
                     "info": "120 points by ny_author",
                     "by": "ny_author"
@@ -388,7 +402,10 @@ mod tests {
         assert_eq!(item.id, "newsnow_hackernews_50346981");
         assert_eq!(item.author.as_deref(), Some("ny_author"));
         assert_eq!(item.description.as_deref(), Some("120 points by ny_author"));
-        assert_eq!(item.body.as_deref(), Some("120 points by ny_author"));
+        assert_eq!(
+            item.body.as_deref(),
+            Some("Full article body about Hacker Times.")
+        );
         assert_eq!(
             item.discussion_url.as_deref(),
             Some("https://news.ycombinator.com/item?id=50346981")

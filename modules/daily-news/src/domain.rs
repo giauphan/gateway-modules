@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub use crate::date::*;
+pub use crate::research_readiness::*;
 pub use crate::url::*;
 
 fn default_newsnow_url() -> String {
@@ -206,6 +207,16 @@ pub struct RawProvenance {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
+impl Default for RawProvenance {
+    fn default() -> Self {
+        Self {
+            source_id: String::new(),
+            source_feed: "daily-news".to_string(),
+            extra: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawNewsItem {
     pub id: String,
@@ -234,6 +245,26 @@ pub struct RawNewsItem {
     pub evidence: StoryboardEvidence,
     #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub content_origin: ContentOrigin,
+    #[serde(default)]
+    pub published_at_kind: PublishedAtKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion: Option<DiscussionPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<PrimarySourceEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<ClaimEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_evidence: Vec<VisualEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_readiness: Option<ResearchReadiness>,
 }
 
 impl RawNewsItem {
@@ -259,6 +290,16 @@ impl RawNewsItem {
             updated_at: None,
             evidence: StoryboardEvidence::default(),
             extra: HashMap::new(),
+            content_origin: ContentOrigin::Unknown,
+            published_at_kind: PublishedAtKind::Unknown,
+            submission_author: None,
+            article_author: None,
+            hook_origin: None,
+            discussion: None,
+            primary_source: None,
+            claims: Vec::new(),
+            visual_evidence: Vec::new(),
+            research_readiness: None,
         }
     }
 }
@@ -309,6 +350,30 @@ pub struct NormalizedCandidate {
     pub independent_fact_check: Option<serde_json::Value>,
     #[serde(default)]
     pub scoring: Option<CandidateScoring>,
+    #[serde(default)]
+    pub content_origin: ContentOrigin,
+    #[serde(default = "default_published_at_kind")]
+    pub published_at_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion: Option<DiscussionPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<PrimarySourceEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<ClaimEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_evidence: Vec<VisualEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_readiness: Option<ResearchReadiness>,
+}
+
+fn default_published_at_kind() -> String {
+    "unknown".to_string()
 }
 
 fn default_language() -> String {
@@ -330,4 +395,31 @@ pub struct DiscoveryResult {
     pub reason: Option<String>,
     #[serde(default)]
     pub diagnostics: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiscussionComment {
+    pub id: String,
+    pub author: Option<String>,
+    pub body: String,
+    pub score: i64,
+    pub created_utc: u64,
+    pub created_at: String,
+    pub permalink: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<DiscussionComment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiscussionThread {
+    pub id: String,
+    pub subreddit: Option<String>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub permalink: String,
+    pub url: Option<String>,
+    pub selftext: Option<String>,
+    pub score: i64,
+    pub num_comments: i64,
+    pub comments: Vec<DiscussionComment>,
 }

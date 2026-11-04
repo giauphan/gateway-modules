@@ -137,7 +137,7 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
     let parsed: Value = serde_json::from_str(raw).unwrap_or_else(|_| {
         serde_json::json!({
             "title": raw,
-            "body": raw
+            "description": raw
         })
     });
 
@@ -165,27 +165,50 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         url
     };
 
-    let pub_at = obj
+    let (pub_at, pub_kind) = if let Some(p) = obj
         .get("published_at")
         .or_else(|| obj.get("published_at_utc"))
-        .or_else(|| obj.get("created_at"))
         .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            if let Some((ts_ms_str, _)) = msg_id.split_once('-') {
-                if let Ok(ts_ms) = ts_ms_str.parse::<u64>() {
-                    return format_utc_timestamp(ts_ms / 1000);
-                }
-            }
-            "2026-11-02T11:00:00+00:00".to_string()
-        });
+    {
+        (
+            p.to_string(),
+            crate::domain::PublishedAtKind::ArticlePublication,
+        )
+    } else if let Some(p) = obj.get("created_at").and_then(|v| v.as_str()) {
+        (p.to_string(), crate::domain::PublishedAtKind::FeedObserved)
+    } else if let Some((ts_ms_str, _)) = msg_id.split_once('-') {
+        if let Ok(ts_ms) = ts_ms_str.parse::<u64>() {
+            (
+                format_utc_timestamp(ts_ms / 1000),
+                crate::domain::PublishedAtKind::FeedObserved,
+            )
+        } else {
+            (
+                "2026-11-02T11:00:00+00:00".to_string(),
+                crate::domain::PublishedAtKind::Unknown,
+            )
+        }
+    } else {
+        (
+            "2026-11-02T11:00:00+00:00".to_string(),
+            crate::domain::PublishedAtKind::Unknown,
+        )
+    };
 
-    let body = obj
-        .get("body")
-        .or_else(|| obj.get("description"))
+    let explicit_body = obj.get("body").and_then(|v| v.as_str()).map(str::to_string);
+    let fallback_text = obj
+        .get("description")
         .or_else(|| obj.get("summary"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
+
+    let origin = if explicit_body.is_some() {
+        crate::domain::ContentOrigin::Article
+    } else {
+        crate::domain::ContentOrigin::HeadlineOnly
+    };
+
+    let body = explicit_body.or(fallback_text);
 
     let disc_url = obj
         .get("discussion_url")
@@ -223,6 +246,16 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         updated_at: None,
         evidence: StoryboardEvidence::from_json_map(obj),
         extra,
+        content_origin: origin,
+        published_at_kind: pub_kind,
+        submission_author: None,
+        article_author: None,
+        hook_origin: None,
+        discussion: None,
+        primary_source: None,
+        claims: Vec::new(),
+        visual_evidence: Vec::new(),
+        research_readiness: None,
     })
 }
 

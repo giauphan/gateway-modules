@@ -216,12 +216,17 @@ impl CandidateScorer {
             .as_deref()
             .or(candidate.description.as_deref())
             .unwrap_or("");
-        let fact_density = self.score_fact_density(&candidate.title, body_str);
-        let visual = self.score_visualizability(
-            &candidate.title,
-            body_str,
-            candidate.image_url.is_some() || candidate.discussion_url.is_some(),
-        );
+        let fact_density = if candidate.content_origin == crate::domain::ContentOrigin::HeadlineOnly
+            || candidate.content_origin == crate::domain::ContentOrigin::Discussion
+            || candidate.content_origin == crate::domain::ContentOrigin::Unknown
+        {
+            0.2
+        } else {
+            self.score_fact_density(&candidate.title, body_str)
+        };
+        let has_genuine_visual =
+            candidate.image_url.is_some() || !candidate.visual_evidence.is_empty();
+        let visual = self.score_visualizability(&candidate.title, body_str, has_genuine_visual);
 
         let interest = {
             let kw_score = self.score_audience_interest(&candidate.title, body_str);
@@ -243,7 +248,25 @@ impl CandidateScorer {
             }
         };
 
-        let feasibility = 1.0;
+        let feasibility = if let Some(ref readiness) = candidate.research_readiness {
+            match readiness.status {
+                crate::domain::ReadinessStatus::VideoReady => 1.0,
+                crate::domain::ReadinessStatus::NeedsVerification => 0.8,
+                crate::domain::ReadinessStatus::NeedsResearch => 0.6,
+                crate::domain::ReadinessStatus::NeedsSource => 0.3,
+                crate::domain::ReadinessStatus::NeedsVisualEvidence => 0.5,
+                crate::domain::ReadinessStatus::Discovered => 0.4,
+                crate::domain::ReadinessStatus::Rejected => 0.0,
+            }
+        } else if candidate.primary_source.is_some() {
+            0.8
+        } else if candidate.content_origin == crate::domain::ContentOrigin::HeadlineOnly
+            || candidate.content_origin == crate::domain::ContentOrigin::Unknown
+        {
+            0.4
+        } else {
+            0.6
+        };
         let total = (freshness * 0.30)
             + (publisher * 0.20)
             + (fact_density * 0.20)

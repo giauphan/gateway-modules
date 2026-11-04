@@ -4,8 +4,7 @@
 //! Core application services depend on these traits, while external
 //! HTTP fetchers and storage adapters implement them.
 
-use crate::discussion::DiscussionThread;
-use crate::domain::{ModuleConfig, NormalizedCandidate, RawNewsItem};
+use crate::domain::{DiscussionThread, ModuleConfig, NormalizedCandidate, RawNewsItem};
 
 pub trait DiscussionFetcherPort: Send + Sync {
     /// Inspect a discussion thread (Reddit or Hacker News) by URL or item ID.
@@ -14,6 +13,20 @@ pub trait DiscussionFetcherPort: Send + Sync {
         url_or_id: &str,
         limit: Option<usize>,
     ) -> Result<DiscussionThread, String>;
+}
+
+/// In-memory no-op discussion fetcher used for testing and decoupled service construction.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopDiscussionFetcher;
+
+impl DiscussionFetcherPort for NoopDiscussionFetcher {
+    fn fetch_thread(
+        &self,
+        _url_or_id: &str,
+        _limit: Option<usize>,
+    ) -> Result<DiscussionThread, String> {
+        Err("No discussion fetcher configured".to_string())
+    }
 }
 
 pub trait FeedFetcherPort: Send + Sync {
@@ -47,4 +60,9 @@ pub trait StoragePort: Send + Sync {
 
     /// Retrieve cached candidates.
     fn get_cached_candidates(&self) -> Vec<NormalizedCandidate>;
+}
+
+pub trait SourceCapturePort: Send + Sync {
+    /// Capture an external primary source URL into an immutable, hashed snapshot.
+    fn capture_source(&self, url: &str) -> Result<crate::domain::PrimarySourceEvidence, String>;
 }

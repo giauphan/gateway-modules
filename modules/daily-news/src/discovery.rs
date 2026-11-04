@@ -2,9 +2,10 @@
 //!
 //! Enforces deterministic date range validation and fail-closed policy gating.
 
-use crate::date::parse_boundary_datetime;
-use crate::domain::{DiscoveryResult, NormalizedCandidate};
+use crate::date::{parse_boundary_datetime, parse_iso_to_epoch};
+use crate::domain::{DiscoveryResult, ModuleConfig, NormalizedCandidate};
 use serde_json::json;
+use std::collections::HashSet;
 
 pub fn matches_topics(cand: &NormalizedCandidate, topic_filter: &[String]) -> bool {
     let cand_topic = cand.topic_family.to_lowercase();
@@ -88,4 +89,43 @@ pub fn build_fail_closed_result(
         reason: Some(reason),
         diagnostics: json!({ "tier_3_fail_closed": true }),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn is_candidate_eligible(
+    cand: &NormalizedCandidate,
+    cfg: &ModuleConfig,
+    from_epoch: Option<u64>,
+    cutoff: u64,
+    upper_bound: u64,
+    seen_content_hashes: &mut HashSet<String>,
+    seen_title_hashes: &mut HashSet<String>,
+    topics: Option<&[String]>,
+) -> bool {
+    let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
+    let effective_epoch = parse_iso_to_epoch(effective_ts).unwrap_or(0);
+
+    if effective_epoch > upper_bound {
+        return false;
+    }
+
+    let enforce_latest = cfg.require_latest_news || from_epoch.is_some();
+    if effective_epoch < cutoff && (enforce_latest || !cand.is_evergreen) {
+        return false;
+    }
+
+    if !seen_content_hashes.insert(cand.content_hash.clone()) {
+        return false;
+    }
+    if !seen_title_hashes.insert(cand.title_hash.clone()) {
+        return false;
+    }
+
+    if let Some(topic_filter) = topics {
+        if !matches_topics(cand, topic_filter) {
+            return false;
+        }
+    }
+
+    true
 }

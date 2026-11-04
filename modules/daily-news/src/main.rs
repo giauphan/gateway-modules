@@ -3,136 +3,20 @@
 //! Frameworks & Drivers layer: Reads JSON requests from stdin, dispatches
 //! to application service, and writes JSON responses to stdout.
 
+use daily_news::discussion::LiveDiscussionFetcher;
 use daily_news::fetcher::LiveFeedFetcher;
 use daily_news::redis::RedisFeedProvider;
+use daily_news::rpc::*;
 use daily_news::scoring::CandidateScorer;
 use daily_news::service::DailyNewsService;
+use daily_news::source_capture::HttpSourceCaptureAdapter;
 use daily_news::storage::FileStorageAdapter;
 use daily_news::ui::render_dashboard_html;
 use daily_news::{RawNewsItem, StoragePort};
 use serde_json::{json, Value};
 use std::io::{self, BufRead};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-fn make_json_resp(status: u16, data: Value) -> Value {
-    json!({
-        "status": status,
-        "headers": {
-            "content-type": "application/json",
-            "x-module-engine": "rust-native"
-        },
-        "body": serde_json::to_string(&data).unwrap_or_default()
-    })
-}
-
-fn make_html_resp(status: u16, html: &str) -> Value {
-    json!({
-        "status": status,
-        "headers": {
-            "content-type": "text/html; charset=utf-8",
-            "x-module-engine": "rust-native"
-        },
-        "body": html
-    })
-}
-
-fn extract_topics(body: &Value) -> Option<Vec<String>> {
-    if let Some(arr) = body["topics"].as_array() {
-        let items: Vec<String> = arr
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect();
-        if !items.is_empty() {
-            return Some(items);
-        }
-    }
-    body["topics"]
-        .as_str()
-        .or_else(|| body["topic"].as_str())
-        .and_then(|s| {
-            let items: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(items)
-            }
-        })
-}
-
-fn extract_sources(body: &Value) -> Option<Vec<String>> {
-    if let Some(arr) = body["sources"].as_array().or_else(|| body["source"].as_array()) {
-        let items: Vec<String> = arr
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect();
-        if !items.is_empty() {
-            return Some(items);
-        }
-    }
-    body["sources"]
-        .as_str()
-        .or_else(|| body["source"].as_str())
-        .and_then(|s| {
-            let items: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(items)
-            }
-        })
-}
-
-fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {
-    let from = body["from_date"]
-        .as_str()
-        .or_else(|| body["since"].as_str())
-        .or_else(|| body["start_date"].as_str())
-        .or_else(|| body["from"].as_str())
-        .map(str::to_string);
-
-    let to = body["to_date"]
-        .as_str()
-        .or_else(|| body["until"].as_str())
-        .or_else(|| body["end_date"].as_str())
-        .or_else(|| body["to"].as_str())
-        .map(str::to_string);
-
-    (from, to)
-}
-
-fn parse_request_body(req: &Value, query: &str) -> Value {
-    let mut body: Value = if let Some(b) = req["body"].as_str() {
-        serde_json::from_str(b).unwrap_or_else(|_| json!({}))
-    } else if req["body"].is_object() {
-        req["body"].clone()
-    } else {
-        json!({})
-    };
-
-    if !query.is_empty() {
-        for pair in query.split('&') {
-            if let Some((k, v)) = pair.split_once('=') {
-                if body.get(k).is_none() {
-                    if let Ok(num) = v.parse::<i64>() {
-                        body[k] = json!(num);
-                    } else {
-                        body[k] = json!(v);
-                    }
-                }
-            }
-        }
-    }
-    body
-}
 
 fn handle_health(service: &DailyNewsService) -> Value {
     let cfg = service.get_config();
@@ -306,6 +190,77 @@ fn handle_discussion(service: &DailyNewsService, body: &Value) -> Value {
     }
 }
 
+fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
+    let url = body["url"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| body["source_url"].as_str().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            body["canonical_url"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or("");
+
+    if url.trim().is_empty() {
+        return make_json_resp(
+            400,
+            json!({ "error": "Missing required parameter: 'url', 'source_url', or 'canonical_url'" }),
+        );
+    }
+
+    match service.capture_primary_source(url) {
+        Ok(evidence) => make_json_resp(200, json!(evidence)),
+        Err(e) => make_json_resp(400, json!({ "error": e })),
+    }
+}
+
+fn handle_evidence(base_dir: &Path, body: &Value) -> Value {
+    let sha256_raw = body["sha256"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| body["hash"].as_str().filter(|s| !s.trim().is_empty()))
+        .unwrap_or("")
+        .trim();
+
+    if sha256_raw.is_empty()
+        || sha256_raw.len() != 64
+        || !sha256_raw.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return make_json_resp(
+            400,
+            json!({ "error": "Invalid or missing sha256 hash parameter (expected 64 hex characters)" }),
+        );
+    }
+    let sha256 = sha256_raw.to_ascii_lowercase();
+
+    let evidence_path = base_dir
+        .join(".state")
+        .join("evidence")
+        .join(format!("{sha256}.txt"));
+    if !evidence_path.exists() {
+        return make_json_resp(
+            404,
+            json!({ "error": format!("Evidence snapshot not found for sha256: {sha256}") }),
+        );
+    }
+
+    match std::fs::read_to_string(&evidence_path) {
+        Ok(content) => make_json_resp(
+            200,
+            json!({
+                "sha256": sha256,
+                "ref": format!(".state/evidence/{sha256}.txt"),
+                "content": content
+            }),
+        ),
+        Err(e) => make_json_resp(
+            500,
+            json!({ "error": format!("Failed to read snapshot file: {e}") }),
+        ),
+    }
+}
+
 fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Value {
     if method == "POST" {
         let mut cfg = service.get_config();
@@ -319,7 +274,7 @@ fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Valu
     make_json_resp(200, json!(current))
 }
 
-fn handle_request(req: Value, service: &DailyNewsService) -> Value {
+fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Value {
     let raw_path = req["path"].as_str().unwrap_or("");
     let (path, query) = match raw_path.split_once('?') {
         Some((p, q)) => (p.trim_end_matches('/'), q),
@@ -334,69 +289,50 @@ fn handle_request(req: Value, service: &DailyNewsService) -> Value {
         .or_else(|| body["count"].as_u64())
         .unwrap_or(5) as usize;
 
-    if path.ends_with("/health") {
-        return handle_health(service);
-    }
-    if path.ends_with("/models") {
-        return handle_models();
-    }
-    if path.ends_with("/ui") || path.ends_with("/custom/daily-news") {
-        return handle_ui(service, limit);
-    }
-    if path.ends_with("/chat/completions") {
-        return handle_chat_completions(service, limit);
-    }
-    if path.ends_with("/api/v1/discover") {
-        return handle_discover(service, &body, limit);
-    }
-    if path.ends_with("/api/v1/candidates") {
-        return handle_candidates(service, &method, &body, limit);
-    }
-    if path.ends_with("/api/v1/feed") {
-        return handle_feed(service, &body, limit);
-    }
-    if path.ends_with("/api/v1/discussion") {
-        return handle_discussion(service, &body);
-    }
-    if path.ends_with("/api/v1/consume") {
-        return handle_consume(service, &body);
-    }
-    if path.ends_with("/api/v1/config") {
-        return handle_config(service, &method, &body);
-    }
+    let route = path.strip_prefix("/custom/daily-news").unwrap_or(path);
 
-    make_json_resp(
-        404,
-        json!({ "error": format!("Route not found: {raw_path}") }),
-    )
+    match route {
+        "/health" | "/api/v1/health" => handle_health(service),
+        "/models" | "/api/v1/models" => handle_models(),
+        "" | "/ui" => handle_ui(service, limit),
+        "/chat/completions" | "/v1/chat/completions" => handle_chat_completions(service, limit),
+        "/api/v1/discover" | "/discover" => handle_discover(service, &body, limit),
+        "/api/v1/candidates" | "/candidates" => handle_candidates(service, &method, &body, limit),
+        "/api/v1/feed" | "/feed" => handle_feed(service, &body, limit),
+        "/api/v1/discussion" | "/discussion" => handle_discussion(service, &body),
+        "/api/v1/enrich" | "/enrich" | "/api/v1/capture" | "/capture" => {
+            handle_enrich(service, &body)
+        }
+        "/api/v1/evidence" | "/evidence" => handle_evidence(base_dir, &body),
+        "/api/v1/consume" | "/consume" => handle_consume(service, &body),
+        "/api/v1/config" | "/config" => handle_config(service, &method, &body),
+        _ => make_json_resp(
+            404,
+            json!({ "error": format!("Route not found: {raw_path}") }),
+        ),
+    }
 }
 
 fn main() {
     let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let storage = Arc::new(FileStorageAdapter::new(&base_dir));
     let initial_config = storage.load_config();
-    let redis_provider = if initial_config.redis_enabled {
-        Some(RedisFeedProvider::new(
+    let redis_provider = initial_config.redis_enabled.then(|| {
+        RedisFeedProvider::new(
             &initial_config.redis_url,
             &initial_config.redis_key,
             &initial_config.redis_type,
-        ))
-    } else {
-        None
-    };
-
-    let reddit_provider = if initial_config.reddit_enabled {
-        Some(
-            daily_news::reddit::RedditFeedProvider::new(initial_config.reddit_subreddits.clone())
-                .with_credentials(
-                    initial_config.reddit_client_id.clone(),
-                    initial_config.reddit_client_secret.clone(),
-                )
-                .with_base_url(initial_config.reddit_base_url.clone()),
         )
-    } else {
-        None
-    };
+    });
+
+    let reddit_provider = initial_config.reddit_enabled.then(|| {
+        daily_news::reddit::RedditFeedProvider::new(initial_config.reddit_subreddits.clone())
+            .with_credentials(
+                initial_config.reddit_client_id.clone(),
+                initial_config.reddit_client_secret.clone(),
+            )
+            .with_base_url(initial_config.reddit_base_url.clone())
+    });
 
     let mut fetcher = LiveFeedFetcher::new(Some(initial_config.newsnow_url));
     if let Some(rp) = redis_provider {
@@ -407,7 +343,10 @@ fn main() {
     }
     let fetcher = Arc::new(fetcher);
     let scorer = CandidateScorer::default();
-    let service = DailyNewsService::new(fetcher, storage, scorer);
+    let capturer = Arc::new(HttpSourceCaptureAdapter::new(&base_dir));
+    let service = DailyNewsService::new(fetcher, storage, scorer)
+        .with_discussion_fetcher(Arc::new(LiveDiscussionFetcher::new()))
+        .with_source_capture(capturer);
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -430,7 +369,32 @@ fn main() {
             }
         };
 
-        let resp = handle_request(req, &service);
+        let resp = handle_request(req, &service, &base_dir);
         println!("{}", serde_json::to_string(&resp).unwrap_or_default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handle_evidence_uppercase_hash_normalized() {
+        let tmp = std::env::temp_dir().join("test_evidence_uppercase");
+        let evidence_dir = tmp.join(".state").join("evidence");
+        std::fs::create_dir_all(&evidence_dir).unwrap();
+        let sample_hash = "c".repeat(64);
+        let file_path = evidence_dir.join(format!("{sample_hash}.txt"));
+        std::fs::write(&file_path, "sample snapshot content").unwrap();
+
+        let uppercase_hash = "C".repeat(64);
+        let body = json!({ "sha256": uppercase_hash });
+        let resp = handle_evidence(&tmp, &body);
+        assert_eq!(resp["status"], 200);
+        let resp_body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(resp_body["sha256"], sample_hash);
+        assert_eq!(resp_body["content"], "sample snapshot content");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

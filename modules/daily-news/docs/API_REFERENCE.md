@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.5.1).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.6.1).
 
 ---
 
@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:28130/custom/daily-news/health
 {
   "status": "healthy",
   "module": "daily-news",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "engine": "rust-native",
   "consumed_count": 0,
   "cached_candidates": 5,
@@ -384,6 +384,52 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/config \
     "reddit_client_secret": null,
     "reddit_base_url": null
   }
+}
+```
+
+### 3.11. Primary Source Capture & Enrichment
+Safely fetches external primary source articles, enforces strict SSRF checks at each redirect hop, computes cryptographic SHA-256 signatures of actual saved bytes, and stores content-addressed snapshots in `.state/evidence/`.
+
+- **Route**: `POST /api/v1/enrich` or `POST /api/v1/capture`
+- **Gateway**: `/custom/daily-news/api/v1/enrich`
+
+#### Example Request
+```bash
+curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/enrich \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://honnibal.dev/blog/post"}'
+```
+
+#### Example Response (200 OK)
+```json
+{
+  "url": "https://honnibal.dev/blog/post",
+  "fetch_status": "SUCCESS",
+  "content_type": "text/html; charset=utf-8",
+  "title": "Architectural Scaling with Rust & LLMs",
+  "published_at": null,
+  "excerpt": "We demonstrated a 4x reduction in cache latency using deterministic memory management...",
+  "snapshot_ref": ".state/evidence/2bad0815c06b65dbe5d27759f1e92852a96473001e0daf2f98f32ced70444d72.txt",
+  "snapshot_sha256": "2bad0815c06b65dbe5d27759f1e92852a96473001e0daf2f98f32ced70444d72",
+  "captured_at": "2026-11-03T14:30:00Z",
+  "extraction_method": "conservative_html"
+}
+```
+
+---
+
+### 3.12. Evidence Snapshot Retrieval
+Retrieves the saved raw text/snapshot content for a given verified SHA-256 hash.
+
+- **Route**: `GET /api/v1/evidence` or `POST /api/v1/evidence`
+- **Gateway**: `/custom/daily-news/api/v1/evidence?sha256=2bad0815c06b...`
+
+#### Example Response (200 OK)
+```json
+{
+  "sha256": "2bad0815c06b65dbe5d27759f1e92852a96473001e0daf2f98f32ced70444d72",
+  "ref": ".state/evidence/2bad0815c06b65dbe5d27759f1e92852a96473001e0daf2f98f32ced70444d72.txt",
+  "content": "<!DOCTYPE html><html>...</html>"
 }
 ```
 

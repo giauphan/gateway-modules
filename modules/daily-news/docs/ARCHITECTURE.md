@@ -78,8 +78,11 @@ Every Rust source file adheres to strict modular sizing rules (target: **under 4
 | [`src/date.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/date.rs) | 160 | Domain Value Object & Math | ISO 8601 string parsing, midnight boundary calculations, epoch arithmetic. |
 | [`src/ports.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/ports.rs) | 50 | Domain Ports (Traits) | `FeedFetcherPort`, `DiscussionFetcherPort`, `StoragePort`. |
 | [`src/discovery.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/discovery.rs) | 91 | Application Logic | Cascade bounds validation, topic matching, fail-closed result construction. |
-| [`src/scoring.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/scoring.rs) | 321 | Domain Service | Deterministic 6-axis scoring engine, authority weighting, decay curves. |
-| [`src/service.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/service.rs) | 398 | Application Service | Tiered cascade discovery use case, candidate normalization, topic filtering. |
+| [`src/scoring.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/scoring.rs) | 344 | Domain Service | Deterministic 6-axis scoring engine, authority weighting, decay curves. |
+| [`src/research_readiness.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/research_readiness.rs) | 287 | Domain Service | Truthful research readiness evaluation, claim citation checking, video-ready gating. |
+| [`src/service.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/service.rs) | 434 | Application Service | Tiered cascade discovery use case, candidate normalization, topic filtering. |
+| [`src/source_capture.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/source_capture.rs) | 367 | Secondary Adapter (Capture) | SSRF-guarded primary source fetcher, SHA-256 snapshot storage in `.state/evidence/`. |
+| [`src/rpc.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/rpc.rs) | 125 | Primary Adapter (RPC Framing) | Stdio-stream JSON-RPC protocol framing, parameter extractors, response helpers. |
 | [`src/storage.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/storage.rs) | 198 | Secondary Adapter (Storage) | `InMemoryStorageAdapter`, `FileStorageAdapter` (persistent JSON state in `.state/`). |
 | [`src/fetcher.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/fetcher.rs) | 374 | Secondary Adapter (Feeds) | Multi-source feed orchestrator linking HN, Reddit, Redis, and NewsNow. |
 | [`src/hn.rs`](file:///home/ubuntu/gateway-modules/modules/daily-news/src/hn.rs) | 308 | Secondary Adapter (Hacker News) | Live Hacker News Firebase API client and comment enrichment. |

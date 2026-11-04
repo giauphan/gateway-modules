@@ -1,9 +1,7 @@
 //! Hacker News Firebase API client, comment enrichment, and discussion thread parser.
 
 use crate::discussion::{DiscussionComment, DiscussionThread};
-use crate::domain::{
-    clean_html_text, current_utc_timestamp, extract_domain, format_utc_timestamp, RawNewsItem,
-};
+use crate::domain::{clean_html_text, extract_domain, format_utc_timestamp, RawNewsItem};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -113,10 +111,18 @@ pub fn parse_hn_item_json(val: &Value, id: u64, top_comments: &[String]) -> Opti
         .as_str()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let pub_timestamp = val["time"]
-        .as_u64()
-        .map(format_utc_timestamp)
-        .unwrap_or_else(current_utc_timestamp);
+
+    let (pub_timestamp, pub_kind) = if let Some(t) = val["time"].as_u64().filter(|&t| t > 0) {
+        (
+            format_utc_timestamp(t),
+            crate::domain::PublishedAtKind::HnSubmission,
+        )
+    } else {
+        (
+            "1970-01-01T00:00:00+00:00".to_string(),
+            crate::domain::PublishedAtKind::Unknown,
+        )
+    };
 
     let score = val["score"].as_i64().unwrap_or(0);
     let comments_count = val["descendants"].as_i64().unwrap_or(0);
@@ -126,15 +132,51 @@ pub fn parse_hn_item_json(val: &Value, id: u64, top_comments: &[String]) -> Opti
         .map(clean_html_text)
         .filter(|s| !s.is_empty());
 
-    let summary_text = if let Some(text) = self_text {
-        text
-    } else if !top_comments.is_empty() {
-        top_comments.join(" | ")
-    } else {
-        let by_str = author.as_deref().unwrap_or("community");
-        format!(
-            "{title} — shared on Hacker News by {by_str} ({publisher}, {score} points, {comments_count} comments)."
+    let (body, description, excerpt, origin) = if let Some(text) = self_text {
+        let exc: String = text.chars().take(280).collect();
+        (
+            Some(text.clone()),
+            Some(text),
+            Some(exc),
+            crate::domain::ContentOrigin::HnSelfPost,
         )
+    } else if is_external {
+        (None, None, None, crate::domain::ContentOrigin::HeadlineOnly)
+    } else {
+        (None, None, None, crate::domain::ContentOrigin::Unknown)
+    };
+
+    let discussion = if !top_comments.is_empty() || is_external {
+        let comments = top_comments
+            .iter()
+            .enumerate()
+            .map(|(idx, comment_str)| {
+                let (auth, text) = if let Some((a, c)) = comment_str.split_once(": ") {
+                    (a.trim().to_string(), c.trim().to_string())
+                } else {
+                    ("community".to_string(), comment_str.trim().to_string())
+                };
+                crate::domain::DiscussionCommentItem {
+                    id: format!("{id}_comment_{idx}"),
+                    author: auth,
+                    text,
+                    permalink: Some(disc_url.clone()),
+                    created_at: None,
+                }
+            })
+            .collect();
+        Some(crate::domain::DiscussionPayload {
+            url: disc_url.clone(),
+            role: "community_opinion".to_string(),
+            summary: if !top_comments.is_empty() {
+                Some(top_comments.join(" | "))
+            } else {
+                None
+            },
+            comments,
+        })
+    } else {
+        None
     };
 
     let mut extra = HashMap::new();
@@ -148,15 +190,33 @@ pub fn parse_hn_item_json(val: &Value, id: u64, top_comments: &[String]) -> Opti
         Value::String(disc_url.clone()),
     );
 
-    let mut item = RawNewsItem::new(format!("hn_{id}"), orig_url, title.clone(), pub_timestamp);
+    let mut item = RawNewsItem::new(
+        format!("hn_{id}"),
+        orig_url.clone(),
+        title.clone(),
+        pub_timestamp,
+    );
     item.publisher = Some(publisher);
-    item.author = author;
-    item.description = Some(summary_text.clone());
-    item.body = Some(summary_text.clone());
+    item.author = author.clone();
+    item.submission_author = author;
+    item.article_author = None;
+    item.description = description;
+    item.body = body;
     item.discussion_url = Some(disc_url);
     item.content_kind = Some("news".to_string());
     item.evidence.hook = Some(title);
-    item.evidence.evidence_excerpt = Some(summary_text.chars().take(280).collect());
+    item.hook_origin = Some("raw_headline".to_string());
+    item.evidence.evidence_excerpt = excerpt;
+    item.discussion = discussion;
+    item.content_origin = origin;
+    item.published_at_kind = pub_kind;
+    if is_external {
+        item.primary_source = Some(crate::domain::PrimarySourceEvidence {
+            url: orig_url,
+            fetch_status: "NOT_FETCHED".to_string(),
+            ..Default::default()
+        });
+    }
     item.tags = vec!["hackernews".to_string(), "tech".to_string()];
     item.extra = extra;
     Some(item)

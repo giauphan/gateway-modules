@@ -29,6 +29,8 @@ fn test_parse_raw_entry_formats() {
         item1.discussion_url.as_deref(),
         Some("https://news.ycombinator.com/item?id=99999")
     );
+    assert_eq!(item1.content_origin, ContentOrigin::HeadlineOnly);
+    assert_eq!(item1.published_at_kind, PublishedAtKind::ArticlePublication);
 
     // 2. Stream message ID timestamp fallback (<epoch_ms>-<seq>)
     // 1730541600000 ms = 1730541600 seconds (2024-11-02 10:00:00 UTC)
@@ -37,6 +39,18 @@ fn test_parse_raw_entry_formats() {
     assert_eq!(item2.title, "Stream Update Without Explicit Timestamp");
     assert!(item2.published_at.contains("2024-11-02"));
     assert_eq!(item2.url, "redis://news:stream/1730541600000-0");
+    assert_eq!(item2.content_origin, ContentOrigin::HeadlineOnly);
+    assert_eq!(item2.published_at_kind, PublishedAtKind::FeedObserved);
+
+    // 3. Entry with explicit body and created_at
+    let raw_body = r#"{
+        "title": "Article with Real Body",
+        "body": "Full body text.",
+        "created_at": "2026-11-03T10:00:00Z"
+    }"#;
+    let item3 = parse_raw_entry(raw_body, "msg_003", "news:stream", "stream").unwrap();
+    assert_eq!(item3.content_origin, ContentOrigin::Article);
+    assert_eq!(item3.published_at_kind, PublishedAtKind::FeedObserved);
 }
 
 #[test]

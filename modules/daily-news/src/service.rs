@@ -6,13 +6,14 @@
 
 use crate::date::parse_iso_to_epoch;
 use crate::discovery::*;
-use crate::discussion::{DiscussionThread, LiveDiscussionFetcher};
 use crate::domain::{
     canonicalize_url, classify_topic_family, compute_content_hash, compute_title_hash, is_safe_url,
-    normalize_publisher, DiscoveryResult, ModuleConfig, NormalizedCandidate, RawNewsItem,
-    RawProvenance,
+    normalize_publisher, DiscoveryResult, DiscussionThread, ModuleConfig, NormalizedCandidate,
+    RawNewsItem, RawProvenance,
 };
-use crate::ports::{DiscussionFetcherPort, FeedFetcherPort, StoragePort};
+use crate::ports::{
+    DiscussionFetcherPort, FeedFetcherPort, NoopDiscussionFetcher, SourceCapturePort, StoragePort,
+};
 use crate::scoring::CandidateScorer;
 use serde_json::json;
 use std::collections::HashSet;
@@ -23,6 +24,7 @@ pub struct DailyNewsService {
     storage: Arc<dyn StoragePort>,
     scorer: CandidateScorer,
     discussion: Arc<dyn DiscussionFetcherPort>,
+    capture: Option<Arc<dyn SourceCapturePort>>,
 }
 
 impl DailyNewsService {
@@ -35,12 +37,18 @@ impl DailyNewsService {
             fetcher,
             storage,
             scorer,
-            discussion: Arc::new(LiveDiscussionFetcher::new()),
+            discussion: Arc::new(NoopDiscussionFetcher),
+            capture: None,
         }
     }
 
     pub fn with_discussion_fetcher(mut self, discussion: Arc<dyn DiscussionFetcherPort>) -> Self {
         self.discussion = discussion;
+        self
+    }
+
+    pub fn with_source_capture(mut self, capture: Arc<dyn SourceCapturePort>) -> Self {
+        self.capture = Some(capture);
         self
     }
 
@@ -50,6 +58,16 @@ impl DailyNewsService {
         limit: Option<usize>,
     ) -> Result<DiscussionThread, String> {
         self.discussion.fetch_thread(url_or_id, limit)
+    }
+
+    pub fn capture_primary_source(
+        &self,
+        url: &str,
+    ) -> Result<crate::domain::PrimarySourceEvidence, String> {
+        match self.capture {
+            Some(ref c) => c.capture_source(url),
+            None => Err("Source capture adapter is not configured".to_string()),
+        }
     }
 
     pub fn normalize_item(&self, raw: &RawNewsItem) -> Result<NormalizedCandidate, String> {
@@ -72,11 +90,9 @@ impl DailyNewsService {
         let canonical = canonicalize_url(&raw.url);
         let norm_pub = normalize_publisher(raw.publisher.as_deref());
         let disc_url = raw.discussion_url.clone().or_else(|| {
-            if raw.url.contains("news.ycombinator.com") {
-                Some(raw.url.clone())
-            } else {
-                None
-            }
+            raw.url
+                .contains("news.ycombinator.com")
+                .then(|| raw.url.clone())
         });
 
         let body_str = raw.body.as_deref().or(raw.description.as_deref());
@@ -125,6 +141,21 @@ impl DailyNewsService {
             evidence: raw.evidence.clone(),
             independent_fact_check: None,
             scoring: None,
+            content_origin: raw.content_origin,
+            published_at_kind: raw.published_at_kind.as_str().to_string(),
+            submission_author: raw.submission_author.clone().or_else(|| raw.author.clone()),
+            article_author: raw.article_author.clone(),
+            hook_origin: raw.hook_origin.clone(),
+            discussion: raw.discussion.clone(),
+            primary_source: raw.primary_source.clone(),
+            claims: raw.claims.clone(),
+            visual_evidence: raw.visual_evidence.clone(),
+            research_readiness: Some(crate::domain::evaluate_readiness(
+                raw.primary_source.as_ref(),
+                &raw.claims,
+                &raw.visual_evidence,
+                raw.content_origin,
+            )),
         })
     }
 
@@ -162,29 +193,17 @@ impl DailyNewsService {
                 continue;
             }
 
-            let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
-            let effective_epoch = parse_iso_to_epoch(effective_ts).unwrap_or(0);
-
-            if effective_epoch > upper_bound {
+            if !is_candidate_eligible(
+                &cand,
+                &cfg,
+                from_epoch,
+                cutoff,
+                upper_bound,
+                &mut seen_content_hashes,
+                &mut seen_title_hashes,
+                topics,
+            ) {
                 continue;
-            }
-
-            let enforce_latest = cfg.require_latest_news || from_epoch.is_some();
-            if effective_epoch < cutoff && (enforce_latest || !cand.is_evergreen) {
-                continue;
-            }
-
-            if !seen_content_hashes.insert(cand.content_hash.clone()) {
-                continue;
-            }
-            if !seen_title_hashes.insert(cand.title_hash.clone()) {
-                continue;
-            }
-
-            if let Some(topic_filter) = topics {
-                if !matches_topics(&cand, topic_filter) {
-                    continue;
-                }
             }
 
             unconsumed.push(cand);
@@ -275,15 +294,13 @@ impl DailyNewsService {
         if let Some(from_e) = from_epoch {
             unconsumed.retain(|c| {
                 let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
-                parse_iso_to_epoch(ts)
-                    .map(|ep| ep >= from_e)
-                    .unwrap_or(false)
+                parse_iso_to_epoch(ts).is_ok_and(|ep| ep >= from_e)
             });
         }
         if let Some(to_e) = to_epoch {
             unconsumed.retain(|c| {
                 let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
-                parse_iso_to_epoch(ts).map(|ep| ep <= to_e).unwrap_or(false)
+                parse_iso_to_epoch(ts).is_ok_and(|ep| ep <= to_e)
             });
         }
 

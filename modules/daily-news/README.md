@@ -25,7 +25,7 @@ The module is **100% Native Rust** with **zero Python dependencies**.
 
 - **100% Pure Native Rust**: Zero Python runtime, pip dependencies, or virtualenvs required.
 - **Unified Query & Body Resolution**: Accepts parameters seamlessly via URL query strings (`?limit=15`, `?from_date=2026-11-01`, `?topics=agent_tool_use`) or JSON request bodies across all routes.
-- **Multi-Source News Ingestion**: Ingests breaking stories from Hacker News Firebase API, upstream NewsNow instances, and Redis Streams (`XREVRANGE`) / Lists (`LRANGE`).
+- **Multi-Source News Ingestion**: Ingests breaking stories from Hacker News Firebase API, Reddit (OAuth, public JSON, and Arctic Shift fallback), upstream [NewsNow](https://github.com/newsnext/newsnow) instances (`/api/s?id={source}`), and Redis Streams (`XREVRANGE`) / Lists (`LRANGE`).
 - **SSRF Protection & URL Canonicalization**: Enforces strict URL sanitization, blocking private IPv4 ranges (CWE-918) and stripping tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`, `source`).
 - **Dual-Link Resolution**: Disambiguates between the content destination (`canonical_url`) and the community discussion thread (`discussion_url`).
 - **6-Beat Storyboard Engineering Contract**: Provides typed domain fields (`hook`, `viewer_question`, `symptom`, `root_cause`, `remedy`, `evidence_excerpt`, `source_snapshot`, `snapshot_sha256`) that plug directly into OpenMontage automated video generation.
@@ -70,7 +70,10 @@ modules/daily-news/
     ├── redis.rs        # Network Adapter: Native RESP Redis stream & list client
     ├── ui.rs           # Presenter Adapter: Responsive HTML dashboard presenter
     ├── lib.rs          # Library facade and module re-exports
-    └── main.rs         # Frameworks & Drivers: stdio-stream JSON-RPC event loop
+    ├── rpc.rs          # Interface Adapter: JSON-RPC stdio protocol framing & request parsing
+    ├── research_readiness.rs # Domain Service: Truthful readiness evaluation, claim citation checking
+    ├── source_capture.rs # Network Adapter: SSRF-guarded primary source capture & SHA-256 snapshot storage
+    └── main.rs         # Frameworks & Drivers: stdio-stream JSON-RPC composition root & event loop
 ```
 
 For complete architectural details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -179,10 +182,11 @@ $$\text{Score} = (W_F \times F) + (W_A \times A) + (W_D \times D) + (W_V \times 
 
 ## 8. Multi-Source Feeds & Redis Stream Ingestion
 
-The module ingests from three primary sources:
+The module ingests from four primary feed sources:
 1. **Hacker News Firebase API**: Top AI stories and discussion threads.
-2. **Upstream NewsNow Instances**: Multi-source aggregator at configurable URL.
-3. **Redis Streams (`XREVRANGE`) & Lists (`LRANGE`)**: Real-time queue ingestion via native, non-panicking synchronous RESP client over `std::net::TcpStream`.
+2. **Reddit**: Native OAuth, public JSON, and zero-key Arctic Shift fallback client.
+3. **Upstream NewsNow Instances ([newsnext/newsnow](https://github.com/newsnext/newsnow))**: Connects to upstream NewsNow services via `GET /api/s?id={source}` for hotlists across GitHub, Product Hunt, Hacker News, and other regional feeds.
+4. **Redis Streams (`XREVRANGE`) & Lists (`LRANGE`)**: Real-time queue ingestion via native, non-panicking synchronous RESP client over `std::net::TcpStream`.
 
 To enable Redis ingestion, configure in `config.json`:
 ```json

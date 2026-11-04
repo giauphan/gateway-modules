@@ -37,18 +37,31 @@ flowchart TD
 
 ---
 
-## 2. The 6-Beat Storyboard Engineering Contract
+## 2. Truthful Research Readiness & The 6-Beat Storyboard Contract
 
-Vertical AI engineering breakdowns follow a strict **6-beat storytelling structure**. The `daily-news` candidate contract provides first-class, typed domain fields (`StoryboardEvidence`) that feed directly into the OpenMontage Storyboard Director:
+Vertical AI engineering breakdowns require **truthful, evidence-backed research**. The `daily-news` module provides first-class research readiness evaluation (`ResearchReadiness`) and typed storyboard fields (`StoryboardEvidence`):
 
-| Storyboard Beat | Duration | Candidate Field | Purpose & Content |
+> [!IMPORTANT]
+> **No Autonomous Video-Ready Claims on Raw Ingestion**: Feed ingestion alone (e.g. from Hacker News or Reddit) provides headline and discussion signals. It does **not** invent primary source facts, benchmark figures, or storyboard diagnoses. Storyboard fields (`hook`, `symptom`, `root_cause`, `remedy`, `evidence_excerpt`, `viewer_question`) are strictly nullable (`Option<String>`) and must only be populated when genuine technical research or official documentation exists.
+
+| Storyboard Beat | Duration | Candidate Field | Purpose & Semantics |
 | :--- | :--- | :--- | :--- |
-| **Beat 1: The Hook** | 0s – 5s | `hook` | Pattern interrupt grabbing developer attention: *"Is your coding agent choking on 50 MCP tool definitions?"* |
-| **Beat 2: Symptom** | 5s – 15s | `symptom` | Specific, relatable developer pain: *"Context window exhausted before reasoning starts; agent loops and crashes."* |
-| **Beat 3: Root Cause** | 15s – 25s | `root_cause` | Architectural diagnosis: *"Eager tool registration dumps every available tool schema into the system prompt at startup."* |
-| **Beat 4: Technical Remedy** | 25s – 45s | `remedy` | Concrete code/architecture solution: *"Implement two-tier tool resolution: expose lookup meta-tool and lazy-load schemas on demand."* |
-| **Beat 5: Evidence Excerpt** | 45s – 55s | `evidence_excerpt` | Primary factual quote or benchmark proof from the official doc, paper, or release notes. |
+| **Beat 1: The Hook** | 0s – 5s | `hook` | Pattern interrupt grabbing developer attention (nullable; preserves `hook_origin` metadata). |
+| **Beat 2: Symptom** | 5s – 15s | `symptom` | Concrete developer pain or failure mode (nullable; never fabricated from headlines). |
+| **Beat 3: Root Cause** | 15s – 25s | `root_cause` | Architectural diagnosis (nullable; left null for news that does not fit root-cause format). |
+| **Beat 4: Technical Remedy** | 25s – 45s | `remedy` | Concrete code/architecture solution (nullable). |
+| **Beat 5: Evidence Excerpt** | 45s – 55s | `evidence_excerpt` | Primary factual quote or benchmark proof from the official doc, paper, or release notes. **Community comments are strictly excluded**. |
 | **Beat 6: Viewer Question / CTA**| 55s – 65s | `viewer_question` | Engaging closing prompt prompting community discussion in comments. |
+
+### Research Readiness Gate (`research_readiness`)
+
+Before any candidate can be consumed by the automated vertical video pipeline, it must pass the research readiness evaluation (`evaluate_readiness()`):
+
+1. **`NEEDS_SOURCE`**: External primary source article has not been fetched or verified.
+2. **`NEEDS_RESEARCH`**: Primary source captured, but technical claims lack exact traceable locators or citations.
+3. **`NEEDS_VERIFICATION`**: Claims are cited, but independent verification has not been performed (`NOT_RUN`).
+4. **`NEEDS_VISUAL_EVIDENCE`**: Claims verified, but visual proof assets (architecture diagrams, code snippets, benchmarks) are missing.
+5. **`VIDEO_READY`**: Satisfies all gates: verified primary source snapshot matching SHA-256, source-supported claims with exact locators, verified independent checks, and visual proof assets.
 
 ### Field Structure in Candidates
 Because `daily-news` utilizes `#[serde(flatten)] pub evidence: StoryboardEvidence`, all 6-beat fields serialize at the root of each candidate object in `daily_candidates.json`:
