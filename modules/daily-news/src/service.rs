@@ -461,4 +461,14 @@ impl DailyNewsService {
     pub fn cached_candidates_count(&self) -> usize {
         self.storage.get_cached_candidates().len()
     }
+
+    pub fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
+        self.storage.get_candidate(candidate_id)
+    }
+
+    pub fn read_snapshot_text(&self, hash_or_ref: &str) -> Option<String> {
+        self.capture
+            .as_ref()
+            .and_then(|c| c.read_snapshot_text(hash_or_ref))
+    }
 }

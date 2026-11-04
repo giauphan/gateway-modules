@@ -160,8 +160,13 @@ fn handle_feed(service: &DailyNewsService, body: &Value, limit: usize) -> Value 
 }
 
 fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
-    let ids: Vec<String> = body["candidate_ids"].as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+    let ids: Vec<String> = body["candidate_ids"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .or_else(|| body["candidate_id"].as_str().map(|s| vec![s.to_string()]))
         .unwrap_or_default();
 
@@ -199,7 +204,10 @@ fn handle_capture(service: &DailyNewsService, body: &Value) -> Value {
         .or_else(|| extract_url("canonical_url"))
         .unwrap_or("");
     if url.is_empty() {
-        return make_json_resp(400, json!({ "error": "Missing required parameter: 'url', 'source_url', or 'canonical_url'" }));
+        return make_json_resp(
+            400,
+            json!({ "error": "Missing required parameter: 'url', 'source_url', or 'canonical_url'" }),
+        );
     }
     match service.capture_primary_source(url) {
         Ok(evidence) => make_json_resp(200, json!(evidence)),
@@ -211,7 +219,10 @@ fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
     if let Some(cid_val) = body.get("candidate_id") {
         let cid = cid_val.as_str().unwrap_or("").trim();
         if cid.is_empty() {
-            return make_json_resp(400, json!({ "error": "Missing required parameter: 'candidate_id'" }));
+            return make_json_resp(
+                400,
+                json!({ "error": "Missing required parameter: 'candidate_id'" }),
+            );
         }
         return handle_enrich_candidate(service, cid, body);
     }
@@ -227,7 +238,9 @@ fn handle_enrich_candidate(service: &DailyNewsService, candidate_id: &str, body:
     let claims = match body.get("claims").filter(|v| !v.is_null()) {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(c) => Some(c),
-            Err(e) => return make_json_resp(400, json!({ "error": format!("Invalid 'claims': {e}") })),
+            Err(e) => {
+                return make_json_resp(400, json!({ "error": format!("Invalid 'claims': {e}") }))
+            }
         },
         None => None,
     };
@@ -240,7 +253,12 @@ fn handle_enrich_candidate(service: &DailyNewsService, candidate_id: &str, body:
     let visuals = match visuals_val {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(vis) => Some(vis),
-            Err(e) => return make_json_resp(400, json!({ "error": format!("Invalid 'visual_evidence': {e}") })),
+            Err(e) => {
+                return make_json_resp(
+                    400,
+                    json!({ "error": format!("Invalid 'visual_evidence': {e}") }),
+                )
+            }
         },
         None => None,
     };
@@ -325,9 +343,33 @@ fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Va
         .or_else(|| body["count"].as_u64())
         .unwrap_or(5) as usize;
 
+    let header_tool = req.get("headers").and_then(|h| {
+        if let Some(arr) = h.as_array() {
+            for entry in arr {
+                if let Some(pair) = entry.as_array() {
+                    if pair.len() == 2 && pair[0].as_str() == Some("x-mcp-tool") {
+                        return pair[1].as_str();
+                    }
+                }
+            }
+        } else if let Some(map) = h.as_object() {
+            if let Some(v) = map.get("x-mcp-tool").and_then(|v| v.as_str()) {
+                return Some(v);
+            }
+        }
+        None
+    });
+
     let route = path.strip_prefix("/custom/daily-news").unwrap_or(path);
 
     match route {
+        "/tools/call" | "/api/v1/tools/call" => {
+            daily_news::mcp::handle_mcp_tool_request(service, base_dir, &body, header_tool)
+        }
+        "/tools/list" | "/api/v1/tools/list" => make_json_resp(
+            200,
+            json!({ "tools": daily_news::mcp::get_mcp_tools_list() }),
+        ),
         "/health" | "/api/v1/health" => handle_health(service),
         "/models" | "/api/v1/models" => handle_models(),
         "" | "/ui" => handle_ui(service, limit),
@@ -340,7 +382,10 @@ fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Va
         "/api/v1/enrich-candidate" | "/enrich-candidate" => {
             let cid = body["candidate_id"].as_str().map(str::trim).unwrap_or("");
             if cid.is_empty() {
-                make_json_resp(400, json!({ "error": "Missing required parameter: 'candidate_id'" }))
+                make_json_resp(
+                    400,
+                    json!({ "error": "Missing required parameter: 'candidate_id'" }),
+                )
             } else {
                 handle_enrich_candidate(service, cid, &body)
             }

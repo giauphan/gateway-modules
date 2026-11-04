@@ -24,7 +24,7 @@ fn test_normalize_valid_item_and_storyboard_fields() {
         "item_123",
         "https://techcrunch.com/2026/11/02/ai-agents/?utm_source=feed",
         "Anthropic Announces MCP Improvements",
-        "2026-11-02T10:00:00+00:00",
+        "2026-11-04T08:00:00+00:00",
     );
     raw.publisher = Some("TechCrunch.com".to_string());
     raw.author = Some("Jane Doe".to_string());
@@ -89,7 +89,7 @@ fn test_missing_required_fields_fails() {
         "",
         "https://example.com",
         "Title",
-        "2026-11-02T10:00:00+00:00",
+        "2026-11-04T08:00:00+00:00",
     );
     raw_empty_id.id = "".to_string();
     assert!(svc.normalize_item(&raw_empty_id).is_err());
@@ -108,13 +108,13 @@ fn test_batch_deduplication_and_date_filtering() {
         "1",
         "https://news.ycombinator.com/item?id=100",
         "New Rust Toolcase Gateway Released",
-        "2026-11-02T11:00:00+00:00",
+        "2026-11-04T08:00:00+00:00",
     );
     let raw2_duplicate = make_dummy_item(
         "2",
         "https://news.ycombinator.com/item?id=100&utm_source=twitter",
         "New Rust Toolcase Gateway Released",
-        "2026-11-02T11:05:00+00:00",
+        "2026-11-04T08:05:00+00:00",
     );
     let mut raw_evergreen = make_dummy_item(
         "eg_1",

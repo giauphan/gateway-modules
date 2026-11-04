@@ -192,7 +192,9 @@ pub fn build_substantive_research_package(
     let mut start = 0usize;
 
     for (idx, &(byte_idx, c)) in chars.iter().enumerate() {
-        let next_is_digit = chars.get(idx + 1).is_some_and(|(_, next_c)| next_c.is_ascii_digit());
+        let next_is_digit = chars
+            .get(idx + 1)
+            .is_some_and(|(_, next_c)| next_c.is_ascii_digit());
         if matches!(c, '!' | '?' | '\n') || (c == '.' && !next_is_digit) {
             let s = visible_text[start..byte_idx].trim();
             if s.len() >= 15 {
@@ -207,19 +209,49 @@ pub fn build_substantive_research_package(
     }
 
     let implemented_tokens = &[
-        "demonstrated", "implemented", "deployed", "shipped", "released",
-        "patched", "optimized", "built", "engineered", "integrated",
+        "demonstrated",
+        "implemented",
+        "deployed",
+        "shipped",
+        "released",
+        "patched",
+        "optimized",
+        "built",
+        "engineered",
+        "integrated",
     ];
 
     let proposed_tokens = &[
-        "proposes", "proposed", "proposal", "approach", "algorithm",
-        "design", "concept", "rfc", "spec", "explores", "suggests", "hypothesizes",
+        "proposes",
+        "proposed",
+        "proposal",
+        "approach",
+        "algorithm",
+        "design",
+        "concept",
+        "rfc",
+        "spec",
+        "explores",
+        "suggests",
+        "hypothesizes",
     ];
 
     let problem_tokens = &[
-        "challenge", "problem", "bottleneck", "latency", "limitation",
-        "vulnerability", "issue", "bug", "overhead", "flaw", "inefficiency",
-        "slow", "fail", "difficult", "risk",
+        "challenge",
+        "problem",
+        "bottleneck",
+        "latency",
+        "limitation",
+        "vulnerability",
+        "issue",
+        "bug",
+        "overhead",
+        "flaw",
+        "inefficiency",
+        "slow",
+        "fail",
+        "difficult",
+        "risk",
     ];
 
     let has_empirical_metric = |s: &str| -> bool {
@@ -228,8 +260,15 @@ pub fn build_substantive_research_package(
             return true;
         }
         const METRIC_WORDS: &[&str] = &[
-            "speedup", "reduction", "latency", "throughput", "measured",
-            "benchmark", "benchmarks", "overhead", "drop",
+            "speedup",
+            "reduction",
+            "latency",
+            "throughput",
+            "measured",
+            "benchmark",
+            "benchmarks",
+            "overhead",
+            "drop",
         ];
         lower.split(|c: char| !c.is_alphanumeric()).any(|w| {
             if let Some(rest) = w.strip_suffix('x') {
@@ -275,9 +314,9 @@ pub fn build_substantive_research_package(
                 && s.chars().any(|c| c.is_ascii_digit())
         })
         .or_else(|| {
-            raw_sentences.iter().find(|s| {
-                has_empirical_metric(s) && s.chars().any(|c| c.is_ascii_digit())
-            })
+            raw_sentences
+                .iter()
+                .find(|s| has_empirical_metric(s) && s.chars().any(|c| c.is_ascii_digit()))
         })
         .copied();
 
@@ -340,7 +379,12 @@ pub fn build_substantive_research_package(
     }
 
     let root_cause_tokens = &[
-        "root cause", "due to", "caused by", "flaw in", "bottleneck in", "vulnerability in",
+        "root cause",
+        "due to",
+        "caused by",
+        "flaw in",
+        "bottleneck in",
+        "vulnerability in",
     ];
     let root_cause_sentence = raw_sentences
         .iter()

@@ -234,11 +234,27 @@ pub const ACCREDITED_ORGANIZATIONS: &[&str] = &[
 ];
 
 pub const DENIED_REVIEWER_TOKENS: &[&str] = &[
-    "self", "unreviewed", "none", "anonymous", "user", "author", "unverified", "fake", "dummy", "attacker",
+    "self",
+    "unreviewed",
+    "none",
+    "anonymous",
+    "user",
+    "author",
+    "unverified",
+    "fake",
+    "dummy",
+    "attacker",
 ];
 
 pub const GENERIC_UNTRUSTED_REVIEWERS: &[&str] = &[
-    "qa team", "reviewer 1", "reviewer", "expert", "qa", "test reviewer", "auditor", "peer reviewer",
+    "qa team",
+    "reviewer 1",
+    "reviewer",
+    "expert",
+    "qa",
+    "test reviewer",
+    "auditor",
+    "peer reviewer",
 ];
 
 pub fn is_accredited_organization(org: &str) -> bool {
@@ -246,7 +262,10 @@ pub fn is_accredited_organization(org: &str) -> bool {
     if lower.is_empty() {
         return false;
     }
-    let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
     for &denied in DENIED_REVIEWER_TOKENS {
         if tokens.contains(&denied) {
             return false;
@@ -258,10 +277,24 @@ pub fn is_accredited_organization(org: &str) -> bool {
             if tokens == accred_tokens {
                 return true;
             }
-            if let Some(pos) = tokens.windows(accred_tokens.len()).position(|w| w == accred_tokens.as_slice()) {
+            if let Some(pos) = tokens
+                .windows(accred_tokens.len())
+                .position(|w| w == accred_tokens.as_slice())
+            {
                 if pos == 0 {
                     let suffix_tokens = &tokens[accred_tokens.len()..];
-                    if suffix_tokens.iter().all(|&t| matches!(t, "qa" | "lab" | "laboratory" | "team" | "division" | "security" | "review" | "audit")) {
+                    if suffix_tokens.iter().all(|&t| {
+                        matches!(
+                            t,
+                            "qa" | "lab"
+                                | "laboratory"
+                                | "team"
+                                | "division"
+                                | "security"
+                                | "review"
+                                | "audit"
+                        )
+                    }) {
                         return true;
                     }
                 }
@@ -282,7 +315,10 @@ pub fn is_accredited_reviewer(reviewer: &str) -> bool {
     }
 
     for &denied in DENIED_REVIEWER_TOKENS {
-        if lower.split(|c: char| !c.is_alphanumeric()).any(|tok| tok == denied) {
+        if lower
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|tok| tok == denied)
+        {
             return false;
         }
     }
@@ -294,7 +330,9 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     let has_id = !rec.record_id.trim().is_empty();
     let rev_lower = rec.reviewer_id.to_lowercase();
     let has_rev = !rec.reviewer_id.trim().is_empty()
-        && !rev_lower.split(|c: char| !c.is_alphanumeric()).any(|tok| DENIED_REVIEWER_TOKENS.contains(&tok));
+        && !rev_lower
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|tok| DENIED_REVIEWER_TOKENS.contains(&tok));
     let has_org = is_accredited_organization(&rec.organization);
     let valid_method = matches!(
         rec.method.trim().to_lowercase().as_str(),
@@ -340,7 +378,10 @@ fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
     if snapshot_text.contains(tr_excerpt) {
         return true;
     }
-    let norm_excerpt = tr_excerpt.split_whitespace().collect::<Vec<&str>>().join(" ");
+    let norm_excerpt = tr_excerpt
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ");
     let cleaned_snapshot = crate::source_capture::extract_main_text(snapshot_text);
     if cleaned_snapshot.contains(&norm_excerpt) {
         return true;
@@ -366,7 +407,11 @@ fn build_readiness(status: ReadinessStatus, reason: String, missing: &str) -> Re
     ResearchReadiness {
         status,
         reasons: vec![reason],
-        missing_fields: if missing.is_empty() { vec![] } else { vec![missing.to_string()] },
+        missing_fields: if missing.is_empty() {
+            vec![]
+        } else {
+            vec![missing.to_string()]
+        },
         contract_version: "2.0".to_string(),
     }
 }
@@ -420,7 +465,10 @@ fn is_evidence_ref_grounded(
     snapshot_text: Option<&str>,
     secondary_resolver: SecondaryResolver,
 ) -> bool {
-    let has_locator = r.locator.as_deref().is_some_and(|loc| !loc.trim().is_empty());
+    let has_locator = r
+        .locator
+        .as_deref()
+        .is_some_and(|loc| !loc.trim().is_empty());
     let has_excerpt = r.excerpt.trim().len() >= 10;
     let ref_str = r.source_ref.trim().to_ascii_lowercase();
     let is_primary = primary_sha == ref_str;
@@ -486,8 +534,17 @@ fn has_valid_independent_check(claims: &[ClaimEvidence]) -> bool {
 }
 
 const APPROVED_LICENSES: &[&str] = &[
-    "cc-by", "cc-by-sa", "cc0", "public-domain", "mit", "apache-2.0",
-    "fair-use", "licensed", "approved", "editorial", "authorized",
+    "cc-by",
+    "cc-by-sa",
+    "cc0",
+    "public-domain",
+    "mit",
+    "apache-2.0",
+    "fair-use",
+    "licensed",
+    "approved",
+    "editorial",
+    "authorized",
 ];
 
 pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
@@ -498,24 +555,47 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
         return false;
     }
     let lower_ref = asset_ref.to_lowercase();
-    if matches!(lower_ref.as_str(), "none" | "null" | "placeholder" | "dummy" | "test" | "untitled") {
+    if matches!(
+        lower_ref.as_str(),
+        "none" | "null" | "placeholder" | "dummy" | "test" | "untitled"
+    ) {
         return false;
     }
 
-    if asset_ref.contains("..") || asset_ref.contains('\\') || asset_ref.starts_with('/')
-        || v.source_snapshot_ref.as_deref().unwrap_or("").contains("..")
-        || v.source_snapshot_ref.as_deref().unwrap_or("").contains('\\')
+    if asset_ref.contains("..")
+        || asset_ref.contains('\\')
+        || asset_ref.starts_with('/')
+        || v.source_snapshot_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("..")
+        || v.source_snapshot_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains('\\')
     {
         return false;
     }
 
-    if lower_ref.starts_with("javascript:") || lower_ref.starts_with("data:") || lower_ref.starts_with("file:") {
+    if lower_ref.starts_with("javascript:")
+        || lower_ref.starts_with("data:")
+        || lower_ref.starts_with("file:")
+    {
         return false;
     }
 
     let valid_kind = matches!(
         v.kind.trim().to_lowercase().as_str(),
-        "chart" | "graph" | "diagram" | "photo" | "image" | "screenshot" | "video" | "demo" | "figure" | "infographic"
+        "chart"
+            | "graph"
+            | "diagram"
+            | "photo"
+            | "image"
+            | "screenshot"
+            | "video"
+            | "demo"
+            | "figure"
+            | "infographic"
     );
     if !valid_kind {
         return false;
@@ -525,17 +605,24 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
         return false;
     }
     let lower_url = source_url.to_lowercase();
-    if lower_url.starts_with("javascript:") || lower_url.starts_with("data:") || lower_url.starts_with("file:") {
+    if lower_url.starts_with("javascript:")
+        || lower_url.starts_with("data:")
+        || lower_url.starts_with("file:")
+    {
         return false;
     }
 
     let valid_prov = v.provenance_status.as_deref().is_some_and(|p| {
-        matches!(p.trim().to_lowercase().as_str(), "verified" | "authoritative" | "licensed" | "approved")
+        matches!(
+            p.trim().to_lowercase().as_str(),
+            "verified" | "authoritative" | "licensed" | "approved"
+        )
     });
 
-    let approved_lic = v.license_status.as_deref().is_some_and(|l| {
-        APPROVED_LICENSES.contains(&l.trim().to_lowercase().as_str())
-    });
+    let approved_lic = v
+        .license_status
+        .as_deref()
+        .is_some_and(|l| APPROVED_LICENSES.contains(&l.trim().to_lowercase().as_str()));
 
     let valid_checksum = v.checksum_sha256.as_deref().is_some_and(|h| {
         let trimmed = h.trim();
@@ -563,7 +650,14 @@ pub fn evaluate_readiness(
     visuals: &[VisualEvidence],
     origin: ContentOrigin,
 ) -> ResearchReadiness {
-    evaluate_readiness_with_snapshot_store(primary_source, snapshot_text, claims, visuals, origin, None)
+    evaluate_readiness_with_snapshot_store(
+        primary_source,
+        snapshot_text,
+        claims,
+        visuals,
+        origin,
+        None,
+    )
 }
 
 pub fn evaluate_readiness_with_snapshot_text(
@@ -573,7 +667,14 @@ pub fn evaluate_readiness_with_snapshot_text(
     visuals: &[VisualEvidence],
     origin: ContentOrigin,
 ) -> ResearchReadiness {
-    evaluate_readiness_with_snapshot_store(primary_source, snapshot_text, claims, visuals, origin, None)
+    evaluate_readiness_with_snapshot_store(
+        primary_source,
+        snapshot_text,
+        claims,
+        visuals,
+        origin,
+        None,
+    )
 }
 
 pub fn evaluate_readiness_with_snapshot_store(

@@ -79,7 +79,10 @@ impl LiveFeedFetcher {
     }
 }
 
-fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domain::PublishedAtKind) {
+fn resolve_newsnow_timestamp(
+    raw: &Value,
+    root: &Value,
+) -> (String, crate::domain::PublishedAtKind) {
     let candidates = [
         &raw["published_at"],
         &raw["pubDate"],
@@ -115,7 +118,10 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domai
             return (format_utc_timestamp(secs), kind);
         }
     }
-    (current_utc_timestamp(), crate::domain::PublishedAtKind::FeedObserved)
+    (
+        current_utc_timestamp(),
+        crate::domain::PublishedAtKind::FeedObserved,
+    )
 }
 
 pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNewsItem> {

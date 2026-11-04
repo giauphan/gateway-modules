@@ -54,7 +54,9 @@ pub fn render_dashboard_html(
         let disc_link = match &c.discussion_url {
             Some(d) if d != &c.canonical_url => {
                 let safe_disc_url = sanitize_url(d);
-                format!(r#"<a href="{safe_disc_url}" target="_blank" rel="noopener noreferrer" class="badge">Discussion</a>"#)
+                format!(
+                    r#"<a href="{safe_disc_url}" target="_blank" rel="noopener noreferrer" class="badge">Discussion</a>"#
+                )
             }
             _ => String::new(),
         };
@@ -221,7 +223,13 @@ mod tests {
             ..Default::default()
         };
 
-        let html = render_dashboard_html(env!("CARGO_PKG_VERSION"), "rust-native", &cfg, 1, &[malicious_candidate]);
+        let html = render_dashboard_html(
+            env!("CARGO_PKG_VERSION"),
+            "rust-native",
+            &cfg,
+            1,
+            &[malicious_candidate],
+        );
 
         // Unescaped HTML tags and javascript hrefs MUST NOT exist in rendered HTML
         assert!(!html.contains("<script>"));

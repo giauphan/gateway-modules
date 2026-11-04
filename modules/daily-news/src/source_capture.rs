@@ -43,9 +43,18 @@ impl HttpSourceCaptureAdapter {
         }
     }
 
-    pub fn with_allow_http(mut self, allow: bool) -> Self { self.allow_http_for_tests = allow; self }
-    pub fn with_max_bytes(mut self, max: usize) -> Self { self.max_bytes = max; self }
-    pub fn with_timeout(mut self, timeout: Duration) -> Self { self.timeout = timeout; self }
+    pub fn with_allow_http(mut self, allow: bool) -> Self {
+        self.allow_http_for_tests = allow;
+        self
+    }
+    pub fn with_max_bytes(mut self, max: usize) -> Self {
+        self.max_bytes = max;
+        self
+    }
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
 
     pub fn is_safe_capture_url(&self, url: &str) -> Result<(), String> {
         let trimmed = url.trim();
@@ -117,8 +126,9 @@ impl HttpSourceCaptureAdapter {
 
     fn ensure_evidence_dir(&self) -> Result<(), String> {
         if !self.evidence_dir.exists() {
-            fs::create_dir_all(&self.evidence_dir)
-                .map_err(|e| format!("Failed to create evidence dir {:?}: {e}", self.evidence_dir))?;
+            fs::create_dir_all(&self.evidence_dir).map_err(|e| {
+                format!("Failed to create evidence dir {:?}: {e}", self.evidence_dir)
+            })?;
         }
         Ok(())
     }
@@ -133,7 +143,9 @@ impl HttpSourceCaptureAdapter {
         let filename = format!("{sha256_hex}.txt");
         let path = self.evidence_dir.join(&filename);
         if !path.exists() {
-            let tmp = self.evidence_dir.join(format!("{sha256_hex}.{}.tmp", std::process::id()));
+            let tmp = self
+                .evidence_dir
+                .join(format!("{sha256_hex}.{}.tmp", std::process::id()));
             let mut file = File::create(&tmp)
                 .map_err(|e| format!("Failed to create snapshot file {tmp:?}: {e}"))?;
             file.write_all(bytes)
@@ -405,7 +417,10 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
             if bytes.len() > self.max_bytes {
                 return Ok(PrimarySourceEvidence {
                     url: current_url,
-                    fetch_status: format!("PAYLOAD_TOO_LARGE: exceeded {} byte limit", self.max_bytes),
+                    fetch_status: format!(
+                        "PAYLOAD_TOO_LARGE: exceeded {} byte limit",
+                        self.max_bytes
+                    ),
                     content_type: Some(content_type),
                     ..Default::default()
                 });
@@ -417,15 +432,19 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
             let main_text = extract_main_text(&text_content);
             let excerpt: String = main_text.chars().take(500).collect();
 
-            let (fetch_status, content_quality) = match crate::content_quality::evaluate_content_quality_with_source(
-                page_title.as_deref(),
-                &text_content,
-                &main_text,
-                Some(&current_url),
-            ) {
-                Ok(q) => ("SUCCESS".to_string(), Some(q)),
-                Err(e) => (format!("QUALITY_GATE_FAILED: {e}"), Some("QUALITY_GATE_FAILED".to_string())),
-            };
+            let (fetch_status, content_quality) =
+                match crate::content_quality::evaluate_content_quality_with_source(
+                    page_title.as_deref(),
+                    &text_content,
+                    &main_text,
+                    Some(&current_url),
+                ) {
+                    Ok(q) => ("SUCCESS".to_string(), Some(q)),
+                    Err(e) => (
+                        format!("QUALITY_GATE_FAILED: {e}"),
+                        Some("QUALITY_GATE_FAILED".to_string()),
+                    ),
+                };
 
             return Ok(PrimarySourceEvidence {
                 url: current_url,
@@ -444,7 +463,10 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
     }
 
     fn read_snapshot_text(&self, snapshot_ref: &str) -> Option<String> {
-        let hash = snapshot_ref.trim_end_matches(".txt").split('/').next_back()?;
+        let hash = snapshot_ref
+            .trim_end_matches(".txt")
+            .split('/')
+            .next_back()?;
         let path = self.evidence_dir.join(format!("{hash}.txt"));
         fs::read_to_string(path).ok()
     }

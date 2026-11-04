@@ -218,7 +218,8 @@ impl CandidateScorer {
 
     pub fn score_candidate(&self, candidate: &NormalizedCandidate) -> CandidateScoring {
         let pub_epoch = parse_iso_to_epoch(&candidate.published_at_utc).unwrap_or(0);
-        let freshness = self.score_freshness_with_kind(pub_epoch, Some(&candidate.published_at_kind));
+        let freshness =
+            self.score_freshness_with_kind(pub_epoch, Some(&candidate.published_at_kind));
         let publisher = self.score_publisher(&candidate.normalized_publisher);
 
         let body_str = candidate
@@ -321,11 +322,17 @@ impl CandidateScorer {
         candidates
     }
 
-    pub fn score_production_readiness(&self, candidate: &NormalizedCandidate) -> ProductionReadinessScoring {
+    pub fn score_production_readiness(
+        &self,
+        candidate: &NormalizedCandidate,
+    ) -> ProductionReadinessScoring {
         let verified_claims = candidate
             .claims
             .iter()
-            .filter(|c| c.verification_status == "SOURCE_SUPPORTED" || c.verification_status == "INDEPENDENTLY_VERIFIED")
+            .filter(|c| {
+                c.verification_status == "SOURCE_SUPPORTED"
+                    || c.verification_status == "INDEPENDENTLY_VERIFIED"
+            })
             .count();
 
         let independent_confirmations = candidate
@@ -355,7 +362,11 @@ impl CandidateScorer {
                     Some("verified") | Some("authoritative") | Some("licensed") | Some("approved")
                 )
             });
-            if valid { 1.0 } else { 0.5 }
+            if valid {
+                1.0
+            } else {
+                0.5
+            }
         } else {
             0.0
         };
@@ -434,7 +445,8 @@ mod tests {
         assert_eq!(score_unknown, 0.40);
 
         // Genuine article publication timestamp within 1 hour receives full 1.0
-        let score_published = scorer.score_freshness_with_kind(ref_epoch, Some("article_publication"));
+        let score_published =
+            scorer.score_freshness_with_kind(ref_epoch, Some("article_publication"));
         assert_eq!(score_published, 1.0);
     }
 }
