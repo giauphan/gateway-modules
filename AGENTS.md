@@ -80,3 +80,55 @@ This document establishes the architecture, language, and quality standards for 
     ./scripts/sync-version.sh
     ```
 
+---
+
+## 5. Module Model Context Protocol (MCP) Support for AI Agents
+
+Toolcase Gateway acts as an extensible MCP gateway, allowing modules to contribute their domain capabilities directly to AI agents in standard MCP format:
+
+- **Native MCP Tool & Resource Exposure**:
+  - Platform modules (both personal out-of-process modules and built-in providers) can expose custom tools and resources to connected AI agents.
+  - Agents connecting via any supported transport (stdio `--mcp`, Streamable HTTP `POST /mcp`, or SSE `GET /mcp/sse`) discover and call module tools identically.
+- **Manifest Tool Declarations (`tools` array)**:
+  - Modules declare custom tools in `module.json` using the `tools` array with standard JSON Schema `inputSchema`:
+    ```json
+    {
+      "name": "my-module",
+      "tools": [
+        {
+          "name": "query_items",
+          "description": "Search and retrieve items from the module catalog",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": { "type": "string", "description": "Search keyword" }
+            },
+            "required": ["query"]
+          }
+        }
+      ]
+    }
+    ```
+- **Capability-Driven Tool Synthesis**:
+  - If a module omits the explicit `tools` array, the gateway automatically synthesizes default MCP tools based on its declared `capabilities`: `chat_completions`/`chat` → `<id>__chat`, `models` → `<id>__list_models`, `decisions` → `<id>__evaluate`, `image` → `<id>__generate_image`.
+- **Namespacing & Isolation**:
+  - Module tools are aggregated and exposed under namespaced names: `<module_id>__<tool_name>` (e.g., `daily-news__fetch_latest_candidates`).
+  - Built-in administrative tools retain their canonical names (`gateway_list_modules`, `gateway_get_module_info`, etc.), preventing collisions.
+- **Execution Lifecycle & Timeouts**:
+  - Module tool executions over stdio processes have a strict 30-second bounded timeout to protect synchronous gateway worker threads.
+  - Disabled or uninstalled modules fail closed: their tools are immediately excluded from `tools/list` and `resources/list`, and any direct call is rejected with standard MCP errors.
+- **Clean Architecture MCP Adapter Handling**:
+  - Modules must handle incoming tool executions via `POST /tools/call` over stdio-stream framing.
+  - Interface adapters deserialize `{ "name": "<action>", "arguments": { ... } }`, validate inputs strictly, delegate to domain use cases, and serialize the result into standard MCP content responses:
+    ```json
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "..."
+        }
+      ]
+    }
+    ```
+
+
