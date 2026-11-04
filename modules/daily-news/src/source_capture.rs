@@ -149,6 +149,10 @@ impl HttpSourceCaptureAdapter {
         }
         Ok((format!(".state/evidence/{filename}"), sha256_hex))
     }
+
+    pub fn store_snapshot_text(&self, text: &str) -> Result<(String, String), String> {
+        self.store_snapshot_bytes(text.as_bytes())
+    }
 }
 
 pub fn extract_article_title(html: &str) -> Option<String> {

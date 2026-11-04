@@ -152,6 +152,12 @@ pub struct VisualEvidence {
     pub license_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_evidence_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_rights: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -301,7 +307,20 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     );
     let has_date = !rec.verified_at.trim().is_empty();
 
-    has_id && has_rev && has_org && valid_method && has_date
+    let valid_audit_ref = rec.audit_trail_ref.as_deref().is_some_and(|a| {
+        let tr = a.trim();
+        tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
+    });
+
+    let valid_sec_ref = match rec.secondary_source_ref.as_deref() {
+        Some(s) => {
+            let tr = s.trim();
+            tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
+        }
+        None => true,
+    };
+
+    has_id && has_rev && has_org && valid_method && has_date && valid_audit_ref && valid_sec_ref
 }
 
 pub fn is_claim_independently_verified(claim: &ClaimEvidence) -> bool {
@@ -309,14 +328,7 @@ pub fn is_claim_independently_verified(claim: &ClaimEvidence) -> bool {
         return false;
     }
     if let Some(ref rec) = claim.verification_record {
-        if is_verification_record_valid(rec) {
-            return true;
-        }
-    }
-    if let Some(ref rev) = claim.reviewer {
-        if is_accredited_reviewer(rev) {
-            return true;
-        }
+        return is_verification_record_valid(rec);
     }
     false
 }
@@ -345,16 +357,6 @@ fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
     }
     let norm_clean = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
     norm_clean.contains(&norm_excerpt)
-}
-
-pub fn evaluate_readiness(
-    primary_source: Option<&PrimarySourceEvidence>,
-    snapshot_text: Option<&str>,
-    claims: &[ClaimEvidence],
-    visuals: &[VisualEvidence],
-    origin: ContentOrigin,
-) -> ResearchReadiness {
-    evaluate_readiness_with_snapshot_text(primary_source, snapshot_text, claims, visuals, origin)
 }
 
 #[inline]
@@ -414,6 +416,7 @@ fn is_evidence_ref_grounded(
     primary_sha: &str,
     claim: &ClaimEvidence,
     snapshot_text: Option<&str>,
+    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
 ) -> bool {
     let has_locator = r.locator.as_deref().is_some_and(|loc| !loc.trim().is_empty());
     let has_excerpt = r.excerpt.trim().len() >= 10;
@@ -440,7 +443,22 @@ fn is_evidence_ref_grounded(
             .map(|s| s.trim().to_ascii_lowercase())
             .is_some_and(|s| s == ref_str);
 
-        is_valid_hex && verified_check && has_secondary_link
+        if !is_valid_hex || !verified_check || !has_secondary_link {
+            return false;
+        }
+
+        // Secondary evidence must be grounded in an actual stored snapshot artifact!
+        match secondary_resolver {
+            Some(resolver) => {
+                if let Some(sec_text) = resolver(&ref_str) {
+                    let computed_sha = crate::url::compute_sha256(&sec_text);
+                    computed_sha == ref_str && snapshot_contains_excerpt(&sec_text, &r.excerpt)
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 }
 
@@ -448,6 +466,7 @@ fn are_all_claims_grounded(
     claims: &[ClaimEvidence],
     primary_sha: &str,
     snapshot_text: Option<&str>,
+    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
 ) -> bool {
     claims.iter().all(|c| {
         let valid_status = c.verification_status == "SOURCE_SUPPORTED"
@@ -455,7 +474,7 @@ fn are_all_claims_grounded(
         valid_status
             && !c.evidence_refs.is_empty()
             && c.evidence_refs.iter().all(|r| {
-                is_evidence_ref_grounded(r, primary_sha, c, snapshot_text)
+                is_evidence_ref_grounded(r, primary_sha, c, snapshot_text, secondary_resolver)
             })
     })
 }
@@ -516,11 +535,33 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
         APPROVED_LICENSES.contains(&l.trim().to_lowercase().as_str())
     });
 
-    valid_prov && approved_lic
+    let valid_checksum = v.checksum_sha256.as_deref().is_some_and(|h| {
+        let trimmed = h.trim();
+        trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    });
+
+    let valid_license_evidence = v.license_evidence_ref.as_deref().is_some_and(|r| {
+        let tr = r.trim();
+        !tr.is_empty() && !tr.contains("..") && !tr.contains('\\')
+    });
+
+    let verified_rights = v.verified_rights.unwrap_or(false);
+
+    valid_prov && approved_lic && valid_checksum && valid_license_evidence && verified_rights
 }
 
 fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {
     !visuals.is_empty() && visuals.iter().all(is_visual_evidence_valid)
+}
+
+pub fn evaluate_readiness(
+    primary_source: Option<&PrimarySourceEvidence>,
+    snapshot_text: Option<&str>,
+    claims: &[ClaimEvidence],
+    visuals: &[VisualEvidence],
+    origin: ContentOrigin,
+) -> ResearchReadiness {
+    evaluate_readiness_with_snapshot_store(primary_source, snapshot_text, claims, visuals, origin, None)
 }
 
 pub fn evaluate_readiness_with_snapshot_text(
@@ -528,7 +569,18 @@ pub fn evaluate_readiness_with_snapshot_text(
     snapshot_text: Option<&str>,
     claims: &[ClaimEvidence],
     visuals: &[VisualEvidence],
+    origin: ContentOrigin,
+) -> ResearchReadiness {
+    evaluate_readiness_with_snapshot_store(primary_source, snapshot_text, claims, visuals, origin, None)
+}
+
+pub fn evaluate_readiness_with_snapshot_store(
+    primary_source: Option<&PrimarySourceEvidence>,
+    snapshot_text: Option<&str>,
+    claims: &[ClaimEvidence],
+    visuals: &[VisualEvidence],
     _origin: ContentOrigin,
+    secondary_resolver: Option<&dyn Fn(&str) -> Option<String>>,
 ) -> ResearchReadiness {
     let primary_sha = match check_primary_source(primary_source, snapshot_text) {
         Ok(sha) => sha,
@@ -543,10 +595,10 @@ pub fn evaluate_readiness_with_snapshot_text(
         );
     }
 
-    if !are_all_claims_grounded(claims, &primary_sha, snapshot_text) {
+    if !are_all_claims_grounded(claims, &primary_sha, snapshot_text, secondary_resolver) {
         return build_readiness(
             ReadinessStatus::NeedsResearch,
-            "One or more claims lack validated evidence references or are not found in primary source".to_string(),
+            "One or more claims lack validated evidence references or are not found in primary/secondary source artifacts".to_string(),
             "valid_evidence_refs",
         );
     }
@@ -554,7 +606,7 @@ pub fn evaluate_readiness_with_snapshot_text(
     if !has_valid_independent_check(claims) {
         return build_readiness(
             ReadinessStatus::NeedsVerification,
-            "Independent verification has not been run or lacks accredited reviewer/secondary source".to_string(),
+            "Independent verification has not been run or lacks accredited verification record with audit trail".to_string(),
             "independent_fact_check",
         );
     }
@@ -562,7 +614,7 @@ pub fn evaluate_readiness_with_snapshot_text(
     if !are_visuals_verified(visuals) {
         return build_readiness(
             ReadinessStatus::NeedsVisualEvidence,
-            "No verified visual evidence assets available (assets must have approved license and valid scheme)".to_string(),
+            "No verified visual evidence assets available (assets must have valid checksum SHA-256, approved license, license evidence reference, and verified rights)".to_string(),
             "visual_evidence",
         );
     }

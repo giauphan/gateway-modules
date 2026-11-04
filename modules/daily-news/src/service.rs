@@ -127,16 +127,27 @@ impl DailyNewsService {
                     .and_then(|cap| cap.read_snapshot_text(ref_str))
             });
 
-        let readiness = crate::domain::evaluate_readiness_with_snapshot_text(
+        let secondary_reader = |hash: &str| -> Option<String> {
+            self.capture
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_text(hash))
+        };
+
+        let readiness = crate::domain::evaluate_readiness_with_snapshot_store(
             raw.primary_source.as_ref(),
             snapshot_text.as_deref(),
             &raw.claims,
             &raw.visual_evidence,
             raw.content_origin,
+            Some(&secondary_reader),
         );
 
+        // Stable candidate identity deterministically derived from canonical URL (prevents caller ID spoofing)
+        let url_hash = crate::url::compute_sha256(&canonical);
+        let candidate_id = format!("cand_{}", &url_hash[..16]);
+
         Ok(NormalizedCandidate {
-            candidate_id: format!("cand_{}", &chash[..16]),
+            candidate_id,
             canonical_url: canonical.clone(),
             original_url: raw.url.clone(),
             url: canonical.clone(),

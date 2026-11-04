@@ -192,23 +192,32 @@ impl FileStorageAdapter {
         }
     }
 
-    fn persist_candidates(&self) {
+    fn persist_candidates(&self) -> Result<(), String> {
         let _lock = match self.persist_mutex.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         let candidates_path = self.state_dir.join("candidates.json");
-        if let Ok(guard) = self.inner.cached_candidates.read() {
-            let unique_id = uuid::Uuid::new_v4();
-            let tmp_path = self
-                .state_dir
-                .join(format!("candidates.{unique_id}.tmp"));
-            if let Ok(json) = serde_json::to_string_pretty(&*guard) {
-                if fs::write(&tmp_path, json).is_ok() {
-                    let _ = fs::rename(&tmp_path, candidates_path);
-                }
-            }
-        }
+        let guard = self
+            .inner
+            .cached_candidates
+            .read()
+            .map_err(|e| format!("Failed to acquire read lock on cached_candidates: {e}"))?;
+        let unique_id = uuid::Uuid::new_v4();
+        let tmp_path = self
+            .state_dir
+            .join(format!("candidates.{unique_id}.tmp"));
+        let json = serde_json::to_string_pretty(&*guard)
+            .map_err(|e| format!("Failed to serialize candidates: {e}"))?;
+        fs::write(&tmp_path, json).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to write candidate state to {tmp_path:?}: {e}")
+        })?;
+        fs::rename(&tmp_path, &candidates_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to finalize candidate state to {candidates_path:?}: {e}")
+        })?;
+        Ok(())
     }
 }
 
@@ -240,12 +249,17 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn upsert_candidates(&self, candidates: &[NormalizedCandidate]) {
-        self.inner.upsert_candidates(candidates);
-        self.persist_candidates();
+        let _ = self.save_candidates(candidates);
     }
 
     fn cache_candidates(&self, candidates: &[NormalizedCandidate]) {
-        self.upsert_candidates(candidates);
+        let _ = self.save_candidates(candidates);
+    }
+
+    fn save_candidates(&self, candidates: &[NormalizedCandidate]) -> Result<usize, String> {
+        self.inner.upsert_candidates(candidates);
+        self.persist_candidates()?;
+        Ok(candidates.len())
     }
 
     fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
@@ -319,5 +333,24 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_save_candidates_error_propagation_on_write_failure() {
+        let tmp = std::env::temp_dir().join(format!("test_dn_storage_err_{}", uuid::Uuid::new_v4()));
+        let storage = FileStorageAdapter::new(&tmp);
+
+        // Turn state_dir into a file to induce an I/O error during tmp file creation
+        let _ = fs::remove_dir_all(&storage.state_dir);
+        let _ = fs::write(&storage.state_dir, b"blocker");
+
+        let mut c = NormalizedCandidate::default();
+        c.candidate_id = "cand_err_test".to_string();
+        let res = storage.save_candidates(&[c]);
+        assert!(res.is_err(), "Must propagate I/O error to caller");
+        assert!(res.unwrap_err().contains("Failed to write candidate state"));
+
+        let _ = fs::remove_file(&storage.state_dir);
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

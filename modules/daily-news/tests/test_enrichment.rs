@@ -111,8 +111,16 @@ fn test_enrich_candidate_workflow_state_transitions() {
             locator: Some("paragraph:1".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(daily_news::domain::VerificationRecord {
+            record_id: "rec_enrich_01".to_string(),
+            verified_at: "2026-11-04T05:00:00Z".to_string(),
+            reviewer_id: "benchmarking_auditor".to_string(),
+            organization: "Benchmarking Laboratory".to_string(),
+            method: "reproducible_benchmark".to_string(),
+            audit_trail_ref: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            secondary_source_ref: None,
+        }),
     }];
 
     let visuals = vec![VisualEvidence {
@@ -122,6 +130,9 @@ fn test_enrich_candidate_workflow_state_transitions() {
         source_snapshot_ref: None,
         license_status: Some("cc-by".to_string()),
         provenance_status: Some("verified".to_string()),
+        checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        license_evidence_ref: Some("https://example.com/license".to_string()),
+        verified_rights: Some(true),
     }];
 
     let video_ready_res = service

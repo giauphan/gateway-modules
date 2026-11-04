@@ -66,6 +66,12 @@ pub trait StoragePort: Send + Sync {
         self.cache_candidates(candidates);
     }
 
+    /// Save normalized candidates into persistent storage, returning count of saved items or error.
+    fn save_candidates(&self, candidates: &[NormalizedCandidate]) -> Result<usize, String> {
+        self.upsert_candidates(candidates);
+        Ok(candidates.len())
+    }
+
     /// Retrieve a single cached candidate by candidate_id.
     fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
         self.get_cached_candidates()

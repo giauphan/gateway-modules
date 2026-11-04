@@ -77,6 +77,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
         let primary_sha = enriched_1.candidate.primary_source.as_ref().unwrap().snapshot_sha256.clone().unwrap();
 
         // Enrich Candidate 2 -> with accredited reviewer and visual evidence -> VIDEO_READY
+        let audit_sha = compute_sha256("Audit Trail for cand 2: Benchmarking Lab verified 4x reduction");
         let verified_claims = vec![ClaimEvidence {
             claim_id: "claim_verified_02".to_string(),
             statement: "4x reduction in cache latency".to_string(),
@@ -86,8 +87,16 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
                 locator: Some("section:outcome".to_string()),
             }],
             verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-            reviewer: Some("Benchmarking Laboratory QA".to_string()),
-            verification_record: None,
+            reviewer: None,
+            verification_record: Some(daily_news::domain::VerificationRecord {
+                record_id: "vr_test_cand_02".to_string(),
+                reviewer_id: "benchmarking_auditor".to_string(),
+                organization: "Benchmarking Laboratory".to_string(),
+                method: "reproducible_benchmark".to_string(),
+                verified_at: "2026-11-04T05:00:00Z".to_string(),
+                audit_trail_ref: Some(audit_sha),
+                secondary_source_ref: None,
+            }),
         }];
 
         let visuals = vec![VisualEvidence {
@@ -97,6 +106,9 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
             source_snapshot_ref: None,
             license_status: Some("cc-by".to_string()),
             provenance_status: Some("verified".to_string()),
+            checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            license_evidence_ref: Some("https://example.com/license".to_string()),
+            verified_rights: Some(true),
         }];
 
         let enriched_2 = service
@@ -259,13 +271,33 @@ fn test_unverified_raw_json_cannot_bypass_gate_to_video_ready() {
         source_snapshot_ref: None,
         license_status: Some("CC-BY".to_string()),
         provenance_status: Some("verified".to_string()),
+        checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        license_evidence_ref: Some("https://example.com/license".to_string()),
+        verified_rights: Some(true),
     }];
+
+    // 1. Without VerificationRecord (reviewer only), must fail closed on NeedsVerification
+    let candidate_no_vr = service.normalize_item(&raw_item).expect("Normalize item");
+    let r_no_vr = candidate_no_vr.research_readiness.as_ref().expect("Readiness evaluated");
+    assert_ne!(r_no_vr.status, ReadinessStatus::VideoReady);
+    assert_eq!(r_no_vr.status, ReadinessStatus::NeedsVerification);
+
+    // 2. Even with an accredited VerificationRecord, if snapshot bytes are not stored on disk,
+    // candidate MUST NOT reach VIDEO_READY and must fail with NeedsResearch (verified_snapshot_text)
+    let audit_trail_sha = compute_sha256("Audit Trail for fake claim");
+    raw_item.claims[0].verification_record = Some(daily_news::domain::VerificationRecord {
+        record_id: "vr_exploit_01".to_string(),
+        reviewer_id: "auditor-42".to_string(),
+        organization: "Benchmarking Laboratory".to_string(),
+        method: "reproducible_benchmark".to_string(),
+        verified_at: "2026-11-04T05:00:00Z".to_string(),
+        audit_trail_ref: Some(audit_trail_sha),
+        secondary_source_ref: None,
+    });
 
     let candidate = service.normalize_item(&raw_item).expect("Normalize item");
     let readiness = candidate.research_readiness.as_ref().expect("Readiness must be evaluated");
 
-    // CRITICAL: Gate must fail-closed! Because snapshot was never captured/stored on disk,
-    // candidate MUST NOT reach VIDEO_READY!
     assert_ne!(
         readiness.status,
         ReadinessStatus::VideoReady,
@@ -393,8 +425,10 @@ fn test_rediscovery_preserves_enriched_candidate_state() {
 fn test_secondary_source_ref_must_match_strictly() {
     let snapshot_text = "Standard primary article body with verified benchmarks.";
     let primary_sha = compute_sha256(snapshot_text);
-    let secondary_sha_actual = "2".repeat(64);
+    let secondary_text = "Secondary laboratory reproduction report: Standard primary article body with verified benchmarks.";
+    let secondary_sha_actual = compute_sha256(secondary_text);
     let secondary_sha_mismatched = "3".repeat(64);
+    let audit_trail_sha = compute_sha256("Audit Trail: Laboratory cryptographic benchmark report #2026-01");
 
     let primary_source = PrimarySourceEvidence {
         url: "https://example.com/paper".to_string(),
@@ -420,14 +454,14 @@ fn test_secondary_source_ref_must_match_strictly() {
             locator: Some("sec:lab".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        reviewer: None,
         verification_record: Some(daily_news::domain::VerificationRecord {
             record_id: "vr_test_01".to_string(),
             reviewer_id: "reviewer-benchmarking-lab".to_string(),
-            organization: "Benchmarking Laboratory QA".to_string(),
+            organization: "Benchmarking Laboratory".to_string(),
             method: "reproducible_benchmark".to_string(),
             verified_at: "2026-11-04T00:00:00Z".to_string(),
-            audit_trail_ref: Some("audit:ref:1".to_string()),
+            audit_trail_ref: Some(audit_trail_sha),
             secondary_source_ref: Some(secondary_sha_mismatched), // Mismatch!
         }),
     };
@@ -439,17 +473,30 @@ fn test_secondary_source_ref_must_match_strictly() {
         source_snapshot_ref: None,
         license_status: Some("cc-by".to_string()),
         provenance_status: Some("verified".to_string()),
+        checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        license_evidence_ref: Some("https://example.com/license".to_string()),
+        verified_rights: Some(true),
     }];
 
-    let readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_text(
+    let sec_text_owned = secondary_text.to_string();
+    let sec_sha_owned = secondary_sha_actual.clone();
+    let resolver = move |hash: &str| {
+        if hash == sec_sha_owned {
+            Some(sec_text_owned.clone())
+        } else {
+            None
+        }
+    };
+
+    // 1. Mismatched secondary source ref fails
+    let readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_store(
         Some(&primary_source),
         Some(snapshot_text),
         &[mismatched_claim.clone()],
         &visuals,
         ContentOrigin::Article,
+        Some(&resolver),
     );
-
-    // Negative case: Must fail closed because secondary_source_ref does not match evidence_refs!
     assert_eq!(
         readiness.status,
         ReadinessStatus::NeedsResearch,
@@ -457,20 +504,36 @@ fn test_secondary_source_ref_must_match_strictly() {
     );
     assert!(readiness.missing_fields.contains(&"valid_evidence_refs".to_string()));
 
-    // Positive control: when secondary_source_ref matches secondary_sha_actual, it validates to VIDEO_READY
+    // 2. Matching secondary source ref but NO artifact resolver fails closed
     let mut matched_claim = mismatched_claim;
     matched_claim.verification_record.as_mut().unwrap().secondary_source_ref = Some(secondary_sha_actual);
-    let matched_readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_text(
+    let no_resolver_readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_store(
+        Some(&primary_source),
+        Some(snapshot_text),
+        &[matched_claim.clone()],
+        &visuals,
+        ContentOrigin::Article,
+        None,
+    );
+    assert_eq!(
+        no_resolver_readiness.status,
+        ReadinessStatus::NeedsResearch,
+        "Missing secondary snapshot artifact must fail claim grounding"
+    );
+
+    // 3. Positive control: when secondary_source_ref matches AND secondary artifact bytes are verified, validates to VIDEO_READY
+    let matched_readiness = daily_news::research_readiness::evaluate_readiness_with_snapshot_store(
         Some(&primary_source),
         Some(snapshot_text),
         &[matched_claim],
         &visuals,
         ContentOrigin::Article,
+        Some(&resolver),
     );
     assert_eq!(
         matched_readiness.status,
         ReadinessStatus::VideoReady,
-        "Matching secondary source reference must successfully validate to VIDEO_READY"
+        "Matching secondary source reference with verified snapshot artifact must validate to VIDEO_READY"
     );
 }
 

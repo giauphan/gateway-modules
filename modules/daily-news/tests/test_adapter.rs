@@ -143,7 +143,7 @@ fn test_adapter_candidates_custom_items() {
             "url": "https://docs.anthropic.com/agent-tools",
             "title": "Anthropic Enhances Tool Use in Claude",
             "publisher": "Anthropic",
-            "published_at": "2026-11-02T10:00:00+00:00",
+            "published_at": "2026-11-04T10:00:00+00:00",
             "body": "Detailed guide on tool invocation with schema enforcement."
         }
     ]);
@@ -176,7 +176,7 @@ fn test_adapter_topic_and_limit_aliases() {
             "url": "https://mcp.io/tool-spec",
             "title": "Model Context Protocol Tool Schema Spec",
             "publisher": "MCP",
-            "published_at": "2026-11-02T10:00:00+00:00",
+            "published_at": "2026-11-04T10:00:00+00:00",
             "body": "Tool call schemas and function parameters."
         },
         {
@@ -184,7 +184,7 @@ fn test_adapter_topic_and_limit_aliases() {
             "url": "https://debug.io/trace",
             "title": "Debugging Flaky Test Retries in CI",
             "publisher": "DebugIO",
-            "published_at": "2026-11-02T10:00:00+00:00",
+            "published_at": "2026-11-04T10:00:00+00:00",
             "body": "Crash traces and retry loops."
         }
     ]);

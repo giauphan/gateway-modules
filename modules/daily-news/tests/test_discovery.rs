@@ -27,7 +27,7 @@ fn test_tier_1_curated_priority_and_consumed() {
         "c1",
         "https://docs.anthropic.com/model-context-protocol",
         "Model Context Protocol Specification 1.0",
-        "2026-11-02T10:00:00+00:00",
+        "2026-11-04T10:00:00+00:00",
     );
     curated_item.publisher = Some("Anthropic".to_string());
     curated_item.description = Some("Official specification for tool schemas".to_string());
@@ -61,7 +61,7 @@ fn test_topic_filtering_and_fail_closed() {
         "t1",
         "https://mcp.io/spec",
         "Model Context Protocol Tool Schema Update",
-        "2026-11-02T10:00:00+00:00",
+        "2026-11-04T10:00:00+00:00",
     );
     raw_tool.description = Some("MCP function calls and tool schemas".to_string());
 
@@ -69,7 +69,7 @@ fn test_topic_filtering_and_fail_closed() {
         "t2",
         "https://ci.dev/flaky",
         "Debugging Flaky Test Retries in CI",
-        "2026-11-02T10:00:00+00:00",
+        "2026-11-04T10:00:00+00:00",
     );
     raw_debug.description = Some("Flaky CI loop debug and crash traces".to_string());
 

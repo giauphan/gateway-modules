@@ -5,7 +5,7 @@
 //! with real snapshot capture, grounded claim verification, and persistent cache storage.
 
 use crate::domain::{
-    evaluate_readiness_with_snapshot_text, ClaimEvidence, ContentOrigin, EvidenceRef,
+    evaluate_readiness_with_snapshot_store, ClaimEvidence, ContentOrigin, EvidenceRef,
     NormalizedCandidate, StoryboardEvidence, VisualEvidence,
 };
 use crate::ports::{SourceCapturePort, StoragePort};
@@ -145,12 +145,19 @@ impl CandidateEnrichmentWorkflow {
                     .and_then(|cap| cap.read_snapshot_text(ref_str))
             });
 
-        let readiness = evaluate_readiness_with_snapshot_text(
+        let secondary_reader = |hash: &str| -> Option<String> {
+            self.capture
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_text(hash))
+        };
+
+        let readiness = evaluate_readiness_with_snapshot_store(
             candidate.primary_source.as_ref(),
             snapshot_text.as_deref(),
             &candidate.claims,
             &candidate.visual_evidence,
             candidate.content_origin,
+            Some(&secondary_reader),
         );
         let new_status = readiness.status.as_str().to_string();
         candidate.research_readiness = Some(readiness);
@@ -158,8 +165,8 @@ impl CandidateEnrichmentWorkflow {
         // 8. Compute production readiness score
         let prod_scoring = self.scorer.score_production_readiness(&candidate);
 
-        // 9. Persist updated candidate back into storage cache
-        self.storage.cache_candidates(&[candidate.clone()]);
+        // 9. Persist updated candidate back into storage cache (propagating errors)
+        self.storage.save_candidates(&[candidate.clone()])?;
 
         let transition = format!("{initial_status} -> {new_status}");
 
@@ -199,22 +206,41 @@ pub fn build_substantive_research_package(
         raw_sentences.push(tail);
     }
 
+    let implemented_tokens = &[
+        "demonstrated", "implemented", "deployed", "shipped", "released",
+        "patched", "optimized", "built", "engineered", "integrated",
+    ];
+
+    let proposed_tokens = &[
+        "proposes", "proposed", "proposal", "approach", "algorithm",
+        "design", "concept", "rfc", "spec", "explores", "suggests", "hypothesizes",
+    ];
+
     let problem_tokens = &[
         "challenge", "problem", "bottleneck", "latency", "limitation",
         "vulnerability", "issue", "bug", "overhead", "flaw", "inefficiency",
         "slow", "fail", "difficult", "risk",
     ];
 
-    let solution_tokens = &[
-        "demonstrated", "introduced", "implemented", "optimized", "built",
-        "designed", "proposes", "solution", "algorithm", "architecture",
-        "framework", "release", "patch", "uses", "developed", "approach",
-    ];
-
-    let outcome_tokens = &[
-        "reduction", "improvement", "speedup", "benchmark", "measured",
-        "throughput", "faster", "drop", "accuracy", "gain", "results", "%", "4x", "2x",
-    ];
+    let has_empirical_metric = |s: &str| -> bool {
+        let lower = s.to_lowercase();
+        if lower.contains('%') {
+            return true;
+        }
+        const METRIC_WORDS: &[&str] = &[
+            "speedup", "reduction", "latency", "throughput", "measured",
+            "benchmark", "benchmarks", "overhead", "drop",
+        ];
+        lower.split(|c: char| !c.is_alphanumeric()).any(|w| {
+            if let Some(rest) = w.strip_suffix('x') {
+                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+            } else if let Some(rest) = w.strip_suffix("ms") {
+                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+            } else {
+                METRIC_WORDS.contains(&w)
+            }
+        })
+    };
 
     let problem_sentence = raw_sentences
         .iter()
@@ -230,7 +256,11 @@ pub fn build_substantive_research_package(
         .iter()
         .find(|s| {
             let lower = s.to_lowercase();
-            *s != &problem_sentence && solution_tokens.iter().any(|tok| lower.contains(tok))
+            *s != &problem_sentence
+                && (implemented_tokens.iter().any(|tok| lower.contains(tok))
+                    || proposed_tokens.iter().any(|tok| lower.contains(tok))
+                    || lower.contains("solution")
+                    || lower.contains("architecture"))
         })
         .or_else(|| raw_sentences.get(1))
         .copied()
@@ -239,13 +269,16 @@ pub fn build_substantive_research_package(
     let outcome_sentence = raw_sentences
         .iter()
         .find(|s| {
-            let lower = s.to_lowercase();
-            *s != &problem_sentence && *s != &solution_sentence && outcome_tokens.iter().any(|tok| lower.contains(tok))
+            *s != &problem_sentence
+                && *s != &solution_sentence
+                && has_empirical_metric(s)
+                && s.chars().any(|c| c.is_ascii_digit())
         })
-        .or_else(|| raw_sentences.iter().find(|s| {
-            let lower = s.to_lowercase();
-            outcome_tokens.iter().any(|tok| lower.contains(tok))
-        }))
+        .or_else(|| {
+            raw_sentences.iter().find(|s| {
+                has_empirical_metric(s) && s.chars().any(|c| c.is_ascii_digit())
+            })
+        })
         .copied();
 
     let mut claims = Vec::new();
@@ -264,11 +297,21 @@ pub fn build_substantive_research_package(
         verification_record: None,
     });
 
-    // 2. Solution / Architecture claim
+    // 2. Solution / Architecture claim with semantic modality distinction
     if solution_sentence != problem_sentence {
+        let sol_lower = solution_sentence.to_lowercase();
+        let is_implemented = implemented_tokens.iter().any(|tok| sol_lower.contains(tok))
+            && !proposed_tokens.iter().any(|tok| sol_lower.contains(tok));
+
+        let statement = if is_implemented {
+            format!("Implemented architectural remedy: {solution_sentence}")
+        } else {
+            format!("Proposed architectural approach: {solution_sentence}")
+        };
+
         claims.push(ClaimEvidence {
             claim_id: format!("{candidate_id}_claim_solution"),
-            statement: format!("Architectural remedy applied: {solution_sentence}"),
+            statement,
             evidence_refs: vec![EvidenceRef {
                 source_ref: sha.to_string(),
                 excerpt: solution_sentence.to_string(),
@@ -280,11 +323,11 @@ pub fn build_substantive_research_package(
         });
     }
 
-    // 3. Measured Outcome / Benchmark claim
+    // 3. Measured Outcome / Benchmark claim (only if empirical numbers were observed)
     if let Some(outcome) = outcome_sentence {
         claims.push(ClaimEvidence {
             claim_id: format!("{candidate_id}_claim_outcome"),
-            statement: format!("Demonstrated empirical outcome: {outcome}"),
+            statement: format!("Observed empirical outcome: {outcome}"),
             evidence_refs: vec![EvidenceRef {
                 source_ref: sha.to_string(),
                 excerpt: outcome.to_string(),
@@ -296,12 +339,29 @@ pub fn build_substantive_research_package(
         });
     }
 
+    let root_cause_tokens = &[
+        "root cause", "due to", "caused by", "flaw in", "bottleneck in", "vulnerability in",
+    ];
+    let root_cause_sentence = raw_sentences
+        .iter()
+        .find(|s| {
+            let lower = s.to_lowercase();
+            root_cause_tokens.iter().any(|tok| lower.contains(tok))
+        })
+        .map(|s| s.to_string());
+
+    let remedy = if solution_sentence != problem_sentence {
+        Some(solution_sentence.to_string())
+    } else {
+        None
+    };
+
     let storyboard = StoryboardEvidence {
-        hook: Some(format!("How {title} addresses core technical bottlenecks")),
-        viewer_question: Some(format!("What technical challenge did {title} solve and what were the verified results?")),
+        hook: Some(format!("How {title} addresses core technical challenges")),
+        viewer_question: Some(format!("What technical challenge did {title} address?")),
         symptom: Some(problem_sentence.to_string()),
-        root_cause: Some(format!("Root architectural cause addressed by {title}")),
-        remedy: Some(solution_sentence.to_string()),
+        root_cause: root_cause_sentence,
+        remedy,
         evidence_excerpt: Some(excerpt.to_string()),
         source_snapshot: snapshot_ref.map(str::to_string),
         snapshot_sha256: Some(sha.to_string()),

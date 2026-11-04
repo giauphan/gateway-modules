@@ -4,6 +4,32 @@ use daily_news::domain::{
     VerificationRecord, VisualEvidence,
 };
 
+fn sample_visual(asset_ref: &str, kind: &str, source_url: &str) -> VisualEvidence {
+    VisualEvidence {
+        asset_ref: asset_ref.to_string(),
+        kind: kind.to_string(),
+        source_url: source_url.to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("cc-by".to_string()),
+        provenance_status: Some("verified".to_string()),
+        checksum_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        license_evidence_ref: Some("https://example.com/license".to_string()),
+        verified_rights: Some(true),
+    }
+}
+
+fn sample_verification_record(org: &str) -> VerificationRecord {
+    VerificationRecord {
+        record_id: "vr_test_01".to_string(),
+        verified_at: "2026-11-04T05:00:00Z".to_string(),
+        reviewer_id: "accredited_reviewer_01".to_string(),
+        organization: org.to_string(),
+        method: "reproducible_benchmark".to_string(),
+        audit_trail_ref: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+        secondary_source_ref: None,
+    }
+}
+
 #[test]
 fn test_missing_primary_source_yields_needs_source() {
     let readiness = evaluate_readiness(None, None, &[], &[], ContentOrigin::HeadlineOnly);
@@ -67,14 +93,7 @@ fn test_claims_without_independent_check_yields_needs_verification() {
         verification_record: None,
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     // T11: Article makes a claim, no independent check -> NEEDS_VERIFICATION not verified / video_ready
@@ -114,8 +133,8 @@ fn test_missing_visual_evidence_yields_needs_visual_evidence() {
             locator: Some("Paragraph 3".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
     // Missing visuals!
@@ -156,18 +175,11 @@ fn test_all_criteria_met_yields_video_ready() {
             locator: Some("Paragraph 3".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     let readiness = evaluate_readiness_with_snapshot_text(
         Some(&source),
@@ -245,14 +257,7 @@ fn test_fake_unverified_claim_cannot_self_report_video_ready() {
         verification_record: None,
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     assert_ne!(
@@ -291,18 +296,11 @@ fn test_snapshot_sha256_mismatch_fails_verification() {
             locator: Some("p:1".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     // Actual snapshot text has different SHA than declared
     let snapshot_text = "Some totally different content whose hash will not match all a's";
@@ -352,18 +350,11 @@ fn test_evidence_excerpt_missing_from_snapshot_fails() {
             locator: Some("p:5".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     let readiness = evaluate_readiness_with_snapshot_text(
         Some(&source),
@@ -374,7 +365,7 @@ fn test_evidence_excerpt_missing_from_snapshot_fails() {
     );
 
     assert_eq!(readiness.status, ReadinessStatus::NeedsResearch);
-    assert!(readiness.reasons.iter().any(|r| r.contains("not found in primary source")));
+    assert!(readiness.reasons.iter().any(|r| r.contains("not found in primary")));
 }
 
 #[test]
@@ -405,18 +396,14 @@ fn test_visual_evidence_invalid_license_or_provenance_rejected() {
             locator: Some("p:2".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
     // Restricted license
     let visuals_bad_license = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
         license_status: Some("all-rights-reserved".to_string()),
-        provenance_status: Some("verified".to_string()),
+        ..sample_visual("vis_1", "chart", "https://example.com/chart.png")
     }];
 
     let r1 = evaluate_readiness(Some(&source), None, &claims, &visuals_bad_license, ContentOrigin::Article);
@@ -424,12 +411,8 @@ fn test_visual_evidence_invalid_license_or_provenance_rejected() {
 
     // Dangerous javascript scheme in source_url
     let visuals_xss_url = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
         source_url: "javascript:alert(1)".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
+        ..sample_visual("vis_1", "chart", "https://example.com/chart.png")
     }];
 
     let r2 = evaluate_readiness(Some(&source), None, &claims, &visuals_xss_url, ContentOrigin::Article);
@@ -478,14 +461,7 @@ fn test_single_claim_independent_not_enough_if_other_claims_unverified() {
         },
     ];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     assert_ne!(readiness.status, ReadinessStatus::VideoReady);
@@ -520,18 +496,11 @@ fn test_unverified_snapshot_text_fails_closed_cannot_yield_video_ready() {
             locator: Some("Paragraph 3".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     // When snapshot_text is None (e.g. raw JSON evaluate_readiness), CANNOT be VIDEO_READY!
     let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
@@ -559,14 +528,7 @@ fn test_fake_reviewer_tokens_rejected_needs_verification() {
         extraction_method: Some("conservative_html".to_string()),
     };
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_1".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
     // Fake / generic reviewer names that lack accredited institutions
     let fake_reviewers = vec![
@@ -632,7 +594,7 @@ fn test_verification_record_structured_evidence() {
         reviewer_id: "lead_auditor_42".to_string(),
         organization: "CertiK Security Laboratory".to_string(),
         method: "cryptographic_audit".to_string(),
-        audit_trail_ref: Some("audit://certik/report_2026_001".to_string()),
+        audit_trail_ref: Some(compute_sha256("Certik Cryptographic Audit Report #2026-001")),
         secondary_source_ref: None,
     };
 
@@ -649,14 +611,7 @@ fn test_verification_record_structured_evidence() {
         verification_record: Some(record),
     }];
 
-    let visuals = vec![VisualEvidence {
-        asset_ref: "vis_audit_diagram".to_string(),
-        kind: "diagram".to_string(),
-        source_url: "https://example.com/diagram.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("licensed".to_string()),
-        provenance_status: Some("verified".to_string()),
-    }];
+    let visuals = vec![sample_visual("vis_audit_diagram", "diagram", "https://example.com/diagram.png")];
 
     let readiness = evaluate_readiness_with_snapshot_text(
         Some(&source),
@@ -696,18 +651,14 @@ fn test_invalid_visual_assets_ssrf_and_placeholders_rejected() {
             locator: Some("p:1".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Laboratory QA".to_string()),
-        verification_record: None,
+        reviewer: None,
+        verification_record: Some(sample_verification_record("Benchmarking Laboratory")),
     }];
 
     // 1. SSRF target (AWS metadata IP)
     let visuals_ssrf = vec![VisualEvidence {
-        asset_ref: "vis_ssrf".to_string(),
-        kind: "chart".to_string(),
         source_url: "http://169.254.169.254/latest/meta-data/img.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
+        ..sample_visual("vis_ssrf", "chart", "https://example.com/chart.png")
     }];
     let r1 = evaluate_readiness_with_snapshot_text(
         Some(&source),
@@ -721,11 +672,7 @@ fn test_invalid_visual_assets_ssrf_and_placeholders_rejected() {
     // 2. Placeholder asset_ref
     let visuals_placeholder = vec![VisualEvidence {
         asset_ref: "placeholder".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
+        ..sample_visual("placeholder", "chart", "https://example.com/chart.png")
     }];
     let r2 = evaluate_readiness_with_snapshot_text(
         Some(&source),
@@ -739,11 +686,7 @@ fn test_invalid_visual_assets_ssrf_and_placeholders_rejected() {
     // 3. Directory traversal in asset_ref
     let visuals_traversal = vec![VisualEvidence {
         asset_ref: "../../etc/shadow.png".to_string(),
-        kind: "chart".to_string(),
-        source_url: "https://example.com/chart.png".to_string(),
-        source_snapshot_ref: None,
-        license_status: Some("CC-BY".to_string()),
-        provenance_status: Some("verified".to_string()),
+        ..sample_visual("traversal", "chart", "https://example.com/chart.png")
     }];
     let r3 = evaluate_readiness_with_snapshot_text(
         Some(&source),
