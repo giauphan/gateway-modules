@@ -60,6 +60,18 @@ pub trait StoragePort: Send + Sync {
 
     /// Retrieve cached candidates.
     fn get_cached_candidates(&self) -> Vec<NormalizedCandidate>;
+
+    /// Upsert normalized candidates into cache and persistent storage by candidate_id.
+    fn upsert_candidates(&self, candidates: &[NormalizedCandidate]) {
+        self.cache_candidates(candidates);
+    }
+
+    /// Retrieve a single cached candidate by candidate_id.
+    fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
+        self.get_cached_candidates()
+            .into_iter()
+            .find(|c| c.candidate_id == candidate_id)
+    }
 }
 
 pub trait SourceCapturePort: Send + Sync {

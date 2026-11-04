@@ -112,6 +112,7 @@ fn test_enrich_candidate_workflow_state_transitions() {
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
         reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {

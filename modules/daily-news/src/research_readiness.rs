@@ -115,6 +115,19 @@ pub struct EvidenceRef {
     pub locator: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct VerificationRecord {
+    pub record_id: String,
+    pub verified_at: String,
+    pub reviewer_id: String,
+    pub organization: String,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_trail_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_source_ref: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimEvidence {
     pub claim_id: String,
@@ -124,6 +137,8 @@ pub struct ClaimEvidence {
     pub verification_status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_record: Option<VerificationRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -187,14 +202,66 @@ impl Default for ResearchReadiness {
     }
 }
 
-pub const ACCREDITED_REVIEWER_KEYWORDS: &[&str] = &[
-    "fact_checker", "fact-checker", "editorial", "editor", "lead", "analyst", "expert",
-    "lab", "laboratory", "qa", "reviewer", "auditor", "peer", "researcher", "curator",
+pub const ACCREDITED_ORGANIZATIONS: &[&str] = &[
+    "reuters",
+    "associated press",
+    "ap fact check",
+    "snopes",
+    "politifact",
+    "bbc verify",
+    "afp fact check",
+    "benchmarking laboratory",
+    "benchmarking lab",
+    "national laboratory",
+    "iso iec 17025",
+    "stanford security lab",
+    "mit csail",
+    "cmu sei",
+    "berkeley ai research",
+    "certik",
+    "ncc group",
+    "trail of bits",
+    "openzeppelin",
+    "cure53",
 ];
 
 pub const DENIED_REVIEWER_TOKENS: &[&str] = &[
-    "self", "unreviewed", "none", "anonymous", "user", "author", "unverified", "fake",
+    "self", "unreviewed", "none", "anonymous", "user", "author", "unverified", "fake", "dummy", "attacker",
 ];
+
+pub const GENERIC_UNTRUSTED_REVIEWERS: &[&str] = &[
+    "qa team", "reviewer 1", "reviewer", "expert", "qa", "test reviewer", "auditor", "peer reviewer",
+];
+
+pub fn is_accredited_organization(org: &str) -> bool {
+    let lower = org.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+    for &denied in DENIED_REVIEWER_TOKENS {
+        if tokens.contains(&denied) {
+            return false;
+        }
+    }
+    for &accred in ACCREDITED_ORGANIZATIONS {
+        let accred_tokens: Vec<&str> = accred.split_whitespace().collect();
+        if !accred_tokens.is_empty() {
+            if tokens == accred_tokens {
+                return true;
+            }
+            if let Some(pos) = tokens.windows(accred_tokens.len()).position(|w| w == accred_tokens.as_slice()) {
+                if pos == 0 {
+                    let suffix_tokens = &tokens[accred_tokens.len()..];
+                    if suffix_tokens.iter().all(|&t| matches!(t, "qa" | "lab" | "laboratory" | "team" | "division" | "security" | "review" | "audit")) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
 
 pub fn is_accredited_reviewer(reviewer: &str) -> bool {
     let lower = reviewer.trim().to_lowercase();
@@ -202,32 +269,66 @@ pub fn is_accredited_reviewer(reviewer: &str) -> bool {
         return false;
     }
 
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if tokens.is_empty() {
+    if GENERIC_UNTRUSTED_REVIEWERS.contains(&lower.as_str()) {
         return false;
     }
 
-    for token in &tokens {
-        for st in token.split(['_', '-']) {
-            if DENIED_REVIEWER_TOKENS.contains(&st) {
-                return false;
-            }
+    for &denied in DENIED_REVIEWER_TOKENS {
+        if lower.split(|c: char| !c.is_alphanumeric()).any(|tok| tok == denied) {
+            return false;
         }
     }
 
-    tokens.iter().any(|&token| {
-        ACCREDITED_REVIEWER_KEYWORDS.contains(&token)
-            || token.split(['_', '-']).any(|st| ACCREDITED_REVIEWER_KEYWORDS.contains(&st))
-    })
+    is_accredited_organization(&lower)
+}
+
+pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
+    let has_id = !rec.record_id.trim().is_empty();
+    let rev_lower = rec.reviewer_id.to_lowercase();
+    let has_rev = !rec.reviewer_id.trim().is_empty()
+        && !rev_lower.split(|c: char| !c.is_alphanumeric()).any(|tok| DENIED_REVIEWER_TOKENS.contains(&tok));
+    let has_org = is_accredited_organization(&rec.organization);
+    let valid_method = matches!(
+        rec.method.trim().to_lowercase().as_str(),
+        "reproducible_benchmark"
+            | "dual_expert_review"
+            | "cryptographic_audit"
+            | "independent_replication"
+            | "laboratory_verification"
+            | "formal_verification"
+            | "peer_review"
+            | "fact_check"
+    );
+    let has_date = !rec.verified_at.trim().is_empty();
+
+    has_id && has_rev && has_org && valid_method && has_date
+}
+
+pub fn is_claim_independently_verified(claim: &ClaimEvidence) -> bool {
+    if claim.verification_status != "INDEPENDENTLY_VERIFIED" {
+        return false;
+    }
+    if let Some(ref rec) = claim.verification_record {
+        if is_verification_record_valid(rec) {
+            return true;
+        }
+    }
+    if let Some(ref rev) = claim.reviewer {
+        if is_accredited_reviewer(rev) {
+            return true;
+        }
+    }
+    false
 }
 
 fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
     let tr_excerpt = excerpt.trim();
     if snapshot_text.contains(tr_excerpt) {
+        return true;
+    }
+    let norm_excerpt = tr_excerpt.split_whitespace().collect::<Vec<&str>>().join(" ");
+    let cleaned_snapshot = crate::source_capture::extract_main_text(snapshot_text);
+    if cleaned_snapshot.contains(&norm_excerpt) {
         return true;
     }
     let mut cleaned = String::with_capacity(snapshot_text.len());
@@ -243,17 +344,17 @@ fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
         }
     }
     let norm_clean = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
-    let norm_excerpt = tr_excerpt.split_whitespace().collect::<Vec<&str>>().join(" ");
     norm_clean.contains(&norm_excerpt)
 }
 
 pub fn evaluate_readiness(
     primary_source: Option<&PrimarySourceEvidence>,
+    snapshot_text: Option<&str>,
     claims: &[ClaimEvidence],
     visuals: &[VisualEvidence],
     origin: ContentOrigin,
 ) -> ResearchReadiness {
-    evaluate_readiness_with_snapshot_text(primary_source, None, claims, visuals, origin)
+    evaluate_readiness_with_snapshot_text(primary_source, snapshot_text, claims, visuals, origin)
 }
 
 #[inline]
@@ -311,25 +412,36 @@ fn check_primary_source(
 fn is_evidence_ref_grounded(
     r: &EvidenceRef,
     primary_sha: &str,
-    reviewer: Option<&str>,
+    claim: &ClaimEvidence,
     snapshot_text: Option<&str>,
 ) -> bool {
     let has_locator = r.locator.as_deref().is_some_and(|loc| !loc.trim().is_empty());
     let has_excerpt = r.excerpt.trim().len() >= 10;
     let ref_str = r.source_ref.trim().to_ascii_lowercase();
     let is_primary = primary_sha == ref_str;
-    let is_verified_secondary = !is_primary
-        && ref_str.len() == 64
-        && ref_str.chars().all(|ch| ch.is_ascii_hexdigit())
-        && reviewer.is_some_and(is_accredited_reviewer);
 
-    let matches_source = is_primary || is_verified_secondary;
-    let excerpt_in_snapshot = match snapshot_text {
-        Some(text) if is_primary => snapshot_contains_excerpt(text, &r.excerpt),
-        _ => true,
-    };
+    if !has_locator || !has_excerpt {
+        return false;
+    }
 
-    has_locator && has_excerpt && matches_source && excerpt_in_snapshot
+    if is_primary {
+        match snapshot_text {
+            Some(text) => snapshot_contains_excerpt(text, &r.excerpt),
+            None => true,
+        }
+    } else {
+        let is_valid_hex = ref_str.len() == 64 && ref_str.chars().all(|ch| ch.is_ascii_hexdigit());
+        let verified_check = is_claim_independently_verified(claim);
+        let has_secondary_link = claim
+            .verification_record
+            .as_ref()
+            .filter(|vr| is_verification_record_valid(vr))
+            .and_then(|vr| vr.secondary_source_ref.as_deref())
+            .map(|s| s.trim().to_ascii_lowercase())
+            .is_some_and(|s| s == ref_str);
+
+        is_valid_hex && verified_check && has_secondary_link
+    }
 }
 
 fn are_all_claims_grounded(
@@ -343,16 +455,13 @@ fn are_all_claims_grounded(
         valid_status
             && !c.evidence_refs.is_empty()
             && c.evidence_refs.iter().all(|r| {
-                is_evidence_ref_grounded(r, primary_sha, c.reviewer.as_deref(), snapshot_text)
+                is_evidence_ref_grounded(r, primary_sha, c, snapshot_text)
             })
     })
 }
 
 fn has_valid_independent_check(claims: &[ClaimEvidence]) -> bool {
-    claims.iter().any(|c| {
-        c.verification_status == "INDEPENDENTLY_VERIFIED"
-            && c.reviewer.as_deref().is_some_and(is_accredited_reviewer)
-    })
+    claims.iter().any(is_claim_independently_verified)
 }
 
 const APPROVED_LICENSES: &[&str] = &[
@@ -360,14 +469,44 @@ const APPROVED_LICENSES: &[&str] = &[
     "fair-use", "licensed", "approved", "editorial", "authorized",
 ];
 
-fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
-    let has_asset = !v.asset_ref.trim().is_empty() || !v.source_url.trim().is_empty();
-    let safe_url = if !v.source_url.trim().is_empty() {
-        let trimmed = v.source_url.trim().to_lowercase();
-        trimmed.starts_with("https://") || trimmed.starts_with("http://")
-    } else {
-        true
-    };
+pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
+    let asset_ref = v.asset_ref.trim();
+    let source_url = v.source_url.trim();
+
+    if asset_ref.is_empty() {
+        return false;
+    }
+    let lower_ref = asset_ref.to_lowercase();
+    if matches!(lower_ref.as_str(), "none" | "null" | "placeholder" | "dummy" | "test" | "untitled") {
+        return false;
+    }
+
+    if asset_ref.contains("..") || asset_ref.contains('\\') || asset_ref.starts_with('/')
+        || v.source_snapshot_ref.as_deref().unwrap_or("").contains("..")
+        || v.source_snapshot_ref.as_deref().unwrap_or("").contains('\\')
+    {
+        return false;
+    }
+
+    if lower_ref.starts_with("javascript:") || lower_ref.starts_with("data:") || lower_ref.starts_with("file:") {
+        return false;
+    }
+
+    let valid_kind = matches!(
+        v.kind.trim().to_lowercase().as_str(),
+        "chart" | "graph" | "diagram" | "photo" | "image" | "screenshot" | "video" | "demo" | "figure" | "infographic"
+    );
+    if !valid_kind {
+        return false;
+    }
+
+    if source_url.is_empty() || !crate::url::is_safe_url(source_url, None) {
+        return false;
+    }
+    let lower_url = source_url.to_lowercase();
+    if lower_url.starts_with("javascript:") || lower_url.starts_with("data:") || lower_url.starts_with("file:") {
+        return false;
+    }
 
     let valid_prov = v.provenance_status.as_deref().is_some_and(|p| {
         matches!(p.trim().to_lowercase().as_str(), "verified" | "authoritative" | "licensed" | "approved")
@@ -377,7 +516,7 @@ fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
         APPROVED_LICENSES.contains(&l.trim().to_lowercase().as_str())
     });
 
-    has_asset && safe_url && valid_prov && approved_lic
+    valid_prov && approved_lic
 }
 
 fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {
@@ -425,6 +564,14 @@ pub fn evaluate_readiness_with_snapshot_text(
             ReadinessStatus::NeedsVisualEvidence,
             "No verified visual evidence assets available (assets must have approved license and valid scheme)".to_string(),
             "visual_evidence",
+        );
+    }
+
+    if snapshot_text.is_none() {
+        return build_readiness(
+            ReadinessStatus::NeedsResearch,
+            "Primary source snapshot bytes must be verified against snapshot storage before video readiness".to_string(),
+            "verified_snapshot_text",
         );
     }
 

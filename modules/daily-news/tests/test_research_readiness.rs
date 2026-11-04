@@ -1,11 +1,12 @@
 use daily_news::domain::{
-    evaluate_readiness, ClaimEvidence, ContentOrigin, EvidenceRef, PrimarySourceEvidence,
-    ReadinessStatus, ResearchReadiness, VisualEvidence,
+    compute_sha256, evaluate_readiness, evaluate_readiness_with_snapshot_text, ClaimEvidence,
+    ContentOrigin, EvidenceRef, PrimarySourceEvidence, ReadinessStatus, ResearchReadiness,
+    VerificationRecord, VisualEvidence,
 };
 
 #[test]
 fn test_missing_primary_source_yields_needs_source() {
-    let readiness = evaluate_readiness(None, &[], &[], ContentOrigin::HeadlineOnly);
+    let readiness = evaluate_readiness(None, None, &[], &[], ContentOrigin::HeadlineOnly);
     assert_eq!(readiness.status, ReadinessStatus::NeedsSource);
     assert!(readiness.reasons[0].contains("Primary article has not been captured"));
     assert_eq!(readiness.missing_fields, vec!["primary_source".to_string()]);
@@ -29,7 +30,7 @@ fn test_captured_source_without_claims_yields_needs_research() {
         extraction_method: Some("conservative_html".to_string()),
     };
 
-    let readiness = evaluate_readiness(Some(&source), &[], &[], ContentOrigin::Article);
+    let readiness = evaluate_readiness(Some(&source), None, &[], &[], ContentOrigin::Article);
     assert_eq!(readiness.status, ReadinessStatus::NeedsResearch);
     assert_eq!(readiness.missing_fields, vec!["claims".to_string()]);
 }
@@ -63,6 +64,7 @@ fn test_claims_without_independent_check_yields_needs_verification() {
         }],
         verification_status: "SOURCE_SUPPORTED".to_string(), // Source supported, but not independently verified!
         reviewer: None,
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {
@@ -74,7 +76,7 @@ fn test_claims_without_independent_check_yields_needs_verification() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let readiness = evaluate_readiness(Some(&source), &claims, &visuals, ContentOrigin::Article);
+    let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     // T11: Article makes a claim, no independent check -> NEEDS_VERIFICATION not verified / video_ready
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
     assert!(readiness.reasons[0].contains("Independent verification has not been run"));
@@ -112,11 +114,12 @@ fn test_missing_visual_evidence_yields_needs_visual_evidence() {
             locator: Some("Paragraph 3".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("QA team".to_string()),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     // Missing visuals!
-    let readiness = evaluate_readiness(Some(&source), &claims, &[], ContentOrigin::Article);
+    let readiness = evaluate_readiness(Some(&source), None, &claims, &[], ContentOrigin::Article);
     // T13: Missing proof image/demo -> NEEDS_VISUAL_EVIDENCE
     assert_eq!(readiness.status, ReadinessStatus::NeedsVisualEvidence);
     assert_eq!(
@@ -127,6 +130,9 @@ fn test_missing_visual_evidence_yields_needs_visual_evidence() {
 
 #[test]
 fn test_all_criteria_met_yields_video_ready() {
+    let snapshot_text = "Benchmark Results: We measured 4x improvement across systems.";
+    let sha256 = compute_sha256(snapshot_text);
+
     let source = PrimarySourceEvidence {
         url: "https://example.com/benchmark".to_string(),
         fetch_status: "SUCCESS".to_string(),
@@ -134,11 +140,9 @@ fn test_all_criteria_met_yields_video_ready() {
         content_type: Some("text/html".to_string()),
         title: Some("Benchmark Results".to_string()),
         published_at: None,
-        excerpt: Some("We measured 4x improvement".to_string()),
-        snapshot_ref: Some(".state/evidence/1234.txt".to_string()),
-        snapshot_sha256: Some(
-            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
-        ),
+        excerpt: Some("We measured 4x improvement across systems.".to_string()),
+        snapshot_ref: Some(format!(".state/evidence/{sha256}.txt")),
+        snapshot_sha256: Some(sha256.clone()),
         captured_at: Some("2026-11-03T12:00:00Z".to_string()),
         extraction_method: Some("conservative_html".to_string()),
     };
@@ -147,13 +151,13 @@ fn test_all_criteria_met_yields_video_ready() {
         claim_id: "c1".to_string(),
         statement: "4x latency improvement".to_string(),
         evidence_refs: vec![EvidenceRef {
-            source_ref: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-                .to_string(),
-            excerpt: "We measured 4x improvement".to_string(),
+            source_ref: sha256,
+            excerpt: "We measured 4x improvement across systems.".to_string(),
             locator: Some("Paragraph 3".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("QA team".to_string()),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {
@@ -165,7 +169,13 @@ fn test_all_criteria_met_yields_video_ready() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let readiness = evaluate_readiness(Some(&source), &claims, &visuals, ContentOrigin::Article);
+    let readiness = evaluate_readiness_with_snapshot_text(
+        Some(&source),
+        Some(snapshot_text),
+        &claims,
+        &visuals,
+        ContentOrigin::Article,
+    );
     assert_eq!(readiness.status, ReadinessStatus::VideoReady);
     assert!(readiness.missing_fields.is_empty());
 }
@@ -232,6 +242,7 @@ fn test_fake_unverified_claim_cannot_self_report_video_ready() {
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
         reviewer: None, // No reviewer!
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {
@@ -243,7 +254,7 @@ fn test_fake_unverified_claim_cannot_self_report_video_ready() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let readiness = evaluate_readiness(Some(&source), &claims, &visuals, ContentOrigin::Article);
+    let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     assert_ne!(
         readiness.status,
         ReadinessStatus::VideoReady,
@@ -254,8 +265,6 @@ fn test_fake_unverified_claim_cannot_self_report_video_ready() {
 
 #[test]
 fn test_snapshot_sha256_mismatch_fails_verification() {
-    use daily_news::domain::evaluate_readiness_with_snapshot_text;
-
     let source = PrimarySourceEvidence {
         url: "https://example.com/benchmark".to_string(),
         fetch_status: "SUCCESS".to_string(),
@@ -282,7 +291,8 @@ fn test_snapshot_sha256_mismatch_fails_verification() {
             locator: Some("p:1".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Benchmarking Lab".to_string()),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {
@@ -310,7 +320,6 @@ fn test_snapshot_sha256_mismatch_fails_verification() {
 
 #[test]
 fn test_evidence_excerpt_missing_from_snapshot_fails() {
-    use daily_news::domain::evaluate_readiness_with_snapshot_text;
     use sha2::{Digest, Sha256};
 
     let actual_text = "Official release notes: We optimized memory allocation by 25%.";
@@ -343,7 +352,8 @@ fn test_evidence_excerpt_missing_from_snapshot_fails() {
             locator: Some("p:5".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Reviewer 1".to_string()),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     let visuals = vec![VisualEvidence {
@@ -395,7 +405,8 @@ fn test_visual_evidence_invalid_license_or_provenance_rejected() {
             locator: Some("p:2".to_string()),
         }],
         verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-        reviewer: Some("Peer Reviewer".to_string()),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
     }];
 
     // Restricted license
@@ -408,7 +419,7 @@ fn test_visual_evidence_invalid_license_or_provenance_rejected() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let r1 = evaluate_readiness(Some(&source), &claims, &visuals_bad_license, ContentOrigin::Article);
+    let r1 = evaluate_readiness(Some(&source), None, &claims, &visuals_bad_license, ContentOrigin::Article);
     assert_eq!(r1.status, ReadinessStatus::NeedsVisualEvidence);
 
     // Dangerous javascript scheme in source_url
@@ -421,7 +432,7 @@ fn test_visual_evidence_invalid_license_or_provenance_rejected() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let r2 = evaluate_readiness(Some(&source), &claims, &visuals_xss_url, ContentOrigin::Article);
+    let r2 = evaluate_readiness(Some(&source), None, &claims, &visuals_xss_url, ContentOrigin::Article);
     assert_eq!(r2.status, ReadinessStatus::NeedsVisualEvidence);
 }
 
@@ -454,7 +465,8 @@ fn test_single_claim_independent_not_enough_if_other_claims_unverified() {
                 locator: Some("p:2".to_string()),
             }],
             verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
-            reviewer: Some("Peer Reviewer".to_string()),
+            reviewer: Some("Benchmarking Laboratory QA".to_string()),
+            verification_record: None,
         },
         ClaimEvidence {
             claim_id: "c2".to_string(),
@@ -462,6 +474,7 @@ fn test_single_claim_independent_not_enough_if_other_claims_unverified() {
             evidence_refs: vec![],
             verification_status: "UNVERIFIED".to_string(),
             reviewer: None,
+            verification_record: None,
         },
     ];
 
@@ -474,7 +487,270 @@ fn test_single_claim_independent_not_enough_if_other_claims_unverified() {
         provenance_status: Some("verified".to_string()),
     }];
 
-    let readiness = evaluate_readiness(Some(&source), &claims, &visuals, ContentOrigin::Article);
+    let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
     assert_ne!(readiness.status, ReadinessStatus::VideoReady);
     assert_eq!(readiness.status, ReadinessStatus::NeedsResearch);
+}
+
+#[test]
+fn test_unverified_snapshot_text_fails_closed_cannot_yield_video_ready() {
+    let source = PrimarySourceEvidence {
+        url: "https://example.com/benchmark".to_string(),
+        fetch_status: "SUCCESS".to_string(),
+        content_quality: Some("ARTICLE_CONTENT_VALID".to_string()),
+        content_type: Some("text/html".to_string()),
+        title: Some("Benchmark Results".to_string()),
+        published_at: None,
+        excerpt: Some("We measured 4x improvement".to_string()),
+        snapshot_ref: Some(".state/evidence/1234.txt".to_string()),
+        snapshot_sha256: Some(
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+        ),
+        captured_at: Some("2026-11-03T12:00:00Z".to_string()),
+        extraction_method: Some("conservative_html".to_string()),
+    };
+
+    let claims = vec![ClaimEvidence {
+        claim_id: "c1".to_string(),
+        statement: "4x latency improvement".to_string(),
+        evidence_refs: vec![EvidenceRef {
+            source_ref: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                .to_string(),
+            excerpt: "We measured 4x improvement".to_string(),
+            locator: Some("Paragraph 3".to_string()),
+        }],
+        verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
+    }];
+
+    let visuals = vec![VisualEvidence {
+        asset_ref: "vis_1".to_string(),
+        kind: "chart".to_string(),
+        source_url: "https://example.com/chart.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("CC-BY".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+
+    // When snapshot_text is None (e.g. raw JSON evaluate_readiness), CANNOT be VIDEO_READY!
+    let readiness = evaluate_readiness(Some(&source), None, &claims, &visuals, ContentOrigin::Article);
+    assert_ne!(readiness.status, ReadinessStatus::VideoReady);
+    assert_eq!(readiness.status, ReadinessStatus::NeedsResearch);
+    assert!(readiness.missing_fields.contains(&"verified_snapshot_text".to_string()));
+}
+
+#[test]
+fn test_fake_reviewer_tokens_rejected_needs_verification() {
+    let snapshot_text = "Benchmark Results: We measured 4x improvement across systems.";
+    let sha256 = compute_sha256(snapshot_text);
+
+    let source = PrimarySourceEvidence {
+        url: "https://example.com/benchmark".to_string(),
+        fetch_status: "SUCCESS".to_string(),
+        content_quality: Some("ARTICLE_CONTENT_VALID".to_string()),
+        content_type: Some("text/html".to_string()),
+        title: Some("Benchmark Results".to_string()),
+        published_at: None,
+        excerpt: Some("We measured 4x improvement across systems.".to_string()),
+        snapshot_ref: Some(format!(".state/evidence/{sha256}.txt")),
+        snapshot_sha256: Some(sha256.clone()),
+        captured_at: Some("2026-11-03T12:00:00Z".to_string()),
+        extraction_method: Some("conservative_html".to_string()),
+    };
+
+    let visuals = vec![VisualEvidence {
+        asset_ref: "vis_1".to_string(),
+        kind: "chart".to_string(),
+        source_url: "https://example.com/chart.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("CC-BY".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+
+    // Fake / generic reviewer names that lack accredited institutions
+    let fake_reviewers = vec![
+        "QA team",
+        "alice_qa",
+        "Reviewer 1",
+        "expert",
+        "fake_reviewer",
+        "test_qa",
+    ];
+
+    for fake_rev in fake_reviewers {
+        let claims = vec![ClaimEvidence {
+            claim_id: "c1".to_string(),
+            statement: "4x latency improvement".to_string(),
+            evidence_refs: vec![EvidenceRef {
+                source_ref: sha256.clone(),
+                excerpt: "We measured 4x improvement across systems.".to_string(),
+                locator: Some("Paragraph 3".to_string()),
+            }],
+            verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
+            reviewer: Some(fake_rev.to_string()),
+            verification_record: None,
+        }];
+
+        let readiness = evaluate_readiness_with_snapshot_text(
+            Some(&source),
+            Some(snapshot_text),
+            &claims,
+            &visuals,
+            ContentOrigin::Article,
+        );
+        assert_eq!(
+            readiness.status,
+            ReadinessStatus::NeedsVerification,
+            "Fake reviewer '{fake_rev}' must be rejected with NEEDS_VERIFICATION"
+        );
+    }
+}
+
+#[test]
+fn test_verification_record_structured_evidence() {
+    let snapshot_text = "Verified cryptographic audit findings: All signature boundaries are hardened.";
+    let sha256 = compute_sha256(snapshot_text);
+
+    let source = PrimarySourceEvidence {
+        url: "https://example.com/audit".to_string(),
+        fetch_status: "SUCCESS".to_string(),
+        content_quality: Some("ARTICLE_CONTENT_VALID".to_string()),
+        content_type: Some("text/html".to_string()),
+        title: Some("Audit Report".to_string()),
+        published_at: None,
+        excerpt: Some("All signature boundaries are hardened.".to_string()),
+        snapshot_ref: Some(format!(".state/evidence/{sha256}.txt")),
+        snapshot_sha256: Some(sha256.clone()),
+        captured_at: Some("2026-11-04T05:00:00Z".to_string()),
+        extraction_method: Some("conservative_html".to_string()),
+    };
+
+    let record = VerificationRecord {
+        record_id: "vr_audit_001".to_string(),
+        verified_at: "2026-11-04T05:00:00Z".to_string(),
+        reviewer_id: "lead_auditor_42".to_string(),
+        organization: "CertiK Security Laboratory".to_string(),
+        method: "cryptographic_audit".to_string(),
+        audit_trail_ref: Some("audit://certik/report_2026_001".to_string()),
+        secondary_source_ref: None,
+    };
+
+    let claims = vec![ClaimEvidence {
+        claim_id: "c_audit_1".to_string(),
+        statement: "All signature boundaries are hardened".to_string(),
+        evidence_refs: vec![EvidenceRef {
+            source_ref: sha256,
+            excerpt: "All signature boundaries are hardened.".to_string(),
+            locator: Some("section:findings".to_string()),
+        }],
+        verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
+        reviewer: None,
+        verification_record: Some(record),
+    }];
+
+    let visuals = vec![VisualEvidence {
+        asset_ref: "vis_audit_diagram".to_string(),
+        kind: "diagram".to_string(),
+        source_url: "https://example.com/diagram.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("licensed".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+
+    let readiness = evaluate_readiness_with_snapshot_text(
+        Some(&source),
+        Some(snapshot_text),
+        &claims,
+        &visuals,
+        ContentOrigin::Article,
+    );
+    assert_eq!(readiness.status, ReadinessStatus::VideoReady);
+}
+
+#[test]
+fn test_invalid_visual_assets_ssrf_and_placeholders_rejected() {
+    let snapshot_text = "Official release: New benchmark results published.";
+    let sha256 = compute_sha256(snapshot_text);
+
+    let source = PrimarySourceEvidence {
+        url: "https://example.com/notes".to_string(),
+        fetch_status: "SUCCESS".to_string(),
+        content_quality: Some("ARTICLE_CONTENT_VALID".to_string()),
+        content_type: Some("text/html".to_string()),
+        title: Some("Release".to_string()),
+        published_at: None,
+        excerpt: Some("New benchmark results published.".to_string()),
+        snapshot_ref: Some(format!(".state/evidence/{sha256}.txt")),
+        snapshot_sha256: Some(sha256.clone()),
+        captured_at: Some("2026-11-04T05:00:00Z".to_string()),
+        extraction_method: Some("conservative_html".to_string()),
+    };
+
+    let claims = vec![ClaimEvidence {
+        claim_id: "c1".to_string(),
+        statement: "Benchmark results".to_string(),
+        evidence_refs: vec![EvidenceRef {
+            source_ref: sha256,
+            excerpt: "New benchmark results published.".to_string(),
+            locator: Some("p:1".to_string()),
+        }],
+        verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
+        reviewer: Some("Benchmarking Laboratory QA".to_string()),
+        verification_record: None,
+    }];
+
+    // 1. SSRF target (AWS metadata IP)
+    let visuals_ssrf = vec![VisualEvidence {
+        asset_ref: "vis_ssrf".to_string(),
+        kind: "chart".to_string(),
+        source_url: "http://169.254.169.254/latest/meta-data/img.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("CC-BY".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+    let r1 = evaluate_readiness_with_snapshot_text(
+        Some(&source),
+        Some(snapshot_text),
+        &claims,
+        &visuals_ssrf,
+        ContentOrigin::Article,
+    );
+    assert_eq!(r1.status, ReadinessStatus::NeedsVisualEvidence);
+
+    // 2. Placeholder asset_ref
+    let visuals_placeholder = vec![VisualEvidence {
+        asset_ref: "placeholder".to_string(),
+        kind: "chart".to_string(),
+        source_url: "https://example.com/chart.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("CC-BY".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+    let r2 = evaluate_readiness_with_snapshot_text(
+        Some(&source),
+        Some(snapshot_text),
+        &claims,
+        &visuals_placeholder,
+        ContentOrigin::Article,
+    );
+    assert_eq!(r2.status, ReadinessStatus::NeedsVisualEvidence);
+
+    // 3. Directory traversal in asset_ref
+    let visuals_traversal = vec![VisualEvidence {
+        asset_ref: "../../etc/shadow.png".to_string(),
+        kind: "chart".to_string(),
+        source_url: "https://example.com/chart.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("CC-BY".to_string()),
+        provenance_status: Some("verified".to_string()),
+    }];
+    let r3 = evaluate_readiness_with_snapshot_text(
+        Some(&source),
+        Some(snapshot_text),
+        &claims,
+        &visuals_traversal,
+        ContentOrigin::Article,
+    );
+    assert_eq!(r3.status, ReadinessStatus::NeedsVisualEvidence);
 }

@@ -117,6 +117,24 @@ impl DailyNewsService {
         let thash = compute_title_hash(&raw.title);
         let topic = classify_topic_family(&raw.title, body_str.unwrap_or(""));
 
+        let snapshot_text = raw
+            .primary_source
+            .as_ref()
+            .and_then(|ps| ps.snapshot_ref.as_deref())
+            .and_then(|ref_str| {
+                self.capture
+                    .as_ref()
+                    .and_then(|cap| cap.read_snapshot_text(ref_str))
+            });
+
+        let readiness = crate::domain::evaluate_readiness_with_snapshot_text(
+            raw.primary_source.as_ref(),
+            snapshot_text.as_deref(),
+            &raw.claims,
+            &raw.visual_evidence,
+            raw.content_origin,
+        );
+
         Ok(NormalizedCandidate {
             candidate_id: format!("cand_{}", &chash[..16]),
             canonical_url: canonical.clone(),
@@ -168,12 +186,7 @@ impl DailyNewsService {
                 primary_source: raw.primary_source.clone(),
                 claims: raw.claims.clone(),
                 visual_evidence: raw.visual_evidence.clone(),
-                research_readiness: Some(crate::domain::evaluate_readiness(
-                    raw.primary_source.as_ref(),
-                    &raw.claims,
-                    &raw.visual_evidence,
-                    raw.content_origin,
-                )),
+                research_readiness: Some(readiness),
             },
         })
     }
@@ -247,6 +260,7 @@ impl DailyNewsService {
         if ranked.is_empty() {
             return None;
         }
+        self.storage.cache_candidates(&ranked);
         let c_len = ranked.len();
         Some(DiscoveryResult {
             tier: "tier_1_curated".to_string(),

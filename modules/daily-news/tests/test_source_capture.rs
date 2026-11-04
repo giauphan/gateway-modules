@@ -162,7 +162,7 @@ fn test_local_server_capture_snapshot_and_sha256() {
         if let Ok((mut stream, _)) = listener.accept() {
             let mut buf = [0u8; 1024];
             let _ = stream.read(&mut buf);
-            let body = "<html><head><title>Captured Article</title></head><body><p>Evidence-backed test article content for verification.</p></body></html>";
+            let body = "<html><head><title>Captured Article</title></head><body><p>Evidence-backed test article content for verification. This comprehensive report outlines the deterministic memory safety guarantees provided by native systems programming languages under high concurrency workloads.</p></body></html>";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

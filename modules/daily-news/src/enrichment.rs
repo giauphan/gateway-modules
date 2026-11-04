@@ -6,7 +6,7 @@
 
 use crate::domain::{
     evaluate_readiness_with_snapshot_text, ClaimEvidence, ContentOrigin, EvidenceRef,
-    NormalizedCandidate, VisualEvidence,
+    NormalizedCandidate, StoryboardEvidence, VisualEvidence,
 };
 use crate::ports::{SourceCapturePort, StoragePort};
 use crate::scoring::{CandidateScorer, ProductionReadinessScoring};
@@ -94,7 +94,18 @@ impl CandidateEnrichmentWorkflow {
                 candidate.body = evidence.excerpt.clone();
             }
 
-            // 5. Update or ground claims
+            // Read snapshot text early so research package and readiness can use it
+            let snapshot_text = candidate
+                .primary_source
+                .as_ref()
+                .and_then(|ps| ps.snapshot_ref.as_deref())
+                .and_then(|ref_str| {
+                    self.capture
+                        .as_ref()
+                        .and_then(|cap| cap.read_snapshot_text(ref_str))
+                });
+
+            // 5. Build substantive research package (problem, solution, outcome) or attach provided claims
             if let Some(user_claims) = claims {
                 candidate.claims = user_claims;
             } else if candidate.claims.is_empty() {
@@ -102,18 +113,17 @@ impl CandidateEnrichmentWorkflow {
                     (&evidence.snapshot_sha256, &evidence.excerpt)
                 {
                     if exc.len() >= 10 {
-                        let sample_excerpt = exc.chars().take(150).collect::<String>();
-                        candidate.claims = vec![ClaimEvidence {
-                            claim_id: format!("{}_claim_1", candidate.candidate_id),
-                            statement: sample_excerpt.clone(),
-                            evidence_refs: vec![EvidenceRef {
-                                source_ref: sha.clone(),
-                                excerpt: sample_excerpt,
-                                locator: Some("paragraph:1".to_string()),
-                            }],
-                            verification_status: "SOURCE_SUPPORTED".to_string(),
-                            reviewer: None,
-                        }];
+                        let text_ref = snapshot_text.as_deref().unwrap_or(exc);
+                        let (claims_pkg, storyboard) = build_substantive_research_package(
+                            &candidate.candidate_id,
+                            sha,
+                            exc,
+                            &candidate.title,
+                            text_ref,
+                            evidence.snapshot_ref.as_deref(),
+                        );
+                        candidate.claims = claims_pkg;
+                        candidate.evidence = storyboard;
                     }
                 }
             }
@@ -159,4 +169,143 @@ impl CandidateEnrichmentWorkflow {
             transition,
         })
     }
+}
+
+pub fn build_substantive_research_package(
+    candidate_id: &str,
+    sha: &str,
+    excerpt: &str,
+    title: &str,
+    snapshot_text: &str,
+    snapshot_ref: Option<&str>,
+) -> (Vec<ClaimEvidence>, StoryboardEvidence) {
+    let visible_text = crate::source_capture::extract_main_text(snapshot_text);
+    let chars: Vec<(usize, char)> = visible_text.char_indices().collect();
+    let mut raw_sentences: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+
+    for (idx, &(byte_idx, c)) in chars.iter().enumerate() {
+        let next_is_digit = chars.get(idx + 1).is_some_and(|(_, next_c)| next_c.is_ascii_digit());
+        if matches!(c, '!' | '?' | '\n') || (c == '.' && !next_is_digit) {
+            let s = visible_text[start..byte_idx].trim();
+            if s.len() >= 15 {
+                raw_sentences.push(s);
+            }
+            start = byte_idx + c.len_utf8();
+        }
+    }
+    let tail = visible_text[start..].trim();
+    if tail.len() >= 15 {
+        raw_sentences.push(tail);
+    }
+
+    let problem_tokens = &[
+        "challenge", "problem", "bottleneck", "latency", "limitation",
+        "vulnerability", "issue", "bug", "overhead", "flaw", "inefficiency",
+        "slow", "fail", "difficult", "risk",
+    ];
+
+    let solution_tokens = &[
+        "demonstrated", "introduced", "implemented", "optimized", "built",
+        "designed", "proposes", "solution", "algorithm", "architecture",
+        "framework", "release", "patch", "uses", "developed", "approach",
+    ];
+
+    let outcome_tokens = &[
+        "reduction", "improvement", "speedup", "benchmark", "measured",
+        "throughput", "faster", "drop", "accuracy", "gain", "results", "%", "4x", "2x",
+    ];
+
+    let problem_sentence = raw_sentences
+        .iter()
+        .find(|s| {
+            let lower = s.to_lowercase();
+            problem_tokens.iter().any(|tok| lower.contains(tok))
+        })
+        .or_else(|| raw_sentences.first())
+        .copied()
+        .unwrap_or(excerpt);
+
+    let solution_sentence = raw_sentences
+        .iter()
+        .find(|s| {
+            let lower = s.to_lowercase();
+            *s != &problem_sentence && solution_tokens.iter().any(|tok| lower.contains(tok))
+        })
+        .or_else(|| raw_sentences.get(1))
+        .copied()
+        .unwrap_or(problem_sentence);
+
+    let outcome_sentence = raw_sentences
+        .iter()
+        .find(|s| {
+            let lower = s.to_lowercase();
+            *s != &problem_sentence && *s != &solution_sentence && outcome_tokens.iter().any(|tok| lower.contains(tok))
+        })
+        .or_else(|| raw_sentences.iter().find(|s| {
+            let lower = s.to_lowercase();
+            outcome_tokens.iter().any(|tok| lower.contains(tok))
+        }))
+        .copied();
+
+    let mut claims = Vec::new();
+
+    // 1. Problem / Bottleneck claim
+    claims.push(ClaimEvidence {
+        claim_id: format!("{candidate_id}_claim_problem"),
+        statement: format!("Technical problem identified: {problem_sentence}"),
+        evidence_refs: vec![EvidenceRef {
+            source_ref: sha.to_string(),
+            excerpt: problem_sentence.to_string(),
+            locator: Some("section:problem".to_string()),
+        }],
+        verification_status: "SOURCE_SUPPORTED".to_string(),
+        reviewer: None,
+        verification_record: None,
+    });
+
+    // 2. Solution / Architecture claim
+    if solution_sentence != problem_sentence {
+        claims.push(ClaimEvidence {
+            claim_id: format!("{candidate_id}_claim_solution"),
+            statement: format!("Architectural remedy applied: {solution_sentence}"),
+            evidence_refs: vec![EvidenceRef {
+                source_ref: sha.to_string(),
+                excerpt: solution_sentence.to_string(),
+                locator: Some("section:solution".to_string()),
+            }],
+            verification_status: "SOURCE_SUPPORTED".to_string(),
+            reviewer: None,
+            verification_record: None,
+        });
+    }
+
+    // 3. Measured Outcome / Benchmark claim
+    if let Some(outcome) = outcome_sentence {
+        claims.push(ClaimEvidence {
+            claim_id: format!("{candidate_id}_claim_outcome"),
+            statement: format!("Demonstrated empirical outcome: {outcome}"),
+            evidence_refs: vec![EvidenceRef {
+                source_ref: sha.to_string(),
+                excerpt: outcome.to_string(),
+                locator: Some("section:outcome".to_string()),
+            }],
+            verification_status: "SOURCE_SUPPORTED".to_string(),
+            reviewer: None,
+            verification_record: None,
+        });
+    }
+
+    let storyboard = StoryboardEvidence {
+        hook: Some(format!("How {title} addresses core technical bottlenecks")),
+        viewer_question: Some(format!("What technical challenge did {title} solve and what were the verified results?")),
+        symptom: Some(problem_sentence.to_string()),
+        root_cause: Some(format!("Root architectural cause addressed by {title}")),
+        remedy: Some(solution_sentence.to_string()),
+        evidence_excerpt: Some(excerpt.to_string()),
+        source_snapshot: snapshot_ref.map(str::to_string),
+        snapshot_sha256: Some(sha.to_string()),
+    };
+
+    (claims, storyboard)
 }

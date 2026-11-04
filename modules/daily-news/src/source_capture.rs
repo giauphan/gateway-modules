@@ -413,10 +413,11 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
             let main_text = extract_main_text(&text_content);
             let excerpt: String = main_text.chars().take(500).collect();
 
-            let (fetch_status, content_quality) = match crate::content_quality::evaluate_content_quality(
+            let (fetch_status, content_quality) = match crate::content_quality::evaluate_content_quality_with_source(
                 page_title.as_deref(),
                 &text_content,
                 &main_text,
+                Some(&current_url),
             ) {
                 Ok(q) => ("SUCCESS".to_string(), Some(q)),
                 Err(e) => (format!("QUALITY_GATE_FAILED: {e}"), Some("QUALITY_GATE_FAILED".to_string())),
