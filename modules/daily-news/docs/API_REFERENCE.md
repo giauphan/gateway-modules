@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.7.1).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.8.0).
 
 ---
 
@@ -431,7 +431,72 @@ curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/enrich \
 
 ---
 
-### 3.12. Evidence Snapshot Retrieval
+### 3.12. Candidate Persistent Enrichment Workflow
+Enriches an existing candidate by `candidate_id`, captures its primary source, evaluates content quality gates against anti-bot interstitials, grounds claims, validates visual evidence, updates the candidate's research readiness (e.g. to `VIDEO_READY`), and updates the persistent cache.
+
+- **Route**: `POST /api/v1/enrich-candidate` or `POST /api/v1/enrich` (with `candidate_id`)
+- **Gateway**: `/custom/daily-news/api/v1/enrich-candidate`
+
+#### Example Request
+```bash
+curl -s -X POST http://127.0.0.1:28130/custom/daily-news/api/v1/enrich-candidate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "candidate_id": "cand_2bad0815c06b65db",
+    "override_url": "https://example.com/article",
+    "claims": [
+      {
+        "claim_id": "c1",
+        "statement": "4x reduction in cache latency",
+        "evidence_refs": [{
+          "source_ref": "2bad0815c06b65dbe5d27759f1e92852a96473001e0daf2f98f32ced70444d72",
+          "excerpt": "4x reduction in cache latency using deterministic memory management.",
+          "locator": "paragraph:1"
+        }],
+        "verification_status": "INDEPENDENTLY_VERIFIED",
+        "reviewer": "Benchmark Lab QA"
+      }
+    ],
+    "visual_evidence": [
+      {
+        "asset_ref": "vis_1",
+        "kind": "chart",
+        "source_url": "https://example.com/chart.png",
+        "license_status": "cc-by",
+        "provenance_status": "verified"
+      }
+    ]
+  }'
+```
+
+#### Example Response (200 OK)
+```json
+{
+  "candidate": {
+    "candidate_id": "cand_2bad0815c06b65db",
+    "title": "Architectural Scaling with Rust & LLMs",
+    "research_readiness": {
+      "status": "VIDEO_READY",
+      "reasons": ["All primary source, claim, and visual verification criteria satisfied"],
+      "missing_fields": [],
+      "contract_version": "2.0"
+    }
+  },
+  "production_scoring": {
+    "verified_claim_count": 1,
+    "source_quality": 1.0,
+    "independent_confirmation_count": 1,
+    "visual_asset_readiness": 1.0,
+    "production_readiness_score": 1.0,
+    "is_video_production_ready": true
+  },
+  "transition": "NEEDS_SOURCE -> VIDEO_READY"
+}
+```
+
+---
+
+### 3.13. Evidence Snapshot Retrieval
 Retrieves the saved raw text/snapshot content for a given verified SHA-256 hash.
 
 - **Route**: `GET /api/v1/evidence` or `POST /api/v1/evidence`

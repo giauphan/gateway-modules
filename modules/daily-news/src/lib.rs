@@ -12,10 +12,12 @@
 //! - `ui`: Responsive HTML dashboard presenter.
 
 pub mod arctic;
+pub mod content_quality;
 pub mod date;
 pub mod discovery;
 pub mod discussion;
 pub mod domain;
+pub mod enrichment;
 pub mod fetcher;
 pub mod hn;
 pub mod ports;
@@ -34,6 +36,7 @@ pub use arctic::*;
 pub use discovery::*;
 pub use discussion::*;
 pub use domain::*;
+pub use enrichment::*;
 pub use fetcher::*;
 pub use hn::*;
 pub use ports::*;

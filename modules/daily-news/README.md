@@ -32,7 +32,8 @@ The module is **100% Native Rust** with **zero Python dependencies**.
 - **Deterministic Deduplication & Hashing**: Computes authoritative SHA-256 `title_hash` and `content_hash` signatures.
 - **Explainable 6-Axis Scoring**: Computes objective scores across Freshness, Publisher Authority, Fact Density, Visual Potential, Audience Interest, and Feasibility.
 - **Tiered Cascade Discovery**: Employs Tier 1 (Curated Queue) -> Tier 2 (Automated Breaking Feed) -> Tier 3 (Fail-Closed Safety).
-- **Interactive Dark-Mode UI**: Built-in responsive HTML status dashboard mounted at `/ui` or `/custom/daily-news`.
+- **Interactive Dark-Mode UI**: Built-in responsive HTML status dashboard mounted at `/ui` or `/custom/daily-news` with contextual XSS output-escaping and safe URL scheme sanitization.
+- **Persistent Candidate Enrichment**: Stateful `/api/v1/enrich-candidate` workflow that grounds primary sources, checks anti-bot quality gates, validates claims & visual assets, and advances candidates toward `VIDEO_READY`.
 
 ---
 
@@ -73,6 +74,8 @@ modules/daily-news/
     ├── rpc.rs          # Interface Adapter: JSON-RPC stdio protocol framing & request parsing
     ├── research_readiness.rs # Domain Service: Truthful readiness evaluation, claim citation checking
     ├── source_capture.rs # Network Adapter: SSRF-guarded primary source capture & SHA-256 snapshot storage
+    ├── content_quality.rs # Domain Service: Anti-bot challenge detection and substantive article quality gates
+    ├── enrichment.rs   # Application Layer: Stateful candidate enrichment workflow & pipeline state transitions
     └── main.rs         # Frameworks & Drivers: stdio-stream JSON-RPC composition root & event loop
 ```
 

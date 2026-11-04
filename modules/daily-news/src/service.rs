@@ -72,6 +72,21 @@ impl DailyNewsService {
         }
     }
 
+    pub fn enrich_candidate(
+        &self,
+        candidate_id: &str,
+        override_url: Option<&str>,
+        claims: Option<Vec<crate::domain::ClaimEvidence>>,
+        visuals: Option<Vec<crate::domain::VisualEvidence>>,
+    ) -> Result<crate::enrichment::EnrichedCandidateResponse, String> {
+        let workflow = crate::enrichment::CandidateEnrichmentWorkflow::new(
+            self.storage.clone(),
+            self.capture.clone(),
+            CandidateScorer::default(),
+        );
+        workflow.enrich_candidate(candidate_id, override_url, claims, visuals)
+    }
+
     pub fn normalize_item(&self, raw: &RawNewsItem) -> Result<NormalizedCandidate, String> {
         if raw.id.trim().is_empty() {
             return Err("Raw item missing required 'id'".to_string());

@@ -198,6 +198,10 @@ fn handle_discussion(service: &DailyNewsService, body: &Value) -> Value {
 }
 
 fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
+    if let Some(cid) = body["candidate_id"].as_str().filter(|s| !s.trim().is_empty()) {
+        return handle_enrich_candidate(service, cid, body);
+    }
+
     let url = body["url"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -212,12 +216,33 @@ fn handle_enrich(service: &DailyNewsService, body: &Value) -> Value {
     if url.trim().is_empty() {
         return make_json_resp(
             400,
-            json!({ "error": "Missing required parameter: 'url', 'source_url', or 'canonical_url'" }),
+            json!({ "error": "Missing required parameter: 'candidate_id', 'url', 'source_url', or 'canonical_url'" }),
         );
     }
 
     match service.capture_primary_source(url) {
         Ok(evidence) => make_json_resp(200, json!(evidence)),
+        Err(e) => make_json_resp(400, json!({ "error": e })),
+    }
+}
+
+fn handle_enrich_candidate(service: &DailyNewsService, candidate_id: &str, body: &Value) -> Value {
+    let override_url = body["url"]
+        .as_str()
+        .or_else(|| body["override_url"].as_str())
+        .filter(|s| !s.trim().is_empty());
+
+    let claims = body["claims"]
+        .as_array()
+        .and_then(|arr| serde_json::from_value(json!(arr)).ok());
+
+    let visuals = body["visual_evidence"]
+        .as_array()
+        .or_else(|| body["visuals"].as_array())
+        .and_then(|arr| serde_json::from_value(json!(arr)).ok());
+
+    match service.enrich_candidate(candidate_id, override_url, claims, visuals) {
+        Ok(resp) => make_json_resp(200, json!(resp)),
         Err(e) => make_json_resp(400, json!({ "error": e })),
     }
 }
@@ -308,6 +333,14 @@ fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Va
         "/api/v1/candidates" | "/candidates" => handle_candidates(service, &method, &body, limit),
         "/api/v1/feed" | "/feed" => handle_feed(service, &body, limit),
         "/api/v1/discussion" | "/discussion" => handle_discussion(service, &body),
+        "/api/v1/enrich-candidate" | "/enrich-candidate" => {
+            let cid = body["candidate_id"].as_str().unwrap_or("");
+            if cid.trim().is_empty() {
+                make_json_resp(400, json!({ "error": "Missing required parameter: 'candidate_id'" }))
+            } else {
+                handle_enrich_candidate(service, cid, &body)
+            }
+        }
         "/api/v1/enrich" | "/enrich" | "/api/v1/capture" | "/capture" => {
             handle_enrich(service, &body)
         }

@@ -79,7 +79,7 @@ impl LiveFeedFetcher {
     }
 }
 
-fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> String {
+fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> (String, crate::domain::PublishedAtKind) {
     let candidates = [
         &raw["published_at"],
         &raw["pubDate"],
@@ -96,9 +96,9 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> String {
                     } else {
                         num
                     };
-                    return format_utc_timestamp(secs);
+                    return (format_utc_timestamp(secs), crate::domain::PublishedAtKind::ArticlePublication);
                 }
-                return trimmed.to_string();
+                return (trimmed.to_string(), crate::domain::PublishedAtKind::ArticlePublication);
             }
         }
         if let Some(num) = c.as_u64() {
@@ -107,10 +107,10 @@ fn resolve_newsnow_timestamp(raw: &Value, root: &Value) -> String {
             } else {
                 num
             };
-            return format_utc_timestamp(secs);
+            return (format_utc_timestamp(secs), crate::domain::PublishedAtKind::ArticlePublication);
         }
     }
-    current_utc_timestamp()
+    (current_utc_timestamp(), crate::domain::PublishedAtKind::FeedObserved)
 }
 
 pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNewsItem> {
@@ -137,7 +137,7 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
         };
 
         let publisher = extract_domain(&url);
-        let pub_timestamp = resolve_newsnow_timestamp(raw, val);
+        let (pub_timestamp, published_at_kind) = resolve_newsnow_timestamp(raw, val);
 
         let mut extra = HashMap::new();
         if let Some(obj) = raw["extra"].as_object() {
@@ -207,7 +207,7 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
         item.discussion_url = disc_url;
         item.content_kind = Some("news".to_string());
         item.content_origin = origin;
-        item.published_at_kind = crate::domain::PublishedAtKind::FeedObserved;
+        item.published_at_kind = published_at_kind;
         item.evidence.hook = Some(title);
         item.hook_origin = Some("raw_headline".to_string());
         if has_full_body {

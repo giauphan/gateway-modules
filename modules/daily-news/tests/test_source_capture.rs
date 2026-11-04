@@ -183,6 +183,7 @@ fn test_local_server_capture_snapshot_and_sha256() {
         .expect("Capture should succeed");
 
     assert_eq!(result.fetch_status, "SUCCESS");
+    assert_eq!(result.content_quality.as_deref(), Some("ARTICLE_CONTENT_VALID"));
     assert_eq!(result.title.as_deref(), Some("Captured Article"));
     assert!(result
         .excerpt
@@ -338,6 +339,80 @@ fn test_oversized_payload_returns_payload_too_large() {
     assert!(result.fetch_status.contains("PAYLOAD_TOO_LARGE"));
     assert_eq!(result.snapshot_ref, None);
     assert_eq!(result.snapshot_sha256, None);
+
+    let _ = server_handle.join();
+    let _ = fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_anti_bot_challenge_fails_quality_gate() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral test server");
+    let port = listener.local_addr().unwrap().port();
+
+    let server_handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let body = "<html><head><title>Attention Required! | Cloudflare</title></head><body><div class='cf-browser-verification'>Please verify you are a human</div></body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    });
+
+    let tmp_dir = std::env::temp_dir().join(format!("test_antibot_{port}"));
+    let adapter = HttpSourceCaptureAdapter::new(&tmp_dir).with_allow_http(true);
+
+    let test_url = format!("http://127.0.0.1:{port}/blocked");
+    let result = adapter
+        .capture_source(&test_url)
+        .expect("Should handle safely");
+
+    assert!(result.fetch_status.contains("QUALITY_GATE_FAILED"));
+    assert_eq!(result.content_quality.as_deref(), Some("QUALITY_GATE_FAILED"));
+    assert_ne!(result.fetch_status, "SUCCESS");
+
+    let _ = server_handle.join();
+    let _ = fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_insufficient_body_fails_quality_gate() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral test server");
+    let port = listener.local_addr().unwrap().port();
+
+    let server_handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let body = "<html><head><title>Empty Shell</title></head><body><nav><a href='/'>Home</a></nav></body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    });
+
+    let tmp_dir = std::env::temp_dir().join(format!("test_empty_shell_{port}"));
+    let adapter = HttpSourceCaptureAdapter::new(&tmp_dir).with_allow_http(true);
+
+    let test_url = format!("http://127.0.0.1:{port}/empty");
+    let result = adapter
+        .capture_source(&test_url)
+        .expect("Should handle safely");
+
+    assert!(result.fetch_status.contains("QUALITY_GATE_FAILED"));
+    assert_eq!(result.content_quality.as_deref(), Some("QUALITY_GATE_FAILED"));
+    assert_ne!(result.fetch_status, "SUCCESS");
 
     let _ = server_handle.join();
     let _ = fs::remove_dir_all(&tmp_dir);

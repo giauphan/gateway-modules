@@ -4,6 +4,7 @@
 //! facts from community discussions, and guards video production readiness.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +88,8 @@ impl Default for DiscussionPayload {
 pub struct PrimarySourceEvidence {
     pub url: String,
     pub fetch_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_quality: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +192,16 @@ pub fn evaluate_readiness(
     primary_source: Option<&PrimarySourceEvidence>,
     claims: &[ClaimEvidence],
     visuals: &[VisualEvidence],
+    origin: ContentOrigin,
+) -> ResearchReadiness {
+    evaluate_readiness_with_snapshot_text(primary_source, None, claims, visuals, origin)
+}
+
+pub fn evaluate_readiness_with_snapshot_text(
+    primary_source: Option<&PrimarySourceEvidence>,
+    snapshot_text: Option<&str>,
+    claims: &[ClaimEvidence],
+    visuals: &[VisualEvidence],
     _origin: ContentOrigin,
 ) -> ResearchReadiness {
     let mut reasons = Vec::new();
@@ -218,6 +231,30 @@ pub fn evaluate_readiness(
         };
     }
 
+    let primary_sha = primary_source
+        .and_then(|s| s.snapshot_sha256.as_deref())
+        .map(|h| h.trim().to_ascii_lowercase());
+
+    // If snapshot text is supplied, verify actual SHA-256 against declared primary hash
+    if let (Some(text), Some(ref expected_sha)) = (snapshot_text, &primary_sha) {
+        let computed_sha = Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        if &computed_sha != expected_sha {
+            reasons.push(format!(
+                "Snapshot SHA-256 mismatch against stored primary source (expected {expected_sha}, computed {computed_sha})"
+            ));
+            missing.push("valid_snapshot_sha256".to_string());
+            return ResearchReadiness {
+                status: ReadinessStatus::NeedsSource,
+                reasons,
+                missing_fields: missing,
+                contract_version: "2.0".to_string(),
+            };
+        }
+    }
+
     if claims.is_empty() {
         reasons.push("No grounded claims supported by captured primary source".to_string());
         missing.push("claims".to_string());
@@ -229,33 +266,42 @@ pub fn evaluate_readiness(
         };
     }
 
-    let primary_sha = primary_source
-        .and_then(|s| s.snapshot_sha256.as_deref())
-        .map(|h| h.trim().to_ascii_lowercase());
+    // Verify evidence references and grounding
+    let mut all_claims_grounded = true;
+    for c in claims {
+        let valid_status = c.verification_status == "SOURCE_SUPPORTED"
+            || c.verification_status == "INDEPENDENTLY_VERIFIED";
+        if !valid_status || c.evidence_refs.is_empty() {
+            all_claims_grounded = false;
+            break;
+        }
 
-    let all_supported = claims.iter().all(|c| {
-        (c.verification_status == "SOURCE_SUPPORTED"
-            || c.verification_status == "INDEPENDENTLY_VERIFIED")
-            && !c.evidence_refs.is_empty()
-            && c.evidence_refs.iter().all(|r| {
-                let has_locator = r
-                    .locator
-                    .as_deref()
-                    .is_some_and(|loc| !loc.trim().is_empty());
-                let has_excerpt = !r.excerpt.trim().is_empty();
-                let matches_source = match primary_sha.as_deref() {
-                    Some(sha) => {
-                        let ref_str = r.source_ref.trim().to_ascii_lowercase();
-                        !ref_str.is_empty() && ref_str == sha
-                    }
-                    None => false,
-                };
-                has_locator && has_excerpt && matches_source
-            })
-    });
+        for r in &c.evidence_refs {
+            let has_locator = r
+                .locator
+                .as_deref()
+                .is_some_and(|loc| !loc.trim().is_empty());
+            let has_excerpt = r.excerpt.trim().len() >= 10;
+            let ref_str = r.source_ref.trim().to_ascii_lowercase();
+            let matches_source = primary_sha.as_deref() == Some(&ref_str)
+                || (ref_str.len() == 64 && ref_str.chars().all(|ch| ch.is_ascii_hexdigit()));
 
-    if !all_supported {
-        reasons.push("One or more claims lack validated evidence references".to_string());
+            let excerpt_in_snapshot = match snapshot_text {
+                Some(text) if primary_sha.as_deref() == Some(&ref_str) => {
+                    text.contains(r.excerpt.trim())
+                }
+                _ => true,
+            };
+
+            if !has_locator || !has_excerpt || !matches_source || !excerpt_in_snapshot {
+                all_claims_grounded = false;
+                break;
+            }
+        }
+    }
+
+    if !all_claims_grounded {
+        reasons.push("One or more claims lack validated evidence references or are not found in primary source".to_string());
         missing.push("valid_evidence_refs".to_string());
         return ResearchReadiness {
             status: ReadinessStatus::NeedsResearch,
@@ -265,11 +311,31 @@ pub fn evaluate_readiness(
         };
     }
 
-    let has_independent_check = claims
-        .iter()
-        .any(|c| c.verification_status == "INDEPENDENTLY_VERIFIED");
-    if !has_independent_check {
-        reasons.push("Independent verification has not been run".to_string());
+    // Independent fact-check verification:
+    // Raw inputs cannot self-report INDEPENDENTLY_VERIFIED without an accredited reviewer or an independent secondary source!
+    let has_valid_independent_check = claims.iter().any(|c| {
+        if c.verification_status != "INDEPENDENTLY_VERIFIED" {
+            return false;
+        }
+
+        let has_independent_reviewer = c.reviewer.as_deref().is_some_and(|r| {
+            let tr = r.trim().to_lowercase();
+            !tr.is_empty() && tr != "self" && tr != "unreviewed" && tr != "none"
+        });
+
+        let has_secondary_source_ref = c.evidence_refs.iter().any(|r| {
+            let ref_str = r.source_ref.trim().to_ascii_lowercase();
+            match primary_sha.as_deref() {
+                Some(p_sha) => ref_str != p_sha && ref_str.len() == 64,
+                None => false,
+            }
+        });
+
+        has_independent_reviewer || has_secondary_source_ref
+    });
+
+    if !has_valid_independent_check {
+        reasons.push("Independent verification has not been run or lacks accredited reviewer/secondary source".to_string());
         missing.push("independent_fact_check".to_string());
         return ResearchReadiness {
             status: ReadinessStatus::NeedsVerification,
@@ -279,9 +345,18 @@ pub fn evaluate_readiness(
         };
     }
 
+    // Strict visual evidence validation:
+    // Must be non-empty, safe HTTP/HTTPS URL scheme (no javascript:), verified provenance, and approved license.
     let visuals_verified = !visuals.is_empty()
         && visuals.iter().all(|v| {
             let has_asset = !v.asset_ref.trim().is_empty() || !v.source_url.trim().is_empty();
+            let safe_url = if !v.source_url.trim().is_empty() {
+                let trimmed = v.source_url.trim().to_lowercase();
+                trimmed.starts_with("https://") || trimmed.starts_with("http://")
+            } else {
+                true
+            };
+
             let valid_provenance = matches!(
                 v.provenance_status
                     .as_deref()
@@ -289,6 +364,7 @@ pub fn evaluate_readiness(
                     .as_deref(),
                 Some("verified") | Some("authoritative") | Some("licensed") | Some("approved")
             );
+
             let approved_license =
                 match v.license_status.as_deref().map(|s| s.trim().to_lowercase()) {
                     Some(lic) => matches!(
@@ -307,11 +383,12 @@ pub fn evaluate_readiness(
                     ),
                     None => false,
                 };
-            has_asset && valid_provenance && approved_license
+
+            has_asset && safe_url && valid_provenance && approved_license
         });
 
     if !visuals_verified {
-        reasons.push("No verified visual evidence assets available".to_string());
+        reasons.push("No verified visual evidence assets available (assets must have approved license and valid scheme)".to_string());
         missing.push("visual_evidence".to_string());
         return ResearchReadiness {
             status: ReadinessStatus::NeedsVisualEvidence,

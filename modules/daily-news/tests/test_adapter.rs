@@ -396,6 +396,31 @@ fn test_adapter_evidence_not_found() {
 }
 
 #[test]
+fn test_adapter_enrich_candidate_endpoint_validation() {
+    // Missing candidate_id -> 400
+    let req = json!({
+        "path": "/api/v1/enrich-candidate",
+        "method": "POST",
+        "body": serde_json::to_string(&json!({})).unwrap()
+    });
+    let resp = send_rpc_request(req);
+    assert_eq!(resp["status"], 400);
+
+    // Nonexistent candidate_id -> 400 with descriptive error
+    let req2 = json!({
+        "path": "/api/v1/enrich-candidate",
+        "method": "POST",
+        "body": serde_json::to_string(&json!({
+            "candidate_id": "cand_nonexistent_12345"
+        })).unwrap()
+    });
+    let resp2 = send_rpc_request(req2);
+    assert_eq!(resp2["status"], 400);
+    let body: Value = serde_json::from_str(resp2["body"].as_str().unwrap()).unwrap();
+    assert!(body["error"].as_str().unwrap().contains("Candidate not found"));
+}
+
+#[test]
 #[ignore = "requires live external internet access"]
 fn test_adapter_discussion_endpoint_live() {
     let req = json!({

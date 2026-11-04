@@ -135,6 +135,16 @@ impl CandidateScorer {
         }
     }
 
+    pub fn score_freshness_with_kind(&self, pub_epoch: u64, kind: Option<&str>) -> f64 {
+        if let Some(k) = kind {
+            let k_lower = k.to_lowercase();
+            if k_lower == "feed_observed" || k_lower == "unknown" {
+                return 0.40;
+            }
+        }
+        self.score_freshness(pub_epoch)
+    }
+
     pub fn score_publisher(&self, norm_pub: &str) -> f64 {
         let p = norm_pub.to_lowercase();
         let p_trimmed = p.trim();
@@ -208,7 +218,7 @@ impl CandidateScorer {
 
     pub fn score_candidate(&self, candidate: &NormalizedCandidate) -> CandidateScoring {
         let pub_epoch = parse_iso_to_epoch(&candidate.published_at_utc).unwrap_or(0);
-        let freshness = self.score_freshness(pub_epoch);
+        let freshness = self.score_freshness_with_kind(pub_epoch, Some(&candidate.published_at_kind));
         let publisher = self.score_publisher(&candidate.normalized_publisher);
 
         let body_str = candidate
@@ -310,6 +320,69 @@ impl CandidateScorer {
         candidates.truncate(limit);
         candidates
     }
+
+    pub fn score_production_readiness(&self, candidate: &NormalizedCandidate) -> ProductionReadinessScoring {
+        let verified_claims = candidate
+            .claims
+            .iter()
+            .filter(|c| c.verification_status == "SOURCE_SUPPORTED" || c.verification_status == "INDEPENDENTLY_VERIFIED")
+            .count();
+
+        let independent_confirmations = candidate
+            .claims
+            .iter()
+            .filter(|c| c.verification_status == "INDEPENDENTLY_VERIFIED")
+            .count();
+
+        let source_quality = match candidate.primary_source.as_ref() {
+            Some(s) if s.fetch_status == "SUCCESS" && s.snapshot_sha256.is_some() => {
+                if s.content_quality.as_deref() == Some("ARTICLE_CONTENT_VALID") {
+                    1.0
+                } else {
+                    0.7
+                }
+            }
+            _ => 0.0,
+        };
+
+        let visual_readiness = if !candidate.visual_evidence.is_empty() {
+            let valid = candidate.visual_evidence.iter().all(|v| {
+                v.provenance_status.as_deref().is_some_and(|s| s == "verified" || s == "licensed" || s == "authoritative")
+            });
+            if valid { 1.0 } else { 0.5 }
+        } else {
+            0.0
+        };
+
+        let is_ready = matches!(
+            candidate.research_readiness.as_ref().map(|r| r.status),
+            Some(crate::domain::ReadinessStatus::VideoReady)
+        );
+
+        let total = (source_quality * 0.35)
+            + ((verified_claims.min(5) as f64 / 5.0) * 0.25)
+            + ((independent_confirmations.min(3) as f64 / 3.0) * 0.20)
+            + (visual_readiness * 0.20);
+
+        ProductionReadinessScoring {
+            verified_claim_count: verified_claims,
+            source_quality: (source_quality * 100.0).round() / 100.0,
+            independent_confirmation_count: independent_confirmations,
+            visual_asset_readiness: (visual_readiness * 100.0).round() / 100.0,
+            production_readiness_score: (total * 10000.0).round() / 10000.0,
+            is_video_production_ready: is_ready,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ProductionReadinessScoring {
+    pub verified_claim_count: usize,
+    pub source_quality: f64,
+    pub independent_confirmation_count: usize,
+    pub visual_asset_readiness: f64,
+    pub production_readiness_score: f64,
+    pub is_video_production_ready: bool,
 }
 
 #[cfg(test)]
@@ -340,5 +413,22 @@ mod tests {
         assert_eq!(scorer.score_publisher("Reuters"), 1.0);
         assert_eq!(scorer.score_publisher("The Verge"), 0.8);
         assert_eq!(scorer.score_publisher("Unknown"), 0.2);
+    }
+
+    #[test]
+    fn test_observed_time_freshness_is_penalized() {
+        let ref_epoch = 1793618000;
+        let scorer = CandidateScorer::new(Some(ref_epoch));
+
+        // When time is synthesized from feed observation or unknown, freshness is capped at 0.40
+        let score_observed = scorer.score_freshness_with_kind(ref_epoch, Some("feed_observed"));
+        assert_eq!(score_observed, 0.40);
+
+        let score_unknown = scorer.score_freshness_with_kind(ref_epoch, Some("unknown"));
+        assert_eq!(score_unknown, 0.40);
+
+        // Genuine article publication timestamp within 1 hour receives full 1.0
+        let score_published = scorer.score_freshness_with_kind(ref_epoch, Some("article_publication"));
+        assert_eq!(score_published, 1.0);
     }
 }
