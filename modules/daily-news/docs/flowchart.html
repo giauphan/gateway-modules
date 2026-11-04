@@ -224,18 +224,6 @@
             animation: fadeIn 0.3s ease forwards;
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            .flow-view,
-            .flow-line {
-                animation: none !important;
-            }
-            .btn-action,
-            .tab-btn,
-            .node-rect {
-                transition: none !important;
-            }
-        }
-
         .flow-view.active {
             display: flex;
         }
@@ -448,6 +436,23 @@
             text-transform: uppercase;
             letter-spacing: 0.03em;
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            .flow-view,
+            .flow-line,
+            .flow-line.solid,
+            .flow-line.accent,
+            .flow-line.success,
+            .flow-line.danger {
+                animation: none;
+            }
+            .btn-action,
+            .tab-btn,
+            .node-rect,
+            .node-rect:hover {
+                transition: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -459,7 +464,7 @@
             <div>
                 <div class="brand-title">
                     Daily News Architecture Explorer
-                    <span class="badge-version">v1.6.1</span>
+                    <span class="badge-version">v1.7.1</span>
                     <span class="badge-engine">rust-native</span>
                 </div>
                 <div style="font-size: 0.75rem; color: var(--text-muted);">
