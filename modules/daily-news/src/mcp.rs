@@ -22,8 +22,18 @@ pub struct McpContentItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpToolResponse {
     pub content: Vec<McpContentItem>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "isError",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub is_error: bool,
+    #[serde(
+        default,
+        rename = "is_error",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub is_error_compat: bool,
 }
 
 impl McpToolResponse {
@@ -34,6 +44,7 @@ impl McpToolResponse {
                 text,
             }],
             is_error: false,
+            is_error_compat: false,
         }
     }
 
@@ -44,6 +55,7 @@ impl McpToolResponse {
                 text: message.into(),
             }],
             is_error: true,
+            is_error_compat: true,
         }
     }
 }
@@ -250,15 +262,114 @@ pub fn dispatch_mcp_tool(
     }
 }
 
+pub fn handle_jsonrpc_mcp_request(
+    service: &DailyNewsService,
+    base_dir: &Path,
+    body: &Value,
+) -> Value {
+    let id = body.get("id").cloned().unwrap_or(Value::Null);
+    let method = body["method"].as_str().unwrap_or("").trim();
+
+    match method {
+        "initialize" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": { "listChanged": false }
+                    },
+                    "serverInfo": {
+                        "name": "daily-news",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }
+            });
+            make_json_resp(200, res)
+        }
+        "notifications/initialized" | "ping" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {}
+            });
+            make_json_resp(200, res)
+        }
+        "tools/list" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": get_mcp_tools_list()
+                }
+            });
+            make_json_resp(200, res)
+        }
+        "tools/call" => {
+            let params = &body["params"];
+            let tool_name = params["name"]
+                .as_str()
+                .or_else(|| body["name"].as_str())
+                .unwrap_or("")
+                .trim();
+
+            if tool_name.is_empty() {
+                let err_res = json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Missing required parameter 'name' in tools/call params"
+                    }
+                });
+                return make_json_resp(400, err_res);
+            }
+
+            let arguments = params
+                .get("arguments")
+                .or_else(|| body.get("arguments"))
+                .unwrap_or(params);
+
+            let result = dispatch_mcp_tool(service, base_dir, tool_name, arguments);
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": result.content,
+                    "isError": result.is_error
+                }
+            });
+            make_json_resp(200, res)
+        }
+        other => {
+            let err_res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32601,
+                    "message": format!("Method not found: '{other}'")
+                }
+            });
+            make_json_resp(404, err_res)
+        }
+    }
+}
+
 pub fn handle_mcp_tool_request(
     service: &DailyNewsService,
     base_dir: &Path,
     body: &Value,
     header_tool: Option<&str>,
 ) -> Value {
+    if body.get("jsonrpc").is_some() {
+        return handle_jsonrpc_mcp_request(service, base_dir, body);
+    }
+
     let tool_name = header_tool
         .or_else(|| body["name"].as_str())
         .or_else(|| body["tool"].as_str())
+        .or_else(|| body["params"]["name"].as_str())
         .or_else(|| {
             body["method"]
                 .as_str()
@@ -274,6 +385,7 @@ pub fn handle_mcp_tool_request(
 
     let arguments = body
         .get("arguments")
+        .or_else(|| body["params"].get("arguments"))
         .or_else(|| body.get("params"))
         .unwrap_or(body);
 
@@ -282,131 +394,4 @@ pub fn handle_mcp_tool_request(
     make_json_resp(status, json!(result))
 }
 
-pub fn get_mcp_tools_list() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "discover_candidates",
-            "description": "Discover and score fresh tech and AI news candidates filtered by topic, date window, and quality thresholds.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topics": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional list of topics (e.g. ['rust', 'llm', 'security'])"
-                    },
-                    "from_date": {
-                        "type": "string",
-                        "description": "ISO 8601 start date timestamp (e.g. '2026-11-01T00:00:00Z')"
-                    },
-                    "to_date": {
-                        "type": "string",
-                        "description": "ISO 8601 end date timestamp (e.g. '2026-11-04T00:00:00Z')"
-                    },
-                    "sources": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional feed sources (e.g. ['hackernews', 'reddit'])"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 10,
-                        "description": "Maximum number of candidate articles to return"
-                    }
-                }
-            }
-        }),
-        json!({
-            "name": "get_candidate",
-            "description": "Retrieve full candidate details, research evidence fields, and publication metadata by candidate ID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {
-                        "type": "string",
-                        "description": "Unique canonical candidate identifier (e.g. 'cand_0123456789abcdef')"
-                    }
-                },
-                "required": ["candidate_id"]
-            }
-        }),
-        json!({
-            "name": "enrich_candidate",
-            "description": "Enrich a candidate article with captured primary source snapshot, structured claims, and visual evidence.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {
-                        "type": "string",
-                        "description": "Candidate ID to enrich"
-                    },
-                    "override_url": {
-                        "type": "string",
-                        "description": "Optional explicit primary source URL if different from discovery canonical URL"
-                    },
-                    "claims": {
-                        "type": "array",
-                        "description": "List of grounded factual claims extracted from the article"
-                    },
-                    "visual_evidence": {
-                        "type": "array",
-                        "description": "List of validated visual assets (charts, diagrams, code blocks)"
-                    }
-                },
-                "required": ["candidate_id"]
-            }
-        }),
-        json!({
-            "name": "verify_research_readiness",
-            "description": "Score video production readiness (VIDEO_READY, NEEDS_RESEARCH, NEEDS_VERIFICATION, NEEDS_VISUAL_EVIDENCE) with strict evidence grounding.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {
-                        "type": "string",
-                        "description": "Candidate ID to evaluate for video production readiness"
-                    }
-                },
-                "required": ["candidate_id"]
-            }
-        }),
-        json!({
-            "name": "get_evidence_snapshot",
-            "description": "Fetch the immutable, SHA-256 content-addressed text snapshot of a captured primary or secondary source.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "sha256": {
-                        "type": "string",
-                        "pattern": "^[a-fA-F0-9]{64}$",
-                        "description": "64-character hex SHA-256 hash of the snapshot artifact"
-                    }
-                },
-                "required": ["sha256"]
-            }
-        }),
-        json!({
-            "name": "get_discussion",
-            "description": "Retrieve community reactions, commentary trees, and sentiment for a news story (explicitly marked as community opinion, not factual support).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "url_or_id": {
-                        "type": "string",
-                        "description": "Discussion URL or post ID (e.g. Hacker News story ID or Reddit permalink)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "default": 20,
-                        "description": "Maximum number of comments to retrieve"
-                    }
-                },
-                "required": ["url_or_id"]
-            }
-        }),
-    ]
-}
+pub use crate::mcp_schema::get_mcp_tools_list;

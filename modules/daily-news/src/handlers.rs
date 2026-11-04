@@ -360,11 +360,15 @@ pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -
     let route = path.strip_prefix("/custom/daily-news").unwrap_or(path);
 
     match route {
-        "/tools/call" | "/api/v1/tools/call" => {
+        "/mcp" | "/api/v1/mcp" | "/tools/call" | "/api/v1/tools/call" => {
             handle_mcp_tool_request(service, base_dir, &body, header_tool)
         }
         "/tools/list" | "/api/v1/tools/list" => {
-            make_json_resp(200, json!({ "tools": get_mcp_tools_list() }))
+            if body.get("jsonrpc").is_some() {
+                handle_mcp_tool_request(service, base_dir, &body, header_tool)
+            } else {
+                make_json_resp(200, json!({ "tools": get_mcp_tools_list() }))
+            }
         }
         "/health" | "/api/v1/health" => handle_health(service),
         "/models" | "/api/v1/models" => handle_models(),

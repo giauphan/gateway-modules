@@ -21,7 +21,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn main() {
-    let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let base_dir = std::env::var("DAILY_NEWS_BASE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if cur.join("modules").join("daily-news").is_dir() {
+                cur.join("modules").join("daily-news")
+            } else {
+                cur
+            }
+        });
     let storage = Arc::new(FileStorageAdapter::new(&base_dir));
     let initial_config = storage.load_config();
     let redis_provider = initial_config.redis_enabled.then(|| {

@@ -170,18 +170,23 @@ impl DailyNewsService {
         to_epoch: Option<u64>,
         topics: Option<&[String]>,
         count: usize,
-    ) -> Option<DiscoveryResult> {
-        let feed = curated?;
+    ) -> Result<Option<DiscoveryResult>, (String, String)> {
+        let feed = match curated {
+            Some(f) => f,
+            None => return Ok(None),
+        };
         if feed.is_empty() {
-            return None;
+            return Ok(None);
         }
         let ranked = self.filter_and_score(&feed, from_epoch, to_epoch, topics, count);
         if ranked.is_empty() {
-            return None;
+            return Ok(None);
         }
-        self.storage.cache_candidates(&ranked);
+        self.storage
+            .save_candidates(&ranked)
+            .map_err(|e| ("PERSISTENCE_ERROR".to_string(), format!("Failed to persist candidates: {e}")))?;
         let c_len = ranked.len();
-        Some(DiscoveryResult {
+        Ok(Some(DiscoveryResult {
             tier: "tier_1_curated".to_string(),
             status: "ELIGIBLE".to_string(),
             count: c_len,
@@ -189,7 +194,7 @@ impl DailyNewsService {
             source_file: Some("curated_feed".to_string()),
             reason: None,
             diagnostics: json!({ "tier": "tier_1_curated" }),
-        })
+        }))
     }
 
     fn try_live_tier(
@@ -199,7 +204,7 @@ impl DailyNewsService {
         to_epoch: Option<u64>,
         topics: Option<&[String]>,
         count: usize,
-    ) -> Option<DiscoveryResult> {
+    ) -> Result<Option<DiscoveryResult>, (String, String)> {
         let raw = match sources {
             Some(s) => self
                 .fetcher
@@ -212,11 +217,13 @@ impl DailyNewsService {
         };
         let ranked = self.filter_and_score(&raw, from_epoch, to_epoch, topics, count);
         if ranked.is_empty() {
-            return None;
+            return Ok(None);
         }
-        self.storage.cache_candidates(&ranked);
+        self.storage
+            .save_candidates(&ranked)
+            .map_err(|e| ("PERSISTENCE_ERROR".to_string(), format!("Failed to persist candidates: {e}")))?;
         let c_len = ranked.len();
-        Some(DiscoveryResult {
+        Ok(Some(DiscoveryResult {
             tier: "tier_2_automated".to_string(),
             status: "ELIGIBLE".to_string(),
             count: c_len,
@@ -224,7 +231,7 @@ impl DailyNewsService {
             source_file: Some("live_feeds".to_string()),
             reason: None,
             diagnostics: json!({ "tier": "tier_2_automated" }),
-        })
+        }))
     }
 
     fn try_cache_tier(
@@ -282,11 +289,11 @@ impl DailyNewsService {
     ) -> Result<DiscoveryResult, (String, String)> {
         let (from_epoch, to_epoch) = validate_date_bounds(from_date_str, to_date_str)?;
 
-        if let Some(res) = self.try_curated_tier(curated, from_epoch, to_epoch, topics, count) {
+        if let Some(res) = self.try_curated_tier(curated, from_epoch, to_epoch, topics, count)? {
             return Ok(res);
         }
         if let Some(res) =
-            self.try_live_tier(sources.as_deref(), from_epoch, to_epoch, topics, count)
+            self.try_live_tier(sources.as_deref(), from_epoch, to_epoch, topics, count)?
         {
             return Ok(res);
         }

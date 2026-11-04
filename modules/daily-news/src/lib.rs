@@ -22,6 +22,7 @@ pub mod fetcher;
 pub mod handlers;
 pub mod hn;
 pub mod mcp;
+pub mod mcp_schema;
 pub mod ports;
 pub mod reddit;
 pub mod redis;

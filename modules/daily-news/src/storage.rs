@@ -169,8 +169,28 @@ impl FileStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
         let config_path = base.join("config.json");
-        let state_dir = base.join(".state");
-        let _ = fs::create_dir_all(&state_dir);
+        let state_dir = std::env::var("DAILY_NEWS_STATE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let candidate = base.join(".state");
+                let is_writable = {
+                    let _ = fs::create_dir_all(&candidate);
+                    let test_file = candidate.join(format!(".wt_{}", uuid::Uuid::new_v4()));
+                    if fs::write(&test_file, b"ok").is_ok() {
+                        let _ = fs::remove_file(&test_file);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if is_writable {
+                    candidate
+                } else {
+                    let fallback = std::env::temp_dir().join("daily-news").join(".state");
+                    let _ = fs::create_dir_all(&fallback);
+                    fallback
+                }
+            });
 
         let initial_config = if config_path.is_file() {
             fs::read_to_string(&config_path)
@@ -222,32 +242,6 @@ impl FileStorageAdapter {
             }
         }
     }
-
-    fn persist_candidates(&self) -> Result<(), String> {
-        let _lock = match self.persist_mutex.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let candidates_path = self.state_dir.join("candidates.json");
-        let guard = self
-            .inner
-            .cached_candidates
-            .read()
-            .map_err(|e| format!("Failed to acquire read lock on cached_candidates: {e}"))?;
-        let unique_id = uuid::Uuid::new_v4();
-        let tmp_path = self.state_dir.join(format!("candidates.{unique_id}.tmp"));
-        let json = serde_json::to_string_pretty(&*guard)
-            .map_err(|e| format!("Failed to serialize candidates: {e}"))?;
-        fs::write(&tmp_path, json).map_err(|e| {
-            let _ = fs::remove_file(&tmp_path);
-            format!("Failed to write candidate state to {tmp_path:?}: {e}")
-        })?;
-        fs::rename(&tmp_path, &candidates_path).map_err(|e| {
-            let _ = fs::remove_file(&tmp_path);
-            format!("Failed to finalize candidate state to {candidates_path:?}: {e}")
-        })?;
-        Ok(())
-    }
 }
 
 impl StoragePort for FileStorageAdapter {
@@ -286,8 +280,48 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn save_candidates(&self, candidates: &[NormalizedCandidate]) -> Result<usize, String> {
-        self.inner.upsert_candidates(candidates);
-        self.persist_candidates()?;
+        let _lock = match self.persist_mutex.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // 1. Transactional isolation: build proposed candidate list without mutating RAM yet
+        let mut proposed = self.inner.get_cached_candidates();
+        for incoming in candidates {
+            if let Some(pos) = proposed
+                .iter()
+                .position(|c| c.candidate_id == incoming.candidate_id)
+            {
+                merge_candidate_entry(&mut proposed[pos], incoming);
+            } else {
+                proposed.push(incoming.clone());
+            }
+        }
+        trim_candidate_cache(&mut proposed, 300);
+
+        // 2. Write to disk first atomically
+        let _ = fs::create_dir_all(&self.state_dir);
+        let candidates_path = self.state_dir.join("candidates.json");
+        let unique_id = uuid::Uuid::new_v4();
+        let tmp_path = self.state_dir.join(format!("candidates.{unique_id}.tmp"));
+        let json = serde_json::to_string_pretty(&proposed)
+            .map_err(|e| format!("Failed to serialize candidates: {e}"))?;
+
+        fs::write(&tmp_path, json).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to write candidate state to {tmp_path:?}: {e}")
+        })?;
+
+        fs::rename(&tmp_path, &candidates_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to finalize candidate state to {candidates_path:?}: {e}")
+        })?;
+
+        // 3. ONLY after disk write & atomic rename succeed, commit to RAM cache!
+        if let Ok(mut guard) = self.inner.cached_candidates.write() {
+            *guard = proposed;
+        }
+
         Ok(candidates.len())
     }
 

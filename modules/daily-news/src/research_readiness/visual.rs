@@ -1,6 +1,6 @@
 //! Visual evidence validation, allowed licenses, and anti-traversal safety checks.
 
-use super::types::VisualEvidence;
+use super::types::{AssetResolver, VerifiedAssetRecord, VisualEvidence};
 
 pub const APPROVED_LICENSES: &[&str] = &[
     "cc-by",
@@ -108,6 +108,92 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
     valid_prov && approved_lic && valid_checksum && valid_license_evidence && verified_rights
 }
 
+pub fn verify_visual_asset_record(
+    v: &VisualEvidence,
+    asset_bytes: Option<&[u8]>,
+    license_doc: Option<&str>,
+) -> Result<VerifiedAssetRecord, String> {
+    if !is_visual_evidence_valid(v) {
+        return Err("Visual evidence metadata validation failed".to_string());
+    }
+
+    let expected_sha = v
+        .checksum_sha256
+        .as_deref()
+        .ok_or_else(|| "Missing checksum_sha256 on visual asset".to_string())?
+        .trim()
+        .to_ascii_lowercase();
+
+    let bytes_verified = match asset_bytes {
+        Some(bytes) => {
+            if bytes.is_empty() {
+                return Err("Visual asset bytes are empty".to_string());
+            }
+            let computed = crate::url::compute_sha256_bytes(bytes);
+            if computed != expected_sha {
+                return Err(format!(
+                    "Visual asset checksum mismatch: expected {expected_sha}, computed {computed}"
+                ));
+            }
+            true
+        }
+        None => false,
+    };
+
+    let license_verified = match license_doc {
+        Some(doc) => {
+            let tr = doc.trim();
+            if tr.is_empty() {
+                return Err("License evidence document is empty".to_string());
+            }
+            true
+        }
+        None => v.verified_rights.unwrap_or(false),
+    };
+
+    Ok(VerifiedAssetRecord {
+        asset_id: v.asset_ref.clone(),
+        checksum_sha256: expected_sha,
+        bytes_verified,
+        license_verified,
+        verified_at: "2026-11-04T00:00:00Z".to_string(),
+        storage_path: v.source_snapshot_ref.clone(),
+    })
+}
+
+pub fn are_visuals_provenance_verified(
+    visuals: &[VisualEvidence],
+    asset_resolver: AssetResolver,
+) -> bool {
+    if visuals.is_empty() {
+        return false;
+    }
+
+    visuals.iter().all(|v| {
+        if !is_visual_evidence_valid(v) {
+            return false;
+        }
+
+        if let Some(resolver) = asset_resolver {
+            let expected_sha = match v.checksum_sha256.as_deref() {
+                Some(sha) => sha.trim().to_ascii_lowercase(),
+                None => return false,
+            };
+            match resolver(&expected_sha) {
+                Some(bytes) => {
+                    let computed = crate::url::compute_sha256_bytes(&bytes);
+                    if computed != expected_sha {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
+    })
+}
+
 pub fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {
-    !visuals.is_empty() && visuals.iter().all(is_visual_evidence_valid)
+    are_visuals_provenance_verified(visuals, None)
 }

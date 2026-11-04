@@ -27,6 +27,8 @@ impl ContentOrigin {
 }
 
 pub type SecondaryResolver<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+pub type AuditResolver<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+pub type AssetResolver<'a> = Option<&'a dyn Fn(&str) -> Option<Vec<u8>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -112,6 +114,42 @@ pub struct EvidenceRef {
     pub excerpt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locator: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClaimGroundingStatus {
+    #[default]
+    Unverified,
+    ExcerptNotFound,
+    ExcerptFound,
+    ClaimEntailed,
+    IndependentlyVerified,
+    Contradicted,
+}
+
+impl ClaimGroundingStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unverified => "UNVERIFIED",
+            Self::ExcerptNotFound => "EXCERPT_NOT_FOUND",
+            Self::ExcerptFound => "EXCERPT_FOUND",
+            Self::ClaimEntailed => "CLAIM_ENTAILED",
+            Self::IndependentlyVerified => "INDEPENDENTLY_VERIFIED",
+            Self::Contradicted => "CONTRADICTED",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct VerifiedAssetRecord {
+    pub asset_id: String,
+    pub checksum_sha256: String,
+    pub bytes_verified: bool,
+    pub license_verified: bool,
+    pub verified_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

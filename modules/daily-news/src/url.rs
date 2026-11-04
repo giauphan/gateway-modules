@@ -165,9 +165,9 @@ pub fn canonicalize_url(url: &str) -> String {
     }
 }
 
-pub fn compute_sha256(input: &str) -> String {
+pub fn compute_sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
+    hasher.update(bytes);
     let result = hasher.finalize();
     let mut s = String::with_capacity(64);
     for b in result {
@@ -175,6 +175,10 @@ pub fn compute_sha256(input: &str) -> String {
         let _ = write!(s, "{:02x}", b);
     }
     s
+}
+
+pub fn compute_sha256(input: &str) -> String {
+    compute_sha256_bytes(input.as_bytes())
 }
 
 pub fn compute_title_hash(title: &str) -> String {

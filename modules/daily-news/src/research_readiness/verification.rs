@@ -1,6 +1,6 @@
 //! Accredited organization checks and independent verification validation rules.
 
-use super::types::{ClaimEvidence, VerificationRecord};
+use super::types::{AuditResolver, ClaimEvidence, VerificationRecord};
 
 pub const ACCREDITED_ORGANIZATIONS: &[&str] = &[
     "reuters",
@@ -155,12 +155,96 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     has_id && has_rev && has_org && valid_method && has_date && valid_audit_ref && valid_sec_ref
 }
 
-pub fn is_claim_independently_verified(claim: &ClaimEvidence) -> bool {
+pub fn is_audit_artifact_corroborated(
+    audit_text: &str,
+    rec: &VerificationRecord,
+    claim: &ClaimEvidence,
+) -> bool {
+    let trimmed = audit_text.trim();
+    if trimmed.len() < 15 {
+        return false;
+    }
+
+    let lower = trimmed.to_lowercase();
+    const AUDIT_VERDICT_TOKENS: &[&str] = &[
+        "verified",
+        "audit",
+        "confirmed",
+        "finding",
+        "findings",
+        "reproduced",
+        "pass",
+        "benchmark",
+        "accredited",
+        "certik",
+        "trail of bits",
+        "openzeppelin",
+        "laboratory",
+    ];
+
+    let has_verdict = AUDIT_VERDICT_TOKENS.iter().any(|tok| lower.contains(tok));
+    let org_tokens: Vec<&str> = rec
+        .organization
+        .split_whitespace()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mentions_org = org_tokens
+        .iter()
+        .any(|tok| lower.contains(&tok.to_lowercase()));
+
+    let claim_tokens: Vec<&str> = claim
+        .statement
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() >= 4)
+        .collect();
+    let mentions_claim = claim_tokens
+        .iter()
+        .any(|tok| lower.contains(&tok.to_lowercase()))
+        || lower.contains(&claim.claim_id.to_lowercase());
+
+    has_verdict && (mentions_org || mentions_claim)
+}
+
+pub fn is_claim_independently_verified_with_audit_resolver(
+    claim: &ClaimEvidence,
+    audit_resolver: AuditResolver,
+) -> bool {
     if claim.verification_status != "INDEPENDENTLY_VERIFIED" {
         return false;
     }
-    if let Some(ref rec) = claim.verification_record {
-        return is_verification_record_valid(rec);
+    let rec = match claim.verification_record.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    if !is_verification_record_valid(rec) {
+        return false;
     }
-    false
+
+    if let Some(resolver) = audit_resolver {
+        let audit_ref = match rec.audit_trail_ref.as_deref() {
+            Some(a) => a.trim().to_ascii_lowercase(),
+            None => return false,
+        };
+
+        match resolver(&audit_ref) {
+            Some(audit_text) => {
+                let computed = crate::url::compute_sha256(&audit_text);
+                if computed != audit_ref {
+                    return false;
+                }
+                if !is_audit_artifact_corroborated(&audit_text, rec, claim) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    true
+}
+
+pub fn is_claim_independently_verified(claim: &ClaimEvidence) -> bool {
+    is_claim_independently_verified_with_audit_resolver(claim, None)
 }

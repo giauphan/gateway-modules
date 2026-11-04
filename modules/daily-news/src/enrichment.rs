@@ -82,6 +82,16 @@ impl CandidateEnrichmentWorkflow {
             candidate.primary_source = Some(evidence.clone());
         }
 
+        let snapshot_text = candidate
+            .primary_source
+            .as_ref()
+            .and_then(|ps| ps.snapshot_ref.as_deref())
+            .and_then(|ref_str| {
+                self.capture
+                    .as_ref()
+                    .and_then(|cap| cap.read_snapshot_text(ref_str))
+            });
+
         if has_valid_capture {
             if candidate.content_origin == ContentOrigin::HeadlineOnly
                 || candidate.content_origin == ContentOrigin::Unknown
@@ -93,17 +103,6 @@ impl CandidateEnrichmentWorkflow {
             if override_url.is_some() || is_empty_body {
                 candidate.body = evidence.excerpt.clone();
             }
-
-            // Read snapshot text early so research package and readiness can use it
-            let snapshot_text = candidate
-                .primary_source
-                .as_ref()
-                .and_then(|ps| ps.snapshot_ref.as_deref())
-                .and_then(|ref_str| {
-                    self.capture
-                        .as_ref()
-                        .and_then(|cap| cap.read_snapshot_text(ref_str))
-                });
 
             // 5. Build substantive research package (problem, solution, outcome) or attach provided claims
             if let Some(user_claims) = claims {
@@ -135,16 +134,6 @@ impl CandidateEnrichmentWorkflow {
         }
 
         // 7. Evaluate new research readiness status using snapshot verification
-        let snapshot_text = candidate
-            .primary_source
-            .as_ref()
-            .and_then(|ps| ps.snapshot_ref.as_deref())
-            .and_then(|ref_str| {
-                self.capture
-                    .as_ref()
-                    .and_then(|cap| cap.read_snapshot_text(ref_str))
-            });
-
         let secondary_reader = |hash: &str| -> Option<String> {
             self.capture
                 .as_ref()
@@ -281,6 +270,35 @@ pub fn build_substantive_research_package(
         })
     };
 
+    const NEGATION_PATTERNS: &[&str] = &[
+        "not been benchmarked",
+        "has not been benchmarked",
+        "have not been benchmarked",
+        "has not been tested",
+        "have not been tested",
+        "not yet benchmarked",
+        "not yet been",
+        "no benchmark",
+        "unbenchmarked",
+        "untested",
+        "unproven",
+        "yet to be",
+        "remains to be",
+        "future work",
+        "hypothetically",
+        "in theory",
+        "without benchmarks",
+        "no evidence",
+        "not measured",
+        "have not measured",
+        "has not measured",
+    ];
+
+    let is_negated_or_hypothetical = |s: &str| -> bool {
+        let lower = s.to_lowercase();
+        NEGATION_PATTERNS.iter().any(|pat| lower.contains(pat))
+    };
+
     let problem_sentence = raw_sentences
         .iter()
         .find(|s| {
@@ -310,13 +328,16 @@ pub fn build_substantive_research_package(
         .find(|s| {
             *s != &problem_sentence
                 && *s != &solution_sentence
+                && !is_negated_or_hypothetical(s)
                 && has_empirical_metric(s)
                 && s.chars().any(|c| c.is_ascii_digit())
         })
         .or_else(|| {
-            raw_sentences
-                .iter()
-                .find(|s| has_empirical_metric(s) && s.chars().any(|c| c.is_ascii_digit()))
+            raw_sentences.iter().find(|s| {
+                !is_negated_or_hypothetical(s)
+                    && has_empirical_metric(s)
+                    && s.chars().any(|c| c.is_ascii_digit())
+            })
         })
         .copied();
 
@@ -386,15 +407,25 @@ pub fn build_substantive_research_package(
         "bottleneck in",
         "vulnerability in",
     ];
+    const ROOT_CAUSE_NEGATIONS: &[&str] = &[
+        "not due to",
+        "not caused by",
+        "not the root cause",
+        "unrelated to",
+        "not a vulnerability",
+    ];
     let root_cause_sentence = raw_sentences
         .iter()
         .find(|s| {
             let lower = s.to_lowercase();
             root_cause_tokens.iter().any(|tok| lower.contains(tok))
+                && !ROOT_CAUSE_NEGATIONS.iter().any(|neg| lower.contains(neg))
         })
         .map(|s| s.to_string());
 
-    let remedy = if solution_sentence != problem_sentence {
+    let remedy = if solution_sentence != problem_sentence
+        && !is_negated_or_hypothetical(solution_sentence)
+    {
         Some(solution_sentence.to_string())
     } else {
         None
