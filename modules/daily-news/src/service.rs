@@ -5,7 +5,9 @@
 //! applies 6-axis ranking, and manages persistent consumption tracking.
 
 use crate::date::parse_iso_to_epoch;
-use crate::discovery::*;
+use crate::discovery::{
+    build_fail_closed_result, is_candidate_eligible, matches_topics, validate_date_bounds,
+};
 use crate::domain::{
     canonicalize_url, classify_topic_family, compute_content_hash, compute_title_hash, is_safe_url,
     normalize_publisher, DiscoveryResult, DiscussionThread, ModuleConfig, NormalizedCandidate,
@@ -143,19 +145,21 @@ impl DailyNewsService {
             scoring: None,
             content_origin: raw.content_origin,
             published_at_kind: raw.published_at_kind.as_str().to_string(),
-            submission_author: raw.submission_author.clone().or_else(|| raw.author.clone()),
-            article_author: raw.article_author.clone(),
-            hook_origin: raw.hook_origin.clone(),
-            discussion: raw.discussion.clone(),
-            primary_source: raw.primary_source.clone(),
-            claims: raw.claims.clone(),
-            visual_evidence: raw.visual_evidence.clone(),
-            research_readiness: Some(crate::domain::evaluate_readiness(
-                raw.primary_source.as_ref(),
-                &raw.claims,
-                &raw.visual_evidence,
-                raw.content_origin,
-            )),
+            research: crate::domain::ResearchEvidenceFields {
+                submission_author: raw.submission_author.clone().or_else(|| raw.author.clone()),
+                article_author: raw.article_author.clone(),
+                hook_origin: raw.hook_origin.clone(),
+                discussion: raw.discussion.clone(),
+                primary_source: raw.primary_source.clone(),
+                claims: raw.claims.clone(),
+                visual_evidence: raw.visual_evidence.clone(),
+                research_readiness: Some(crate::domain::evaluate_readiness(
+                    raw.primary_source.as_ref(),
+                    &raw.claims,
+                    &raw.visual_evidence,
+                    raw.content_origin,
+                )),
+            },
         })
     }
 

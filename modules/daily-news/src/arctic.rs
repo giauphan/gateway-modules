@@ -3,9 +3,8 @@
 //! Provides a zero-key fallback for Reddit content when direct public endpoints
 //! are blocked (e.g. HTTP 403 on cloud datacenter IP ranges).
 
-use crate::domain::{extract_domain, format_utc_timestamp, RawNewsItem};
+use crate::domain::RawNewsItem;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 use ureq::Agent;
 
@@ -72,100 +71,10 @@ pub fn parse_arctic_json(val: &Value, subreddit: &str) -> Vec<RawNewsItem> {
         None => return Vec::new(),
     };
 
-    let mut items = Vec::new();
-    for d in posts {
-        let id = d["id"].as_str().unwrap_or("").trim();
-        let title = d["title"].as_str().unwrap_or("").trim();
-        if id.is_empty() || title.is_empty() {
-            continue;
-        }
-
-        let is_self = d["is_self"].as_bool().unwrap_or(false);
-        let permalink = d["permalink"].as_str().unwrap_or("");
-        let disc_url = if permalink.starts_with('/') {
-            format!("https://www.reddit.com{permalink}")
-        } else {
-            format!("https://www.reddit.com/{permalink}")
-        };
-
-        let raw_url = d["url"].as_str().unwrap_or("").trim();
-        let dest_url = if is_self
-            || raw_url.is_empty()
-            || raw_url.starts_with('/')
-            || raw_url.contains("reddit.com/r/")
-        {
-            disc_url.clone()
-        } else {
-            raw_url.to_string()
-        };
-
-        let publisher = if is_self {
-            "reddit.com".to_string()
-        } else {
-            extract_domain(&dest_url)
-        };
-
-        let created_utc = d["created_utc"]
-            .as_u64()
-            .or_else(|| d["created_utc"].as_f64().map(|f| f as u64))
-            .unwrap_or(1793618000);
-
-        let pub_timestamp = format_utc_timestamp(created_utc);
-        let author = d["author"].as_str().map(str::to_string);
-        let score = d["score"].as_i64().unwrap_or(0);
-        let comments = d["num_comments"].as_i64().unwrap_or(0);
-        let selftext = d["selftext"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string);
-
-        let summary = selftext.unwrap_or_else(|| {
-            let by_str = author.as_deref().unwrap_or("community");
-            format!(
-                "{title} — posted in r/{subreddit} by u/{by_str} ({publisher}, {score} points, {comments} comments)."
-            )
-        });
-
-        let mut extra = HashMap::new();
-        if let Some(ref a) = author {
-            extra.insert("author".to_string(), Value::String(a.clone()));
-        }
-        extra.insert("score".to_string(), Value::Number(score.into()));
-        extra.insert("comments".to_string(), Value::Number(comments.into()));
-        extra.insert(
-            "subreddit".to_string(),
-            Value::String(subreddit.to_string()),
-        );
-        extra.insert(
-            "discussion_url".to_string(),
-            Value::String(disc_url.clone()),
-        );
-        extra.insert(
-            "provider".to_string(),
-            Value::String("arctic_shift".to_string()),
-        );
-
-        let mut item = RawNewsItem::new(
-            format!("reddit_{subreddit}_{id}"),
-            dest_url,
-            title.to_string(),
-            pub_timestamp,
-        );
-        item.publisher = Some(publisher);
-        item.author = author;
-        item.description = Some(summary.clone());
-        item.body = Some(summary.clone());
-        item.discussion_url = Some(disc_url);
-        item.content_kind = Some("news".to_string());
-        item.evidence.hook = Some(title.to_string());
-        item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
-        item.tags = vec!["reddit".to_string(), subreddit.to_lowercase()];
-        item.extra = extra;
-
-        items.push(item);
-    }
-
-    items
+    posts
+        .iter()
+        .filter_map(|d| crate::reddit::parse_reddit_post_data(d, subreddit, Some("arctic_shift")))
+        .collect()
 }
 
 #[cfg(test)]

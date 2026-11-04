@@ -53,7 +53,7 @@ fn test_hn_external_link_does_not_use_comments_as_body() {
 
     // Discussion comments must be preserved in structured discussion field
     assert!(item.discussion.is_some());
-    let disc = item.discussion.unwrap();
+    let disc = item.discussion.as_ref().unwrap();
     assert_eq!(disc.role, "community_opinion");
     assert_eq!(disc.comments.len(), 2);
     assert_eq!(item.submission_author.as_deref(), Some("phoghed"));
@@ -118,14 +118,7 @@ fn test_visualizability_score_no_discussion_url_bonus() {
         scoring: None,
         content_origin: ContentOrigin::HeadlineOnly,
         published_at_kind: "hn_submission".to_string(),
-        submission_author: None,
-        article_author: None,
-        hook_origin: None,
-        discussion: None,
-        primary_source: None,
-        claims: vec![],
-        visual_evidence: vec![],
-        research_readiness: None,
+        research: Default::default(),
     };
 
     let scored = scorer.score_candidate(&cand_with_disc_only);
@@ -202,14 +195,7 @@ fn test_feasibility_not_hardcoded_1_for_unverified() {
         scoring: None,
         content_origin: ContentOrigin::HeadlineOnly,
         published_at_kind: "hn_submission".to_string(),
-        submission_author: None,
-        article_author: None,
-        hook_origin: None,
-        discussion: None,
-        primary_source: None,
-        claims: vec![],
-        visual_evidence: vec![],
-        research_readiness: None,
+        research: Default::default(),
     };
 
     let scored = scorer.score_candidate(&unverified_cand);

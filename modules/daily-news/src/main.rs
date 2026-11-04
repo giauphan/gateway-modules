@@ -6,7 +6,10 @@
 use daily_news::discussion::LiveDiscussionFetcher;
 use daily_news::fetcher::LiveFeedFetcher;
 use daily_news::redis::RedisFeedProvider;
-use daily_news::rpc::*;
+use daily_news::rpc::{
+    extract_date_range, extract_sources, extract_topics, make_html_resp, make_json_resp,
+    parse_request_body,
+};
 use daily_news::scoring::CandidateScorer;
 use daily_news::service::DailyNewsService;
 use daily_news::source_capture::HttpSourceCaptureAdapter;

@@ -11,6 +11,46 @@ pub fn fetch_hn_item(id: u64) -> Option<RawNewsItem> {
     fetch_hn_item_with_base(None, id)
 }
 
+fn fetch_single_comment(base: &str, kid: u64) -> Option<String> {
+    let kid_url = format!("{base}/item/{kid}.json");
+    let res = crate::arctic::http_agent().get(&kid_url).call().ok()?;
+    let c_val: Value = res.into_body().read_json().ok()?;
+    if c_val["deleted"].as_bool() == Some(true) || c_val["dead"].as_bool() == Some(true) {
+        return None;
+    }
+    let raw_text = c_val["text"].as_str()?;
+    let cleaned = clean_html_text(raw_text);
+    if cleaned.is_empty() {
+        return None;
+    }
+    let by = c_val["by"].as_str().unwrap_or("commenter");
+    Some(format!("{by}: {cleaned}"))
+}
+
+fn fetch_item_top_comments(base: &str, val: &Value) -> Vec<String> {
+    let has_text = val["text"]
+        .as_str()
+        .map(|s| !clean_html_text(s).is_empty())
+        .unwrap_or(false);
+    if has_text {
+        return Vec::new();
+    }
+    let Some(kids) = val["kids"].as_array() else {
+        return Vec::new();
+    };
+
+    let mut top_comments = Vec::with_capacity(2);
+    for kid in kids.iter().filter_map(|v| v.as_u64()).take(3) {
+        if top_comments.len() >= 2 {
+            break;
+        }
+        if let Some(comment) = fetch_single_comment(base, kid) {
+            top_comments.push(comment);
+        }
+    }
+    top_comments
+}
+
 pub fn fetch_hn_item_with_base(base_url: Option<&str>, id: u64) -> Option<RawNewsItem> {
     let base = base_url
         .unwrap_or(DEFAULT_HN_BASE_URL)
@@ -24,39 +64,7 @@ pub fn fetch_hn_item_with_base(base_url: Option<&str>, id: u64) -> Option<RawNew
         .read_json()
         .ok()?;
 
-    let mut top_comments = Vec::new();
-    let has_text = val["text"]
-        .as_str()
-        .map(|s| !clean_html_text(s).is_empty())
-        .unwrap_or(false);
-
-    if !has_text {
-        if let Some(kids) = val["kids"].as_array() {
-            for kid in kids.iter().filter_map(|v| v.as_u64()).take(3) {
-                if top_comments.len() >= 2 {
-                    break;
-                }
-                let kid_url = format!("{base}/item/{kid}.json");
-                if let Ok(res) = crate::arctic::http_agent().get(&kid_url).call() {
-                    if let Ok(c_val) = res.into_body().read_json::<Value>() {
-                        if c_val["deleted"].as_bool() == Some(true)
-                            || c_val["dead"].as_bool() == Some(true)
-                        {
-                            continue;
-                        }
-                        if let Some(raw_text) = c_val["text"].as_str() {
-                            let cleaned = clean_html_text(raw_text);
-                            if !cleaned.is_empty() {
-                                let by = c_val["by"].as_str().unwrap_or("commenter");
-                                top_comments.push(format!("{by}: {cleaned}"));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
+    let top_comments = fetch_item_top_comments(base, &val);
     parse_hn_item_json(&val, id, &top_comments)
 }
 

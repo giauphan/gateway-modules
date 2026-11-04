@@ -81,7 +81,7 @@ pub fn extract_hn_item_id(s: &str) -> Option<u64> {
     }
     if trimmed.contains("news.ycombinator.com/item") {
         if let Some((_, query)) = trimmed.split_once("id=") {
-            let digits: String = query.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let digits: String = query.chars().take_while(char::is_ascii_digit).collect();
             return digits.parse::<u64>().ok();
         }
     }
@@ -204,6 +204,93 @@ pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str
     compute_sha256(&payload)
 }
 
+const TOPIC_FAMILIES: &[(&str, &[&str])] = &[
+    (
+        "context_memory",
+        &[
+            "prompt caching",
+            "context window",
+            "kv cache",
+            "memory",
+            "memories",
+            "caching",
+            "state loss",
+            "token limit",
+            "tokens",
+        ],
+    ),
+    (
+        "agent_tool_use",
+        &[
+            "tool call",
+            "tool calls",
+            "tool-calling",
+            "tool-call",
+            "mcp",
+            "schema",
+            "function call",
+            "tools",
+            "tooling",
+            "payload parsing",
+        ],
+    ),
+    (
+        "debugging_reliability",
+        &[
+            "debug",
+            "debugging",
+            "retry",
+            "retries",
+            "flaky",
+            "flakiness",
+            "reliability",
+            "ci",
+            "loop",
+            "loops",
+            "crash",
+            "crashes",
+            "crashing",
+            "failure",
+            "failures",
+            "failing",
+            "trace",
+            "traces",
+        ],
+    ),
+    (
+        "agent_evaluation",
+        &[
+            "benchmark",
+            "benchmarks",
+            "benchmarking",
+            "eval",
+            "evals",
+            "evaluation",
+            "evaluating",
+            "score",
+            "scores",
+            "metrics",
+            "metric",
+            "test suite",
+        ],
+    ),
+    (
+        "agent_architecture",
+        &[
+            "agent",
+            "agents",
+            "architecture",
+            "multi-agent",
+            "orchestrator",
+            "orchestration",
+            "workflow",
+            "system prompt",
+            "planning",
+            "reasoning",
+        ],
+    ),
+];
+
 pub fn classify_topic_family(title: &str, text: &str) -> String {
     let combined = format!("{title} {text}").to_lowercase();
     let words: Vec<&str> = combined
@@ -219,103 +306,10 @@ pub fn classify_topic_family(title: &str, text: &str) -> String {
         }
     };
 
-    if [
-        "prompt caching",
-        "context window",
-        "kv cache",
-        "memory",
-        "memories",
-        "caching",
-        "state loss",
-        "token limit",
-        "tokens",
-    ]
-    .iter()
-    .any(|&k| matches_phrase_or_word(k))
-    {
-        return "context_memory".to_string();
-    }
-
-    if [
-        "tool call",
-        "tool calls",
-        "tool-calling",
-        "tool-call",
-        "mcp",
-        "schema",
-        "function call",
-        "tools",
-        "tooling",
-        "payload parsing",
-    ]
-    .iter()
-    .any(|&k| matches_phrase_or_word(k))
-    {
-        return "agent_tool_use".to_string();
-    }
-
-    if [
-        "debug",
-        "debugging",
-        "retry",
-        "retries",
-        "flaky",
-        "flakiness",
-        "reliability",
-        "ci",
-        "loop",
-        "loops",
-        "crash",
-        "crashes",
-        "crashing",
-        "failure",
-        "failures",
-        "failing",
-        "trace",
-        "traces",
-    ]
-    .iter()
-    .any(|&k| matches_phrase_or_word(k))
-    {
-        return "debugging_reliability".to_string();
-    }
-
-    if [
-        "benchmark",
-        "benchmarks",
-        "benchmarking",
-        "eval",
-        "evals",
-        "evaluation",
-        "evaluating",
-        "score",
-        "scores",
-        "metrics",
-        "metric",
-        "test suite",
-    ]
-    .iter()
-    .any(|&k| matches_phrase_or_word(k))
-    {
-        return "agent_evaluation".to_string();
-    }
-
-    if [
-        "agent",
-        "agents",
-        "architecture",
-        "multi-agent",
-        "orchestrator",
-        "orchestration",
-        "workflow",
-        "system prompt",
-        "planning",
-        "reasoning",
-    ]
-    .iter()
-    .any(|&k| matches_phrase_or_word(k))
-    {
-        return "agent_architecture".to_string();
+    for (family, keywords) in TOPIC_FAMILIES {
+        if keywords.iter().any(|&k| matches_phrase_or_word(k)) {
+            return family.to_string();
+        }
     }
 
     "unclassified".to_string()
@@ -332,16 +326,7 @@ pub fn is_safe_url(url: &str, allowed_domains: Option<&HashSet<String>>) -> bool
     }
 
     if let Ok(ip) = host.parse::<Ipv4Addr>() {
-        let octets = ip.octets();
-        if octets[0] == 127 {
-            return true;
-        }
-        if octets[0] == 10
-            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-            || (octets[0] == 192 && octets[1] == 168)
-            || (octets[0] == 169 && octets[1] == 254)
-            || octets[0] == 0
-        {
+        if is_restricted_ipv4(ip, true).is_err() {
             return false;
         }
     }
@@ -385,6 +370,16 @@ pub fn is_restricted_ipv4(ip: Ipv4Addr, allow_loopback: bool) -> Result<(), Stri
     Ok(())
 }
 
+#[inline]
+fn ipv4_from_segments(hi: u16, lo: u16) -> Ipv4Addr {
+    Ipv4Addr::new(
+        (hi >> 8) as u8,
+        (hi & 0xff) as u8,
+        (lo >> 8) as u8,
+        (lo & 0xff) as u8,
+    )
+}
+
 pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), String> {
     if ip.is_unspecified() {
         return Err("Capture target blocked: IPv6 unspecified ::".to_string());
@@ -394,13 +389,7 @@ pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), Stri
     }
     let s = ip.segments();
     if s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0xffff {
-        let v4 = Ipv4Addr::new(
-            (s[6] >> 8) as u8,
-            (s[6] & 0xff) as u8,
-            (s[7] >> 8) as u8,
-            (s[7] & 0xff) as u8,
-        );
-        return is_restricted_ipv4(v4, allow_loopback);
+        return is_restricted_ipv4(ipv4_from_segments(s[6], s[7]), allow_loopback);
     }
     if (s[0] & 0xffc0) == 0xfe80 {
         return Err("Capture target blocked: IPv6 link-local fe80::/10".to_string());
@@ -415,22 +404,10 @@ pub fn is_restricted_ipv6(ip: Ipv6Addr, allow_loopback: bool) -> Result<(), Stri
         return Err("Capture target blocked: IPv6 documentation 2001:db8::/32".to_string());
     }
     if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&x| x == 0) {
-        let v4 = Ipv4Addr::new(
-            (s[6] >> 8) as u8,
-            (s[6] & 0xff) as u8,
-            (s[7] >> 8) as u8,
-            (s[7] & 0xff) as u8,
-        );
-        return is_restricted_ipv4(v4, allow_loopback);
+        return is_restricted_ipv4(ipv4_from_segments(s[6], s[7]), allow_loopback);
     }
     if s[0] == 0x2002 {
-        let v4 = Ipv4Addr::new(
-            (s[1] >> 8) as u8,
-            (s[1] & 0xff) as u8,
-            (s[2] >> 8) as u8,
-            (s[2] & 0xff) as u8,
-        );
-        return is_restricted_ipv4(v4, allow_loopback);
+        return is_restricted_ipv4(ipv4_from_segments(s[1], s[2]), allow_loopback);
     }
     Ok(())
 }

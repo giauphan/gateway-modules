@@ -124,7 +124,7 @@
             border-radius: 6px;
             font-size: 0.85rem;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -158,7 +158,7 @@
             font-weight: 500;
             cursor: pointer;
             white-space: nowrap;
-            transition: all 0.2s ease;
+            transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
             display: flex;
             align-items: center;
             gap: 0.5rem;
@@ -224,6 +224,18 @@
             animation: fadeIn 0.3s ease forwards;
         }
 
+        @media (prefers-reduced-motion: reduce) {
+            .flow-view,
+            .flow-line {
+                animation: none !important;
+            }
+            .btn-action,
+            .tab-btn,
+            .node-rect {
+                transition: none !important;
+            }
+        }
+
         .flow-view.active {
             display: flex;
         }
@@ -279,7 +291,7 @@
 
         .node-rect {
             cursor: pointer;
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: filter 0.25s cubic-bezier(0.4, 0, 0.2, 1), stroke-width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .node-rect:hover {
@@ -288,8 +300,8 @@
         }
 
         .node-active rect {
-            stroke: var(--c-accent) !important;
-            stroke-width: 3px !important;
+            stroke: var(--c-accent);
+            stroke-width: 3px;
             filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.8));
         }
 
@@ -521,7 +533,8 @@
                     </div>
 
                     <!-- Interactive SVG: Clean Architecture Layers -->
-                    <svg class="flow-svg" viewBox="0 0 1000 660" id="svg-arch">
+                    <svg class="flow-svg" viewBox="0 0 1000 660" id="svg-arch" role="img" aria-label="Concentric Clean Architecture Layer Separation">
+                        <title>Concentric Clean Architecture Layer Separation</title>
                         <defs>
                             <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                 <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
@@ -667,7 +680,8 @@
                         </div>
                     </div>
 
-                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-ingest">
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-ingest" role="img" aria-label="Real-Time News Ingestion and Storyboard Normalization">
+                        <title>Real-Time News Ingestion and Storyboard Normalization</title>
                         <!-- Upstream Feeds -->
                         <rect x="40" y="40" width="160" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
                         <text x="60" y="68" fill="#f8fafc" font-size="13" font-weight="700">Hacker News</text>
@@ -731,7 +745,8 @@
                         </div>
                     </div>
 
-                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-discovery">
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-discovery" role="img" aria-label="Tiered Cascading Discovery and Fail-Closed Boundary">
+                        <title>Tiered Cascading Discovery and Fail-Closed Boundary</title>
                         <!-- Request Entry -->
                         <rect x="40" y="200" width="180" height="90" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="1.5" />
                         <text x="60" y="230" fill="#f8fafc" font-size="13" font-weight="700">Client / Gateway</text>
@@ -798,7 +813,8 @@
                         </div>
                     </div>
 
-                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-capture">
+                    <svg class="flow-svg" viewBox="0 0 1000 520" id="svg-capture" role="img" aria-label="Primary Source Capture, SSRF Defense and Snapshot Storage">
+                        <title>Primary Source Capture, SSRF Defense and Snapshot Storage</title>
                         <!-- Step 1: Intake -->
                         <rect x="40" y="180" width="170" height="90" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" />
                         <text x="60" y="210" fill="#f8fafc" font-size="13" font-weight="700">1. URL Intake</text>
@@ -850,7 +866,8 @@
                         </div>
                     </div>
 
-                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-readiness">
+                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-readiness" role="img" aria-label="Truthful Research Readiness State Machine">
+                        <title>Truthful Research Readiness State Machine</title>
                         <!-- State 1 -->
                         <rect x="40" y="180" width="160" height="100" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="2" />
                         <text x="60" y="210" fill="#f43f5e" font-size="13" font-weight="700">NEEDS_SOURCE</text>
@@ -900,7 +917,8 @@
                         </div>
                     </div>
 
-                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-scoring">
+                    <svg class="flow-svg" viewBox="0 0 1000 480" id="svg-scoring" role="img" aria-label="Deterministic 6-Axis Scoring and Ranking Engine">
+                        <title>Deterministic 6-Axis Scoring and Ranking Engine</title>
                         <!-- Axis 1 -->
                         <rect x="50" y="40" width="260" height="60" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5" />
                         <text x="70" y="66" fill="#38bdf8" font-size="13" font-weight="700">Freshness (w=0.25)</text>

@@ -249,6 +249,12 @@ pub struct RawNewsItem {
     pub content_origin: ContentOrigin,
     #[serde(default)]
     pub published_at_kind: PublishedAtKind,
+    #[serde(flatten)]
+    pub research: ResearchEvidenceFields,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ResearchEvidenceFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submission_author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +271,19 @@ pub struct RawNewsItem {
     pub visual_evidence: Vec<VisualEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_readiness: Option<ResearchReadiness>,
+}
+
+impl std::ops::Deref for RawNewsItem {
+    type Target = ResearchEvidenceFields;
+    fn deref(&self) -> &Self::Target {
+        &self.research
+    }
+}
+
+impl std::ops::DerefMut for RawNewsItem {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.research
+    }
 }
 
 impl RawNewsItem {
@@ -292,14 +311,7 @@ impl RawNewsItem {
             extra: HashMap::new(),
             content_origin: ContentOrigin::Unknown,
             published_at_kind: PublishedAtKind::Unknown,
-            submission_author: None,
-            article_author: None,
-            hook_origin: None,
-            discussion: None,
-            primary_source: None,
-            claims: Vec::new(),
-            visual_evidence: Vec::new(),
-            research_readiness: None,
+            research: ResearchEvidenceFields::default(),
         }
     }
 }
@@ -354,22 +366,21 @@ pub struct NormalizedCandidate {
     pub content_origin: ContentOrigin,
     #[serde(default = "default_published_at_kind")]
     pub published_at_kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub submission_author: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub article_author: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook_origin: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub discussion: Option<DiscussionPayload>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub primary_source: Option<PrimarySourceEvidence>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub claims: Vec<ClaimEvidence>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub visual_evidence: Vec<VisualEvidence>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub research_readiness: Option<ResearchReadiness>,
+    #[serde(flatten)]
+    pub research: ResearchEvidenceFields,
+}
+
+impl std::ops::Deref for NormalizedCandidate {
+    type Target = ResearchEvidenceFields;
+    fn deref(&self) -> &Self::Target {
+        &self.research
+    }
+}
+
+impl std::ops::DerefMut for NormalizedCandidate {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.research
+    }
 }
 
 fn default_published_at_kind() -> String {

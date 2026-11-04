@@ -47,12 +47,10 @@ impl HttpSourceCaptureAdapter {
         self.allow_http_for_tests = allow;
         self
     }
-
     pub fn with_max_bytes(mut self, max: usize) -> Self {
         self.max_bytes = max;
         self
     }
-
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -60,20 +58,12 @@ impl HttpSourceCaptureAdapter {
 
     pub fn is_safe_capture_url(&self, url: &str) -> Result<(), String> {
         let trimmed = url.trim();
-        if !trimmed.starts_with("https://") {
-            if self.allow_http_for_tests && trimmed.starts_with("http://") {
-                // Allowed strictly in explicit test/mock modes
-            } else {
-                return Err("Capture URL violates security boundary: must be HTTPS".to_string());
-            }
-        }
-
         let after_scheme = if let Some(stripped) = trimmed.strip_prefix("https://") {
             stripped
-        } else if let Some(stripped) = trimmed.strip_prefix("http://") {
-            stripped
+        } else if self.allow_http_for_tests && trimmed.starts_with("http://") {
+            &trimmed[7..]
         } else {
-            return Err("Capture URL violates security boundary: unsupported scheme".to_string());
+            return Err("Capture URL violates security boundary: must be HTTPS".to_string());
         };
 
         let host_part = after_scheme
@@ -121,7 +111,6 @@ impl HttpSourceCaptureAdapter {
             return is_restricted_ipv6(ip, self.allow_http_for_tests);
         }
 
-        use std::net::ToSocketAddrs;
         let addr_str = format!("{host}:443");
         if let Ok(addrs) = addr_str.to_socket_addrs() {
             for addr in addrs {
@@ -146,10 +135,10 @@ impl HttpSourceCaptureAdapter {
 
     fn store_snapshot_bytes(&self, bytes: &[u8]) -> Result<(String, String), String> {
         self.ensure_evidence_dir()?;
-        let sha256_hex: String = Sha256::digest(bytes)
+        let sha256_hex = Sha256::digest(bytes)
             .iter()
             .map(|b| format!("{b:02x}"))
-            .collect();
+            .collect::<String>();
 
         let filename = format!("{sha256_hex}.txt");
         let path = self.evidence_dir.join(&filename);
@@ -275,17 +264,36 @@ impl Resolver for SsrfSafeResolver {
             }
         }
         if result.is_empty() {
-            Err(ureq::Error::HostNotFound)
-        } else {
-            Ok(result)
+            return Err(ureq::Error::HostNotFound);
         }
+        Ok(result)
     }
 }
 
-impl SourceCapturePort for HttpSourceCaptureAdapter {
-    fn capture_source(&self, url: &str) -> Result<PrimarySourceEvidence, String> {
-        self.is_safe_capture_url(url)?;
+fn resolve_redirect_url(current_url: &str, loc: &str) -> Result<String, String> {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        Ok(loc.to_string())
+    } else if loc.starts_with('/') {
+        let authority = current_url
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or("")
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or("");
+        let scheme = if current_url.starts_with("https://") {
+            "https://"
+        } else {
+            "http://"
+        };
+        Ok(format!("{scheme}{authority}{loc}"))
+    } else {
+        Err(format!("INVALID_REDIRECT_LOCATION: {loc}"))
+    }
+}
 
+impl HttpSourceCaptureAdapter {
+    fn build_client(&self) -> ureq::Agent {
         let mut builder = ureq::Agent::config_builder()
             .proxy(None)
             .max_redirects(0)
@@ -301,8 +309,15 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
         let resolver = SsrfSafeResolver {
             allow_loopback: self.allow_http_for_tests,
         };
-        let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
+        ureq::Agent::with_parts(config, DefaultConnector::default(), resolver)
+    }
+}
 
+impl SourceCapturePort for HttpSourceCaptureAdapter {
+    fn capture_source(&self, url: &str) -> Result<PrimarySourceEvidence, String> {
+        self.is_safe_capture_url(url)?;
+
+        let agent = self.build_client();
         let mut current_url = url.to_string();
         let mut redirects_followed = 0;
 
@@ -334,48 +349,35 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
                     });
                 }
 
-                if let Some(loc) = res.headers().get("location").and_then(|v| v.to_str().ok()) {
-                    let next_url = if loc.starts_with("http://") || loc.starts_with("https://") {
-                        loc.to_string()
-                    } else if loc.starts_with('/') {
-                        let authority = current_url
-                            .split_once("://")
-                            .map(|(_, rest)| rest)
-                            .unwrap_or("")
-                            .split(['/', '?', '#'])
-                            .next()
-                            .unwrap_or("");
-                        let scheme = if current_url.starts_with("https://") {
-                            "https://"
-                        } else {
-                            "http://"
-                        };
-                        format!("{scheme}{authority}{loc}")
-                    } else {
-                        return Ok(PrimarySourceEvidence {
-                            url: current_url,
-                            fetch_status: format!("INVALID_REDIRECT_LOCATION: {loc}"),
-                            ..Default::default()
-                        });
-                    };
-
-                    // Re-validate SSRF on redirect target!
-                    if let Err(e) = self.is_safe_capture_url(&next_url) {
-                        return Ok(PrimarySourceEvidence {
-                            url: next_url,
-                            fetch_status: format!("SSRF_REDIRECT_BLOCKED: {e}"),
-                            ..Default::default()
-                        });
-                    }
-                    current_url = next_url;
-                    continue;
-                } else {
+                let Some(loc) = res.headers().get("location").and_then(|v| v.to_str().ok()) else {
                     return Ok(PrimarySourceEvidence {
                         url: current_url,
                         fetch_status: "REDIRECT_MISSING_LOCATION".to_string(),
                         ..Default::default()
                     });
+                };
+
+                let next_url = match resolve_redirect_url(&current_url, loc) {
+                    Ok(u) => u,
+                    Err(err_msg) => {
+                        return Ok(PrimarySourceEvidence {
+                            url: current_url,
+                            fetch_status: err_msg,
+                            ..Default::default()
+                        });
+                    }
+                };
+
+                // Re-validate SSRF on redirect target!
+                if let Err(e) = self.is_safe_capture_url(&next_url) {
+                    return Ok(PrimarySourceEvidence {
+                        url: next_url,
+                        fetch_status: format!("SSRF_REDIRECT_BLOCKED: {e}"),
+                        ..Default::default()
+                    });
                 }
+                current_url = next_url;
+                continue;
             }
 
             let content_type = res

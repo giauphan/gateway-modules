@@ -166,108 +166,116 @@ impl RedditFeedProvider {
     }
 }
 
+pub fn parse_reddit_post_data(
+    d: &Value,
+    subreddit: &str,
+    provider: Option<&str>,
+) -> Option<RawNewsItem> {
+    let id = d["id"].as_str().unwrap_or("").trim();
+    let title = d["title"].as_str().unwrap_or("").trim();
+    if id.is_empty() || title.is_empty() {
+        return None;
+    }
+
+    let is_self = d["is_self"].as_bool().unwrap_or(false);
+    let permalink = d["permalink"].as_str().unwrap_or("");
+    let disc_url = if permalink.starts_with('/') {
+        format!("https://www.reddit.com{permalink}")
+    } else {
+        format!("https://www.reddit.com/{permalink}")
+    };
+
+    let raw_url = d["url"].as_str().unwrap_or("").trim();
+    let dest_url = if is_self
+        || raw_url.is_empty()
+        || raw_url.starts_with('/')
+        || raw_url.contains("reddit.com/r/")
+    {
+        disc_url.clone()
+    } else {
+        raw_url.to_string()
+    };
+
+    let publisher = if is_self {
+        "reddit.com".to_string()
+    } else {
+        extract_domain(&dest_url)
+    };
+
+    let created_utc = d["created_utc"]
+        .as_u64()
+        .or_else(|| d["created_utc"].as_f64().map(|f| f as u64))
+        .unwrap_or(1793618000);
+
+    let pub_timestamp = format_utc_timestamp(created_utc);
+    let author = d["author"].as_str().map(str::to_string);
+    let score = d["score"].as_i64().unwrap_or(0);
+    let comments = d["num_comments"].as_i64().unwrap_or(0);
+    let selftext = d["selftext"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+
+    let summary = selftext.unwrap_or_else(|| {
+        let by_str = author.as_deref().unwrap_or("community");
+        format!(
+            "{title} — posted in r/{subreddit} by u/{by_str} ({publisher}, {score} points, {comments} comments)."
+        )
+    });
+
+    let mut extra = HashMap::new();
+    if let Some(ref a) = author {
+        extra.insert("author".to_string(), Value::String(a.clone()));
+    }
+    extra.insert("score".to_string(), Value::Number(score.into()));
+    extra.insert("comments".to_string(), Value::Number(comments.into()));
+    if let Some(p) = provider {
+        extra.insert("provider".to_string(), Value::String(p.to_string()));
+    }
+    if let Some(ratio) = d["upvote_ratio"].as_f64() {
+        if let Some(n) = serde_json::Number::from_f64(ratio) {
+            extra.insert("upvote_ratio".to_string(), Value::Number(n));
+        }
+    }
+    extra.insert(
+        "subreddit".to_string(),
+        Value::String(subreddit.to_string()),
+    );
+    extra.insert(
+        "discussion_url".to_string(),
+        Value::String(disc_url.clone()),
+    );
+
+    let mut item = RawNewsItem::new(
+        format!("reddit_{subreddit}_{id}"),
+        dest_url,
+        title.to_string(),
+        pub_timestamp,
+    );
+    item.publisher = Some(publisher);
+    item.author = author;
+    item.description = Some(summary.clone());
+    item.body = Some(summary.clone());
+    item.discussion_url = Some(disc_url);
+    item.content_kind = Some("news".to_string());
+    item.evidence.hook = Some(title.to_string());
+    item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
+    item.tags = vec!["reddit".to_string(), subreddit.to_lowercase()];
+    item.extra = extra;
+
+    Some(item)
+}
+
 pub fn parse_reddit_json(val: &Value, subreddit: &str) -> Vec<RawNewsItem> {
     let children = match val["data"]["children"].as_array() {
         Some(arr) => arr,
         None => return Vec::new(),
     };
 
-    let mut items = Vec::new();
-    for child in children {
-        let d = &child["data"];
-        let id = d["id"].as_str().unwrap_or("").trim();
-        let title = d["title"].as_str().unwrap_or("").trim();
-        if id.is_empty() || title.is_empty() {
-            continue;
-        }
-
-        let is_self = d["is_self"].as_bool().unwrap_or(false);
-        let permalink = d["permalink"].as_str().unwrap_or("");
-        let disc_url = if permalink.starts_with('/') {
-            format!("https://www.reddit.com{permalink}")
-        } else {
-            format!("https://www.reddit.com/{permalink}")
-        };
-
-        let raw_url = d["url"].as_str().unwrap_or("").trim();
-        let dest_url = if is_self
-            || raw_url.is_empty()
-            || raw_url.starts_with('/')
-            || raw_url.contains("reddit.com/r/")
-        {
-            disc_url.clone()
-        } else {
-            raw_url.to_string()
-        };
-
-        let publisher = if is_self {
-            "reddit.com".to_string()
-        } else {
-            extract_domain(&dest_url)
-        };
-
-        let created_utc = d["created_utc"]
-            .as_u64()
-            .or_else(|| d["created_utc"].as_f64().map(|f| f as u64))
-            .unwrap_or(1793618000);
-
-        let pub_timestamp = format_utc_timestamp(created_utc);
-        let author = d["author"].as_str().map(str::to_string);
-        let score = d["score"].as_i64().unwrap_or(0);
-        let comments = d["num_comments"].as_i64().unwrap_or(0);
-        let selftext = d["selftext"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string);
-
-        let summary = selftext.unwrap_or_else(|| {
-            let by_str = author.as_deref().unwrap_or("community");
-            format!(
-                "{title} — posted in r/{subreddit} by u/{by_str} ({publisher}, {score} points, {comments} comments)."
-            )
-        });
-
-        let mut extra = HashMap::new();
-        if let Some(ref a) = author {
-            extra.insert("author".to_string(), Value::String(a.clone()));
-        }
-        extra.insert("score".to_string(), Value::Number(score.into()));
-        extra.insert("comments".to_string(), Value::Number(comments.into()));
-        if let Some(ratio) = d["upvote_ratio"].as_f64() {
-            if let Some(n) = serde_json::Number::from_f64(ratio) {
-                extra.insert("upvote_ratio".to_string(), Value::Number(n));
-            }
-        }
-        extra.insert(
-            "subreddit".to_string(),
-            Value::String(subreddit.to_string()),
-        );
-        extra.insert(
-            "discussion_url".to_string(),
-            Value::String(disc_url.clone()),
-        );
-
-        let mut item = RawNewsItem::new(
-            format!("reddit_{subreddit}_{id}"),
-            dest_url,
-            title.to_string(),
-            pub_timestamp,
-        );
-        item.publisher = Some(publisher);
-        item.author = author;
-        item.description = Some(summary.clone());
-        item.body = Some(summary.clone());
-        item.discussion_url = Some(disc_url);
-        item.content_kind = Some("news".to_string());
-        item.evidence.hook = Some(title.to_string());
-        item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
-        item.tags = vec!["reddit".to_string(), subreddit.to_lowercase()];
-        item.extra = extra;
-
-        items.push(item);
-    }
-
-    items
+    children
+        .iter()
+        .filter_map(|child| parse_reddit_post_data(&child["data"], subreddit, None))
+        .collect()
 }
 
 fn simple_base64_encode(input: &[u8]) -> String {

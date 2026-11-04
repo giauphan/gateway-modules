@@ -222,7 +222,7 @@ pub fn parse_newsnow_items(val: &Value, source: &str, limit: usize) -> Vec<RawNe
 
 fn interleave_source_items(source_batches: Vec<Vec<RawNewsItem>>) -> Vec<RawNewsItem> {
     let mut result = Vec::new();
-    let max_len = source_batches.iter().map(|b| b.len()).max().unwrap_or(0);
+    let max_len = source_batches.iter().map(Vec::len).max().unwrap_or(0);
     for i in 0..max_len {
         for batch in &source_batches {
             if let Some(item) = batch.get(i) {
@@ -374,7 +374,7 @@ mod tests {
         assert!(item.body.is_none());
         assert!(item.description.is_none());
         assert!(item.discussion.is_some());
-        let disc = item.discussion.unwrap();
+        let disc = item.discussion.as_ref().unwrap();
         assert_eq!(disc.comments.len(), 2);
         assert!(disc.comments[0].text.contains("Love the serif typography"));
         assert_eq!(item.extra["score"], 142);

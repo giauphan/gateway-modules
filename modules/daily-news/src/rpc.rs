@@ -27,8 +27,11 @@ pub fn make_html_resp(status: u16, html: &str) -> Value {
     })
 }
 
-pub fn extract_topics(body: &Value) -> Option<Vec<String>> {
-    if let Some(arr) = body["topics"].as_array() {
+fn extract_string_list(body: &Value, plural_key: &str, singular_key: &str) -> Option<Vec<String>> {
+    if let Some(arr) = body[plural_key]
+        .as_array()
+        .or_else(|| body[singular_key].as_array())
+    {
         let items: Vec<String> = arr
             .iter()
             .filter_map(|v| v.as_str().map(str::to_string))
@@ -37,10 +40,10 @@ pub fn extract_topics(body: &Value) -> Option<Vec<String>> {
             return Some(items);
         }
     }
-    body["topics"]
+    body[plural_key]
         .as_str()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| body["topic"].as_str().filter(|s| !s.trim().is_empty()))
+        .or_else(|| body[singular_key].as_str().filter(|s| !s.trim().is_empty()))
         .and_then(|s| {
             let items: Vec<String> = s
                 .split(',')
@@ -55,35 +58,12 @@ pub fn extract_topics(body: &Value) -> Option<Vec<String>> {
         })
 }
 
+pub fn extract_topics(body: &Value) -> Option<Vec<String>> {
+    extract_string_list(body, "topics", "topic")
+}
+
 pub fn extract_sources(body: &Value) -> Option<Vec<String>> {
-    if let Some(arr) = body["sources"]
-        .as_array()
-        .or_else(|| body["source"].as_array())
-    {
-        let items: Vec<String> = arr
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect();
-        if !items.is_empty() {
-            return Some(items);
-        }
-    }
-    body["sources"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| body["source"].as_str().filter(|s| !s.trim().is_empty()))
-        .and_then(|s| {
-            let items: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(items)
-            }
-        })
+    extract_string_list(body, "sources", "source")
 }
 
 pub fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {

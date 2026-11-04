@@ -248,14 +248,7 @@ pub fn parse_raw_entry(raw: &str, msg_id: &str, key: &str, ch_type: &str) -> Opt
         extra,
         content_origin: origin,
         published_at_kind: pub_kind,
-        submission_author: None,
-        article_author: None,
-        hook_origin: None,
-        discussion: None,
-        primary_source: None,
-        claims: Vec::new(),
-        visual_evidence: Vec::new(),
-        research_readiness: None,
+        research: Default::default(),
     })
 }
 
