@@ -338,12 +338,15 @@ pub fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> 
             return make_json_resp(400, json!({ "error": e }));
         }
         return match service.update_config(cfg) {
-            Ok(updated) => make_json_resp(200, json!({ "status": "updated", "config": updated })),
+            Ok(updated) => make_json_resp(
+                200,
+                json!({ "status": "updated", "config": updated.to_sanitized_value() }),
+            ),
             Err(e) => make_json_resp(500, json!({ "error": e })),
         };
     }
     let current = service.get_config();
-    make_json_resp(200, json!(current))
+    make_json_resp(200, current.to_sanitized_value())
 }
 
 pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Value {
@@ -383,6 +386,22 @@ pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -
     match route {
         "/mcp" | "/api/v1/mcp" | "/tools/call" | "/api/v1/tools/call" => {
             handle_mcp_tool_request(service, base_dir, &body, header_tool)
+        }
+        "/mcp/sse" | "/sse" | "/api/v1/mcp/sse" => {
+            if method.eq_ignore_ascii_case("GET") {
+                json!({
+                    "status": 200,
+                    "headers": {
+                        "content-type": "text/event-stream",
+                        "cache-control": "no-cache",
+                        "connection": "keep-alive",
+                        "x-module-engine": "rust-native"
+                    },
+                    "body": "event: endpoint\ndata: /mcp\n\n"
+                })
+            } else {
+                handle_mcp_tool_request(service, base_dir, &body, header_tool)
+            }
         }
         "/tools/list" | "/api/v1/tools/list" => {
             if body.get("jsonrpc").is_some() {

@@ -293,115 +293,101 @@ pub fn dispatch_mcp_tool(
     }
 }
 
-pub fn handle_jsonrpc_mcp_request(
+fn handle_single_jsonrpc_request(
     service: &DailyNewsService,
     base_dir: &Path,
     body: &Value,
-) -> Value {
+) -> Option<Value> {
+    if !body.is_object() {
+        return Some(json!({
+            "jsonrpc": "2.0",
+            "id": Value::Null,
+            "error": {
+                "code": -32600,
+                "message": "Invalid Request: expected object"
+            }
+        }));
+    }
+
     let id = body.get("id").cloned().unwrap_or(Value::Null);
     let method = body["method"].as_str().unwrap_or("").trim();
 
+    // Notifications are fire-and-forget per MCP spec: no response body
+    if method.starts_with("notifications/") {
+        return None;
+    }
+
     match method {
-        "initialize" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": { "listChanged": false },
-                        "resources": { "subscribe": false, "listChanged": false },
-                        "prompts": { "listChanged": false },
-                        "logging": {}
-                    },
-                    "serverInfo": {
-                        "name": "daily-news",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
+        "initialize" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "resources": { "subscribe": false, "listChanged": false },
+                    "prompts": { "listChanged": false },
+                    "logging": {}
+                },
+                "serverInfo": {
+                    "name": "daily-news",
+                    "version": env!("CARGO_PKG_VERSION")
                 }
-            });
-            make_json_resp(200, res)
-        }
-        // Notifications are fire-and-forget per MCP spec: no response body, HTTP 204
-        m if m.starts_with("notifications/") => make_json_resp(204, Value::Null),
-        "ping" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {}
-            });
-            make_json_resp(200, res)
-        }
-        "resources/list" => {
-            // Module exposes no custom MCP resources; return empty list per spec
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "resources": []
-                }
-            });
-            make_json_resp(200, res)
-        }
-        "resources/templates/list" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "resourceTemplates": []
-                }
-            });
-            make_json_resp(200, res)
-        }
-        "prompts/list" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "prompts": []
-                }
-            });
-            make_json_resp(200, res)
-        }
-        "prompts/get" => {
-            let err_res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {
-                    "code": -32602,
-                    "message": "Prompt not found"
-                }
-            });
-            make_json_resp(400, err_res)
-        }
-        "logging/setLevel" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {}
-            });
-            make_json_resp(200, res)
-        }
-        "roots/list" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "roots": []
-                }
-            });
-            make_json_resp(200, res)
-        }
-        "tools/list" => {
-            let res = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "tools": get_mcp_tools_list()
-                }
-            });
-            make_json_resp(200, res)
-        }
+            }
+        })),
+        "ping" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {}
+        })),
+        "resources/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "resources": []
+            }
+        })),
+        "resources/templates/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "resourceTemplates": []
+            }
+        })),
+        "prompts/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "prompts": []
+            }
+        })),
+        "prompts/get" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32602,
+                "message": "Prompt not found"
+            }
+        })),
+        "logging/setLevel" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {}
+        })),
+        "roots/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "roots": []
+            }
+        })),
+        "tools/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": get_mcp_tools_list()
+            }
+        })),
         "tools/call" => {
             let params = &body["params"];
             let tool_name = params["name"]
@@ -411,15 +397,14 @@ pub fn handle_jsonrpc_mcp_request(
                 .trim();
 
             if tool_name.is_empty() {
-                let err_res = json!({
+                return Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "error": {
                         "code": -32602,
                         "message": "Missing required parameter 'name' in tools/call params"
                     }
-                });
-                return make_json_resp(400, err_res);
+                }));
             }
 
             let arguments = params
@@ -428,26 +413,67 @@ pub fn handle_jsonrpc_mcp_request(
                 .unwrap_or(params);
 
             let result = dispatch_mcp_tool(service, base_dir, tool_name, arguments);
-            let res = json!({
+            Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
                     "content": result.content,
                     "isError": result.is_error
                 }
-            });
-            make_json_resp(200, res)
+            }))
         }
-        other => {
+        other => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("Method not found: '{other}'")
+            }
+        })),
+    }
+}
+
+pub fn handle_jsonrpc_mcp_request(
+    service: &DailyNewsService,
+    base_dir: &Path,
+    body: &Value,
+) -> Value {
+    if let Some(batch) = body.as_array() {
+        if batch.is_empty() {
             let err_res = json!({
                 "jsonrpc": "2.0",
-                "id": id,
+                "id": Value::Null,
                 "error": {
-                    "code": -32601,
-                    "message": format!("Method not found: '{other}'")
+                    "code": -32600,
+                    "message": "Invalid Request: empty batch"
                 }
             });
-            make_json_resp(404, err_res)
+            return make_json_resp(400, err_res);
+        }
+
+        let mut responses = Vec::new();
+        for item in batch {
+            if let Some(res) = handle_single_jsonrpc_request(service, base_dir, item) {
+                responses.push(res);
+            }
+        }
+        if responses.is_empty() {
+            make_json_resp(204, Value::Null)
+        } else {
+            make_json_resp(200, Value::Array(responses))
+        }
+    } else {
+        match handle_single_jsonrpc_request(service, base_dir, body) {
+            Some(res) => {
+                let status = if res.get("error").is_some() {
+                    let code = res["error"]["code"].as_i64().unwrap_or(0);
+                    if code == -32601 { 404 } else { 400 }
+                } else {
+                    200
+                };
+                make_json_resp(status, res)
+            }
+            None => make_json_resp(204, Value::Null),
         }
     }
 }
@@ -458,7 +484,7 @@ pub fn handle_mcp_tool_request(
     body: &Value,
     header_tool: Option<&str>,
 ) -> Value {
-    if body.get("jsonrpc").is_some() {
+    if body.is_array() || body.get("jsonrpc").is_some() {
         return handle_jsonrpc_mcp_request(service, base_dir, body);
     }
 

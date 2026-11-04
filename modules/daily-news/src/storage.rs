@@ -193,11 +193,17 @@ pub fn resolve_state_dir(base_dir: &Path) -> PathBuf {
 impl FileStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
-        let config_path = base.join("config.json");
         let state_dir = resolve_state_dir(base);
+        let config_path = state_dir.join("config.json");
+        let legacy_config_path = base.join("config.json");
 
         let initial_config = if config_path.is_file() {
             fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else if legacy_config_path.is_file() {
+            fs::read_to_string(&legacy_config_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
@@ -237,14 +243,34 @@ impl FileStorageAdapter {
         }
     }
 
-    fn persist_consumed(&self) {
+    fn persist_consumed(&self) -> Result<(), String> {
+        let _ = fs::create_dir_all(&self.state_dir);
         let consumed_path = self.state_dir.join("consumed.json");
-        if let Ok(guard) = self.inner.consumed.read() {
-            let list: Vec<String> = guard.iter().cloned().collect();
-            if let Ok(json) = serde_json::to_string_pretty(&list) {
-                let _ = fs::write(consumed_path, json);
-            }
-        }
+        let unique_id = uuid::Uuid::new_v4();
+        let tmp_path = self.state_dir.join(format!("consumed.{unique_id}.tmp"));
+
+        let guard = self
+            .inner
+            .consumed
+            .read()
+            .map_err(|e| format!("Lock error reading consumed IDs: {e}"))?;
+        let list: Vec<String> = guard.iter().cloned().collect();
+        drop(guard);
+
+        let json = serde_json::to_string_pretty(&list)
+            .map_err(|e| format!("Failed to serialize consumed IDs: {e}"))?;
+
+        fs::write(&tmp_path, json).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to write consumed IDs to {tmp_path:?}: {e}")
+        })?;
+
+        fs::rename(&tmp_path, &consumed_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to finalize consumed state to {consumed_path:?}: {e}")
+        })?;
+
+        Ok(())
     }
 }
 
@@ -255,7 +281,7 @@ impl StoragePort for FileStorageAdapter {
 
     fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
         let count = self.inner.mark_consumed(candidate_ids)?;
-        self.persist_consumed();
+        self.persist_consumed()?;
         Ok(count)
     }
 
@@ -268,10 +294,23 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn save_config(&self, config: &ModuleConfig) -> Result<(), String> {
+        let _ = fs::create_dir_all(&self.state_dir);
         self.inner.save_config(config)?;
-        if let Ok(json) = serde_json::to_string_pretty(config) {
-            let _ = fs::write(&self.config_path, json);
-        }
+        let json = serde_json::to_string_pretty(config)
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
+        let unique_id = uuid::Uuid::new_v4();
+        let tmp_path = self.state_dir.join(format!("config.{unique_id}.tmp"));
+
+        fs::write(&tmp_path, json).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to write config state to {tmp_path:?}: {e}")
+        })?;
+
+        fs::rename(&tmp_path, &self.config_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to finalize config state to {:?}: {e}", self.config_path)
+        })?;
+
         Ok(())
     }
 

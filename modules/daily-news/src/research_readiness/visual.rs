@@ -124,32 +124,55 @@ pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
     if lower_start.starts_with(b"<!doctype")
         || lower_start.starts_with(b"<html")
         || lower_start.starts_with(b"<?php")
+        || lower_start.starts_with(b"javascript:")
     {
         return false;
     }
 
-    // 1. PNG magic bytes: \x89PNG or PNG prefix
+    // Reject all-zero dummy filler
+    if bytes.iter().all(|&b| b == 0) {
+        return false;
+    }
+
+    // 1. PNG format: standard magic bytes with non-zero dimensions if IHDR is present, or recognized mock
     if bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"PNG") {
+        if bytes.len() >= 24 && &bytes[12..16] == b"IHDR" {
+            let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+            let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+            return width > 0 && height > 0;
+        }
         return true;
     }
+
     // 2. JPEG magic bytes
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || (bytes.starts_with(&[0xFF, 0xD8]) && bytes.len() >= 4 && bytes[2] == 0xFF)
+    {
         return true;
     }
-    // 3. GIF magic bytes
+
+    // 3. GIF magic bytes with non-zero logical screen dimensions if complete
     if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        if bytes.len() >= 10 {
+            let width = u16::from_le_bytes([bytes[6], bytes[7]]);
+            let height = u16::from_le_bytes([bytes[8], bytes[9]]);
+            return width > 0 && height > 0;
+        }
         return true;
     }
+
     // 4. WebP: RIFF....WEBP
     if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return true;
     }
-    // 5. SVG vector graphic
-    let sample_len = bytes.len().min(1024);
+
+    // 5. SVG vector graphic: must contain <svg
+    let sample_len = bytes.len().min(2048);
     let sample = String::from_utf8_lossy(&bytes[..sample_len]).to_ascii_lowercase();
     if sample.contains("<svg") {
         return true;
     }
+
     // 6. MP4 video: ftyp or moov box
     if bytes.len() >= 8 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
         return true;

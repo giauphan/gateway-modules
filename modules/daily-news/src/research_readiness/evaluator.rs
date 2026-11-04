@@ -113,6 +113,45 @@ fn has_contradictory_negation(exc_lower: &str) -> bool {
     NEGATION_PATTERNS.iter().any(|neg| exc_lower.contains(neg))
 }
 
+fn has_semantic_polarity_conflict(stmt_lower: &str, exc_lower: &str) -> bool {
+    const OPPOSING_POLARITY_GROUPS: &[(&[&str], &[&str])] = &[
+        (
+            &["increase", "increased", "increasing", "higher", "rise", "rose", "rising", "grow", "grew", "growth"],
+            &["decrease", "decreased", "decreasing", "lower", "drop", "dropped", "dropping", "fell", "reduction", "reduced"],
+        ),
+        (
+            &["improve", "improved", "improving", "improvement", "faster", "speedup", "accelerate", "boost"],
+            &["degrade", "degraded", "degradation", "regression", "slower", "slowdown", "bottleneck"],
+        ),
+        (
+            &["success", "successful", "succeeded", "pass", "passed", "passing"],
+            &["fail", "failed", "failing", "failure", "crash", "crashed"],
+        ),
+        (
+            &["enable", "enabled", "enabling", "activated"],
+            &["disable", "disabled", "disabling", "deactivated"],
+        ),
+    ];
+
+    let stmt_words: Vec<&str> = stmt_lower.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+    let exc_words: Vec<&str> = exc_lower.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+
+    for &(pos_words, neg_words) in OPPOSING_POLARITY_GROUPS {
+        let stmt_has_pos = pos_words.iter().any(|&w| stmt_words.contains(&w));
+        let stmt_has_neg = neg_words.iter().any(|&w| stmt_words.contains(&w));
+
+        let exc_has_pos = pos_words.iter().any(|&w| exc_words.contains(&w));
+        let exc_has_neg = neg_words.iter().any(|&w| exc_words.contains(&w));
+
+        if (stmt_has_pos && !stmt_has_neg && exc_has_neg && !exc_has_pos)
+            || (stmt_has_neg && !stmt_has_pos && exc_has_pos && !exc_has_neg)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_metric_token_corroborated(clean: &str, exc_lower: &str) -> bool {
     if clean.contains('%') {
         return exc_lower.contains(clean);
@@ -198,7 +237,7 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
     let exc_lower = exc_trimmed.to_lowercase();
 
     // 1. Negation / contradiction check runs FIRST — before any containment shortcut.
-    if has_contradictory_negation(&exc_lower) {
+    if has_contradictory_negation(&exc_lower) || has_semantic_polarity_conflict(&stmt_lower, &exc_lower) {
         return ClaimGroundingStatus::Contradicted;
     }
 

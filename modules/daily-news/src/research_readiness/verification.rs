@@ -155,6 +155,14 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     has_id && has_rev && has_org && valid_method && has_date && valid_audit_ref && valid_sec_ref
 }
 
+pub fn find_accredited_issuer(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    ACCREDITED_ORGANIZATIONS
+        .iter()
+        .copied()
+        .find(|&accred| lower.contains(accred))
+}
+
 pub fn is_audit_artifact_corroborated(
     audit_text: &str,
     rec: &VerificationRecord,
@@ -167,6 +175,31 @@ pub fn is_audit_artifact_corroborated(
     }
 
     let lower = trimmed.to_lowercase();
+
+    // 1. Must identify a recognized accredited issuer from ACCREDITED_ORGANIZATIONS
+    let Some(issuer) = find_accredited_issuer(&lower) else {
+        return false;
+    };
+
+    // 2. The identified accredited issuer must match the declared verification organization
+    let org_lower = rec.organization.trim().to_lowercase();
+    if !org_lower.contains(issuer) && !issuer.contains(&org_lower) {
+        return false;
+    }
+
+    // 3. Must not contain disclaimer/unverified markers
+    const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
+        "not an official report",
+        "self-certified",
+        "unverified draft",
+        "internal notes only",
+        "unofficial draft",
+    ];
+    if UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+
+    // 4. Must contain formal audit verification tokens (>= 2)
     const AUDIT_VERDICT_TOKENS: &[&str] = &[
         "verified",
         "audit",
@@ -183,7 +216,6 @@ pub fn is_audit_artifact_corroborated(
         "laboratory",
     ];
 
-    // Require at least 2 distinct verdict tokens (not 1) to prevent keyword stuffing
     let verdict_count = AUDIT_VERDICT_TOKENS
         .iter()
         .filter(|tok| lower.contains(*tok))
@@ -192,17 +224,7 @@ pub fn is_audit_artifact_corroborated(
         return false;
     }
 
-    let org_tokens: Vec<&str> = rec
-        .organization
-        .split_whitespace()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    let mentions_org = !org_tokens.is_empty()
-        && org_tokens
-            .iter()
-            .any(|tok| lower.contains(&tok.to_lowercase()));
-
+    // 5. Must corroborate claim statement topic
     let claim_tokens: Vec<&str> = claim
         .statement
         .split(|c: char| !c.is_alphanumeric())
@@ -214,8 +236,7 @@ pub fn is_audit_artifact_corroborated(
             .any(|tok| lower.contains(&tok.to_lowercase()))
             || lower.contains(&claim.claim_id.to_lowercase()));
 
-    // Require BOTH org mention AND claim mention (AND not OR) to prevent cross-claim spoofing
-    mentions_org && mentions_claim
+    mentions_claim
 }
 
 pub fn is_claim_independently_verified_with_audit_resolver(

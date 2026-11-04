@@ -205,7 +205,12 @@ impl ModuleConfig {
         }
 
         if let Some(val) = obj.get("reddit_client_secret") {
-            self.reddit_client_secret = val.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            if let Some(s) = val.as_str() {
+                let tr = s.trim();
+                if tr != "********" {
+                    self.reddit_client_secret = Some(tr.to_string()).filter(|s| !s.is_empty());
+                }
+            }
         }
 
         if let Some(val) = obj.get("reddit_base_url") {
@@ -213,6 +218,19 @@ impl ModuleConfig {
         }
 
         Ok(())
+    }
+
+    pub fn to_sanitized_value(&self) -> serde_json::Value {
+        let mut val = serde_json::to_value(self).unwrap_or_default();
+        if let Some(obj) = val.as_object_mut() {
+            if self.reddit_client_secret.is_some() {
+                obj.insert(
+                    "reddit_client_secret".to_string(),
+                    serde_json::Value::String("********".to_string()),
+                );
+            }
+        }
+        val
     }
 
     pub fn apply_updates(&mut self, body: &serde_json::Value) {
