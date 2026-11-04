@@ -34,7 +34,8 @@ pub struct HttpSourceCaptureAdapter {
 
 impl HttpSourceCaptureAdapter {
     pub fn new(base_dir: &Path) -> Self {
-        let evidence_dir = base_dir.join(".state").join("evidence");
+        let state_dir = crate::storage::resolve_state_dir(base_dir);
+        let evidence_dir = state_dir.join("evidence");
         Self {
             evidence_dir,
             max_bytes: DEFAULT_MAX_CAPTURE_BYTES,
@@ -468,14 +469,26 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
             .split('/')
             .next_back()?;
         let path = self.evidence_dir.join(format!("{hash}.txt"));
-        fs::read_to_string(path).ok()
+        if let Ok(content) = fs::read_to_string(path) {
+            return Some(content);
+        }
+        let audit_path = self.evidence_dir.parent()?.join("audit").join(format!("{hash}.txt"));
+        fs::read_to_string(audit_path).ok()
     }
 
     fn read_snapshot_bytes(&self, snapshot_ref: &str) -> Option<Vec<u8>> {
         let hash = snapshot_ref
+            .trim_end_matches(".bin")
             .trim_end_matches(".txt")
             .split('/')
             .next_back()?;
+        let bin_path = match self.evidence_dir.parent() {
+            Some(p) => p.join("assets").join(format!("{hash}.bin")),
+            None => self.evidence_dir.join("assets").join(format!("{hash}.bin")),
+        };
+        if let Ok(bytes) = fs::read(bin_path) {
+            return Some(bytes);
+        }
         let path = self.evidence_dir.join(format!("{hash}.txt"));
         fs::read(path).ok()
     }

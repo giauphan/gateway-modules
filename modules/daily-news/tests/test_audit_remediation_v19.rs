@@ -77,7 +77,8 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
         let primary_sha = enriched_1.candidate.primary_source.as_ref().unwrap().snapshot_sha256.clone().unwrap();
 
         // Enrich Candidate 2 -> with accredited reviewer and visual evidence -> VIDEO_READY
-        let audit_sha = compute_sha256("Audit Trail for cand 2: Benchmarking Lab verified 4x reduction");
+        let audit_content = "Official Audit Trail Report #2026-01: Benchmarking Laboratory independently verified the performance benchmarks and confirmed findings for 4x reduction in cache latency across all test runs.";
+        let audit_sha = compute_sha256(audit_content);
         let verified_claims = vec![ClaimEvidence {
             claim_id: "claim_verified_02".to_string(),
             statement: "4x reduction in cache latency".to_string(),
@@ -94,15 +95,17 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
                 organization: "Benchmarking Laboratory".to_string(),
                 method: "reproducible_benchmark".to_string(),
                 verified_at: "2026-11-04T05:00:00Z".to_string(),
-                audit_trail_ref: Some(audit_sha),
+                audit_trail_ref: Some(audit_sha.clone()),
                 secondary_source_ref: None,
             }),
         }];
 
-        let chart_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let chart_bytes = b"PNG MOCK CHART ASSET DATA FOR PRODUCTION ENRICHMENT";
+        let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
         let evidence_dir = tmp_dir.join(".state").join("evidence");
         let _ = std::fs::create_dir_all(&evidence_dir);
-        let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), b"");
+        let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), chart_bytes);
+        let _ = std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_content.as_bytes());
 
         let visuals = vec![VisualEvidence {
             asset_ref: "vis_benchmark_chart".to_string(),
@@ -111,7 +114,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
             source_snapshot_ref: None,
             license_status: Some("cc-by".to_string()),
             provenance_status: Some("verified".to_string()),
-            checksum_sha256: Some(chart_sha.to_string()),
+            checksum_sha256: Some(chart_sha),
             license_evidence_ref: Some("https://example.com/license".to_string()),
             verified_rights: Some(true),
         }];

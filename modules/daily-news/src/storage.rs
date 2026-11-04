@@ -165,32 +165,36 @@ pub struct FileStorageAdapter {
     persist_mutex: Mutex<()>,
 }
 
+pub fn resolve_state_dir(base_dir: &Path) -> PathBuf {
+    std::env::var("DAILY_NEWS_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let candidate = base_dir.join(".state");
+            let is_writable = {
+                let _ = fs::create_dir_all(&candidate);
+                let test_file = candidate.join(format!(".wt_{}", uuid::Uuid::new_v4()));
+                if fs::write(&test_file, b"ok").is_ok() {
+                    let _ = fs::remove_file(&test_file);
+                    true
+                } else {
+                    false
+                }
+            };
+            if is_writable {
+                candidate
+            } else {
+                let fallback = std::env::temp_dir().join("daily-news").join(".state");
+                let _ = fs::create_dir_all(&fallback);
+                fallback
+            }
+        })
+}
+
 impl FileStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
         let config_path = base.join("config.json");
-        let state_dir = std::env::var("DAILY_NEWS_STATE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let candidate = base.join(".state");
-                let is_writable = {
-                    let _ = fs::create_dir_all(&candidate);
-                    let test_file = candidate.join(format!(".wt_{}", uuid::Uuid::new_v4()));
-                    if fs::write(&test_file, b"ok").is_ok() {
-                        let _ = fs::remove_file(&test_file);
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if is_writable {
-                    candidate
-                } else {
-                    let fallback = std::env::temp_dir().join("daily-news").join(".state");
-                    let _ = fs::create_dir_all(&fallback);
-                    fallback
-                }
-            });
+        let state_dir = resolve_state_dir(base);
 
         let initial_config = if config_path.is_file() {
             fs::read_to_string(&config_path)

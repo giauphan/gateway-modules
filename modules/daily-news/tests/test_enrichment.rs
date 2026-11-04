@@ -102,6 +102,15 @@ fn test_enrich_candidate_workflow_state_transitions() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // 2. Second stage enrichment: provide verified claims with accredited reviewer + CC-BY visual asset
+    let audit_content = "Official Audit Trail Report #2026-02: Benchmarking Laboratory independently verified the performance benchmarks and confirmed findings for 4x reduction in cache latency across all test runs.";
+    let audit_sha = daily_news::url::compute_sha256(audit_content);
+    let chart_bytes = b"PNG MOCK COMPILER BENCHMARK ASSET FOR WORKFLOW TEST";
+    let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
+    let evidence_dir = tmp_dir.join(".state").join("evidence");
+    let _ = std::fs::create_dir_all(&evidence_dir);
+    let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), chart_bytes);
+    let _ = std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_content.as_bytes());
+
     let verified_claims = vec![ClaimEvidence {
         claim_id: "claim_verified_1".to_string(),
         statement: "4x reduction in cache latency".to_string(),
@@ -118,15 +127,10 @@ fn test_enrich_candidate_workflow_state_transitions() {
             reviewer_id: "benchmarking_auditor".to_string(),
             organization: "Benchmarking Laboratory".to_string(),
             method: "reproducible_benchmark".to_string(),
-            audit_trail_ref: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            audit_trail_ref: Some(audit_sha),
             secondary_source_ref: None,
         }),
     }];
-
-    let chart_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-    let evidence_dir = tmp_dir.join(".state").join("evidence");
-    let _ = std::fs::create_dir_all(&evidence_dir);
-    let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), b"");
 
     let visuals = vec![VisualEvidence {
         asset_ref: "vis_compiler_benchmark".to_string(),
@@ -135,7 +139,7 @@ fn test_enrich_candidate_workflow_state_transitions() {
         source_snapshot_ref: None,
         license_status: Some("cc-by".to_string()),
         provenance_status: Some("verified".to_string()),
-        checksum_sha256: Some(chart_sha.to_string()),
+        checksum_sha256: Some(chart_sha),
         license_evidence_ref: Some("https://example.com/license".to_string()),
         verified_rights: Some(true),
     }];

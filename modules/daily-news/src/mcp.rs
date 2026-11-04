@@ -5,7 +5,7 @@
 //! enforces strict fail-closed boundary validation, and formats standard MCP
 //! Content responses for connected AI agents.
 
-use crate::domain::evaluate_readiness_with_snapshot_store;
+use crate::domain::evaluate_readiness_full;
 use crate::rpc::{extract_sources, extract_topics, make_json_resp};
 use crate::service::DailyNewsService;
 use serde::{Deserialize, Serialize};
@@ -163,13 +163,25 @@ fn handle_verify_research_readiness(
             .or_else(|| read_snapshot_from_fs(base_dir, hash))
     };
 
-    let readiness = evaluate_readiness_with_snapshot_store(
+    let audit_reader = |hash: &str| -> Option<String> {
+        service
+            .read_snapshot_text(hash)
+            .or_else(|| read_snapshot_from_fs(base_dir, hash))
+    };
+
+    let asset_reader = |hash: &str| -> Option<Vec<u8>> {
+        read_asset_bytes_from_fs(base_dir, hash)
+    };
+
+    let readiness = evaluate_readiness_full(
         candidate.research.primary_source.as_ref(),
         snapshot_text.as_deref(),
         &candidate.research.claims,
         &candidate.research.visual_evidence,
         candidate.content_origin,
         Some(&secondary_reader),
+        Some(&audit_reader),
+        Some(&asset_reader),
     );
 
     McpToolResponse::success(json!(readiness).to_string())
@@ -231,11 +243,30 @@ fn read_snapshot_from_fs(base_dir: &Path, ref_or_hash: &str) -> Option<String> {
     if clean_hash.len() != 64 || !clean_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let evidence_path = base_dir
-        .join(".state")
+    let state_dir = crate::storage::resolve_state_dir(base_dir);
+    let evidence_path = state_dir
         .join("evidence")
         .join(format!("{clean_hash}.txt"));
     std::fs::read_to_string(evidence_path).ok()
+}
+
+fn read_asset_bytes_from_fs(base_dir: &Path, ref_or_hash: &str) -> Option<Vec<u8>> {
+    let clean_hash = ref_or_hash
+        .trim_end_matches(".bin")
+        .trim_end_matches(".txt")
+        .split('/')
+        .next_back()?
+        .to_ascii_lowercase();
+    if clean_hash.len() != 64 || !clean_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let state_dir = crate::storage::resolve_state_dir(base_dir);
+    let bin_path = state_dir.join("assets").join(format!("{clean_hash}.bin"));
+    if let Ok(bytes) = std::fs::read(bin_path) {
+        return Some(bytes);
+    }
+    let evidence_path = state_dir.join("evidence").join(format!("{clean_hash}.txt"));
+    std::fs::read(evidence_path).ok()
 }
 
 pub fn dispatch_mcp_tool(
@@ -278,7 +309,10 @@ pub fn handle_jsonrpc_mcp_request(
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": { "listChanged": false }
+                        "tools": { "listChanged": false },
+                        "resources": { "subscribe": false, "listChanged": false },
+                        "prompts": { "listChanged": false },
+                        "logging": {}
                     },
                     "serverInfo": {
                         "name": "daily-news",
@@ -289,7 +323,7 @@ pub fn handle_jsonrpc_mcp_request(
             make_json_resp(200, res)
         }
         // Notifications are fire-and-forget per MCP spec: no response body, HTTP 204
-        "notifications/initialized" => make_json_resp(204, Value::Null),
+        m if m.starts_with("notifications/") => make_json_resp(204, Value::Null),
         "ping" => {
             let res = json!({
                 "jsonrpc": "2.0",
@@ -299,12 +333,61 @@ pub fn handle_jsonrpc_mcp_request(
             make_json_resp(200, res)
         }
         "resources/list" => {
-            // Module exposes no MCP resources; return empty list per spec
+            // Module exposes no custom MCP resources; return empty list per spec
             let res = json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
                     "resources": []
+                }
+            });
+            make_json_resp(200, res)
+        }
+        "resources/templates/list" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "resourceTemplates": []
+                }
+            });
+            make_json_resp(200, res)
+        }
+        "prompts/list" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "prompts": []
+                }
+            });
+            make_json_resp(200, res)
+        }
+        "prompts/get" => {
+            let err_res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": "Prompt not found"
+                }
+            });
+            make_json_resp(400, err_res)
+        }
+        "logging/setLevel" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {}
+            });
+            make_json_resp(200, res)
+        }
+        "roots/list" => {
+            let res = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "roots": []
                 }
             });
             make_json_resp(200, res)

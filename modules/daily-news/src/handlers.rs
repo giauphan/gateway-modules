@@ -157,11 +157,24 @@ pub fn handle_consume(service: &DailyNewsService, body: &Value) -> Value {
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
+                .filter_map(|v| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
                 .collect()
         })
-        .or_else(|| body["candidate_id"].as_str().map(|s| vec![s.to_string()]))
+        .or_else(|| {
+            body["candidate_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| vec![s.to_string()])
+        })
         .unwrap_or_default();
+
+    if ids.is_empty() {
+        return make_json_resp(
+            400,
+            json!({ "error": "Missing or empty 'candidate_id' or 'candidate_ids' parameter" }),
+        );
+    }
 
     match service.consume(&ids) {
         Ok(count) => make_json_resp(200, json!({ "status": "consumed", "count": count })),
@@ -285,8 +298,8 @@ pub fn handle_evidence(base_dir: &Path, body: &Value) -> Value {
     }
     let sha256 = sha256_raw.to_ascii_lowercase();
 
-    let evidence_path = base_dir
-        .join(".state")
+    let state_dir = crate::storage::resolve_state_dir(base_dir);
+    let evidence_path = state_dir
         .join("evidence")
         .join(format!("{sha256}.txt"));
     if !evidence_path.exists() {
@@ -314,8 +327,16 @@ pub fn handle_evidence(base_dir: &Path, body: &Value) -> Value {
 
 pub fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Value {
     if method == "POST" {
+        if !body.is_object() {
+            return make_json_resp(
+                400,
+                json!({ "error": "Config payload must be a JSON object" }),
+            );
+        }
         let mut cfg = service.get_config();
-        cfg.apply_updates(body);
+        if let Err(e) = cfg.apply_updates_validated(body) {
+            return make_json_resp(400, json!({ "error": e }));
+        }
         return match service.update_config(cfg) {
             Ok(updated) => make_json_resp(200, json!({ "status": "updated", "config": updated })),
             Err(e) => make_json_resp(500, json!({ "error": e })),

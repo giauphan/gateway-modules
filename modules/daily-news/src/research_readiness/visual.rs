@@ -116,6 +116,48 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
     valid_prov && approved_lic && valid_checksum && valid_license_evidence && verified_rights
 }
 
+pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
+    if bytes.len() < 4 {
+        return false;
+    }
+    let lower_start = bytes[..bytes.len().min(64)].to_ascii_lowercase();
+    if lower_start.starts_with(b"<!doctype")
+        || lower_start.starts_with(b"<html")
+        || lower_start.starts_with(b"<?php")
+    {
+        return false;
+    }
+
+    // 1. PNG magic bytes: \x89PNG or PNG prefix
+    if bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"PNG") {
+        return true;
+    }
+    // 2. JPEG magic bytes
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return true;
+    }
+    // 3. GIF magic bytes
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return true;
+    }
+    // 4. WebP: RIFF....WEBP
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return true;
+    }
+    // 5. SVG vector graphic
+    let sample_len = bytes.len().min(1024);
+    let sample = String::from_utf8_lossy(&bytes[..sample_len]).to_ascii_lowercase();
+    if sample.contains("<svg") {
+        return true;
+    }
+    // 6. MP4 video: ftyp or moov box
+    if bytes.len() >= 8 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
+        return true;
+    }
+
+    false
+}
+
 pub fn verify_visual_asset_record(
     v: &VisualEvidence,
     asset_bytes: Option<&[u8]>,
@@ -136,6 +178,11 @@ pub fn verify_visual_asset_record(
         Some(bytes) => {
             if bytes.is_empty() {
                 return Err("Visual asset bytes are empty".to_string());
+            }
+            if !is_valid_visual_asset_format(bytes) {
+                return Err(
+                    "Visual asset bytes do not match a valid visual media format (PNG, JPEG, GIF, WebP, SVG, MP4)".to_string(),
+                );
             }
             let computed = crate::url::compute_sha256_bytes(bytes);
             if computed != expected_sha {
@@ -189,6 +236,9 @@ pub fn are_visuals_provenance_verified(
             };
             match resolver(&expected_sha) {
                 Some(bytes) => {
+                    if !is_valid_visual_asset_format(&bytes) {
+                        return false;
+                    }
                     let computed = crate::url::compute_sha256_bytes(&bytes);
                     if computed != expected_sha {
                         return false;

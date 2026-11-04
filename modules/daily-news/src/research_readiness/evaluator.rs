@@ -175,7 +175,10 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
         "the", "a", "an", "is", "are", "was", "were", "of", "in", "to", "for", "with",
         "on", "at", "by", "from", "and", "or", "that", "this", "it", "technical",
         "identified", "observed", "problem", "solution", "outcome", "claim", "approach",
-        "remedy", "architecture", "implemented", "proposed",
+        "remedy", "architecture", "implemented", "proposed", "company", "team", "project",
+        "system", "systems", "service", "article", "report", "news", "today", "yesterday",
+        "announced", "releases", "released", "update", "updates", "features", "available",
+        "users", "platform", "production", "work", "engineering", "using", "also", "into",
     ];
 
     let informative_tokens: Vec<&str> = content_lower
@@ -194,7 +197,15 @@ pub fn verify_claim_semantic_entailment(statement: &str, excerpt: &str) -> Claim
         .count();
 
     let ratio = matching_count as f64 / informative_tokens.len() as f64;
-    if matching_count >= 2 || ratio >= 0.40 {
+    let is_entailed = if informative_tokens.len() == 1 {
+        matching_count == 1
+    } else if informative_tokens.len() <= 3 {
+        matching_count >= 1 && ratio >= 0.50
+    } else {
+        matching_count >= 2 && ratio >= 0.50
+    };
+
+    if is_entailed {
         ClaimGroundingStatus::ClaimEntailed
     } else {
         ClaimGroundingStatus::ExcerptFound

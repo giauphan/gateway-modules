@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub use crate::date::*;
 pub use crate::research_readiness::*;
 pub use crate::scoring::ProductionReadinessScoring;
+pub use crate::storage::resolve_state_dir;
 pub use crate::url::*;
 
 fn default_newsnow_url() -> String {
@@ -105,46 +106,117 @@ impl Default for ModuleConfig {
 }
 
 impl ModuleConfig {
-    pub fn apply_updates(&mut self, body: &serde_json::Value) {
-        if let Some(url) = body["newsnow_url"].as_str() {
+    pub fn apply_updates_validated(&mut self, body: &serde_json::Value) -> Result<(), String> {
+        let obj = body
+            .as_object()
+            .ok_or_else(|| "Configuration updates payload must be a JSON object".to_string())?;
+
+        if obj.is_empty() {
+            return Err("Configuration updates payload cannot be empty".to_string());
+        }
+
+        if let Some(val) = obj.get("newsnow_url") {
+            let url = val
+                .as_str()
+                .ok_or_else(|| "'newsnow_url' must be a string".to_string())?;
+            if !url.trim().is_empty() && !crate::url::is_safe_url(url, None) {
+                return Err(format!("'newsnow_url' is invalid or not an allowed URL: {url}"));
+            }
             self.newsnow_url = url.to_string();
         }
-        if let Some(h) = body["freshness_window_hours"].as_f64() {
+
+        if let Some(val) = obj.get("freshness_window_hours") {
+            let h = val
+                .as_f64()
+                .ok_or_else(|| "'freshness_window_hours' must be a positive number".to_string())?;
+            if h <= 0.0 || h > 8760.0 {
+                return Err("'freshness_window_hours' must be between 0.1 and 8760.0 hours".to_string());
+            }
             self.freshness_window_hours = h;
         }
-        if let Some(d) = body["max_age_days"].as_u64() {
+
+        if let Some(val) = obj.get("max_age_days") {
+            let d = val
+                .as_u64()
+                .ok_or_else(|| "'max_age_days' must be a positive integer".to_string())?;
+            if d == 0 || d > 365 {
+                return Err("'max_age_days' must be between 1 and 365 days".to_string());
+            }
             self.max_age_days = d as u32;
         }
-        if let Some(b) = body["require_latest_news"].as_bool() {
-            self.require_latest_news = b;
+
+        if let Some(val) = obj.get("require_latest_news") {
+            self.require_latest_news = val
+                .as_bool()
+                .ok_or_else(|| "'require_latest_news' must be a boolean".to_string())?;
         }
-        if let Some(re) = body["redis_enabled"].as_bool() {
-            self.redis_enabled = re;
+
+        if let Some(val) = obj.get("redis_enabled") {
+            self.redis_enabled = val
+                .as_bool()
+                .ok_or_else(|| "'redis_enabled' must be a boolean".to_string())?;
         }
-        if let Some(ru) = body["redis_url"].as_str() {
-            self.redis_url = ru.to_string();
+
+        if let Some(val) = obj.get("redis_url") {
+            self.redis_url = val
+                .as_str()
+                .ok_or_else(|| "'redis_url' must be a string".to_string())?
+                .to_string();
         }
-        if let Some(rk) = body["redis_key"].as_str() {
-            self.redis_key = rk.to_string();
+
+        if let Some(val) = obj.get("redis_key") {
+            self.redis_key = val
+                .as_str()
+                .ok_or_else(|| "'redis_key' must be a string".to_string())?
+                .to_string();
         }
-        if let Some(rt) = body["redis_type"].as_str() {
-            self.redis_type = rt.to_string();
+
+        if let Some(val) = obj.get("redis_type") {
+            self.redis_type = val
+                .as_str()
+                .ok_or_else(|| "'redis_type' must be a string".to_string())?
+                .to_string();
         }
-        if let Some(re) = body["reddit_enabled"].as_bool() {
-            self.reddit_enabled = re;
+
+        if let Some(val) = obj.get("reddit_enabled") {
+            self.reddit_enabled = val
+                .as_bool()
+                .ok_or_else(|| "'reddit_enabled' must be a boolean".to_string())?;
         }
-        if let Some(subs) = body["reddit_subreddits"].as_array() {
-            self.reddit_subreddits = subs
-                .iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
-                .collect();
+
+        if let Some(val) = obj.get("reddit_subreddits") {
+            let arr = val
+                .as_array()
+                .ok_or_else(|| "'reddit_subreddits' must be an array of strings".to_string())?;
+            let mut subs = Vec::new();
+            for item in arr {
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| "'reddit_subreddits' elements must be strings".to_string())?;
+                if !s.trim().is_empty() {
+                    subs.push(s.trim().to_string());
+                }
+            }
+            self.reddit_subreddits = subs;
         }
-        if let Some(cid) = body["reddit_client_id"].as_str() {
-            self.reddit_client_id = Some(cid.to_string()).filter(|s| !s.trim().is_empty());
+
+        if let Some(val) = obj.get("reddit_client_id") {
+            self.reddit_client_id = val.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
-        if let Some(sec) = body["reddit_client_secret"].as_str() {
-            self.reddit_client_secret = Some(sec.to_string()).filter(|s| !s.trim().is_empty());
+
+        if let Some(val) = obj.get("reddit_client_secret") {
+            self.reddit_client_secret = val.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
+
+        if let Some(val) = obj.get("reddit_base_url") {
+            self.reddit_base_url = val.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_updates(&mut self, body: &serde_json::Value) {
+        let _ = self.apply_updates_validated(body);
     }
 }
 

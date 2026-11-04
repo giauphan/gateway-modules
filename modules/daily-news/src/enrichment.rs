@@ -148,6 +148,14 @@ impl CandidateEnrichmentWorkflow {
                 .and_then(|cap| cap.read_snapshot_bytes(sha))
         };
 
+        // Wire real audit resolver so independent verification validates actual stored audit artifacts
+        let capture_ref_audit = self.capture.clone();
+        let audit_reader = move |sha: &str| -> Option<String> {
+            capture_ref_audit
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_text(sha))
+        };
+
         let readiness = evaluate_readiness_full(
             candidate.primary_source.as_ref(),
             snapshot_text.as_deref(),
@@ -155,7 +163,7 @@ impl CandidateEnrichmentWorkflow {
             &candidate.visual_evidence,
             candidate.content_origin,
             Some(&secondary_reader),
-            None, // audit_resolver: trusted audit store not wired yet
+            Some(&audit_reader),
             Some(&asset_reader),
         );
         let new_status = readiness.status.as_str().to_string();
