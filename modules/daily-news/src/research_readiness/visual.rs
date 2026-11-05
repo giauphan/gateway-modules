@@ -339,6 +339,7 @@ fn decode_png_stream(bytes: &[u8]) -> bool {
                     let cmf = bytes[data_start];
                     let flg = bytes[data_start + 1];
                     let chk = (cmf as u16) * 256 + (flg as u16);
+                    #[allow(clippy::manual_is_multiple_of)]
                     if chk % 31 != 0 || (cmf & 0x0F) != 8 {
                         return false;
                     }
@@ -396,14 +397,12 @@ fn decode_jpeg_stream(bytes: &[u8]) -> bool {
         }
 
         // SOF markers: SOF0..SOF3, SOF5..SOF7, SOF9..SOF11, SOF13..SOF15
-        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
-            if seg_len >= 8 {
-                let height = u16::from_be_bytes([bytes[pos + 3], bytes[pos + 4]]);
-                let width = u16::from_be_bytes([bytes[pos + 5], bytes[pos + 6]]);
-                let components = bytes[pos + 7];
-                if width > 0 && height > 0 && components >= 1 {
-                    saw_sof = true;
-                }
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && seg_len >= 8 {
+            let height = u16::from_be_bytes([bytes[pos + 3], bytes[pos + 4]]);
+            let width = u16::from_be_bytes([bytes[pos + 5], bytes[pos + 6]]);
+            let components = bytes[pos + 7];
+            if width > 0 && height > 0 && components >= 1 {
+                saw_sof = true;
             }
         }
         pos += seg_len;

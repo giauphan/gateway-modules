@@ -237,9 +237,9 @@ pub fn extract_html_published_at(html: &str) -> Option<String> {
     if let Some(dp_pos) = lower.find("\"datepublished\":") {
         let after = &html[dp_pos + 16..];
         let trimmed = after.trim_start();
-        if trimmed.starts_with('"') {
-            if let Some(end_quote) = trimmed[1..].find('"') {
-                let val = &trimmed[1..=end_quote];
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end_quote) = rest.find('"') {
+                let val = &rest[..end_quote];
                 if crate::date::parse_iso_to_epoch(val).is_ok() {
                     return Some(val.to_string());
                 }
