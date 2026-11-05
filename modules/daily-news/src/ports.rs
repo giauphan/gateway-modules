@@ -78,6 +78,31 @@ pub trait StoragePort: Send + Sync {
             .into_iter()
             .find(|c| c.candidate_id == candidate_id)
     }
+
+    /// Reserve candidate for production handoff with lease duration in seconds.
+    fn reserve_handoff(
+        &self,
+        candidate_id: &str,
+        _lease_seconds: u64,
+        _worker_id: &str,
+    ) -> Result<String, String> {
+        let claimed = self.mark_consumed(&[candidate_id.to_string()])?;
+        if claimed > 0 {
+            Ok(format!("lease_{}_{}", uuid::Uuid::new_v4(), candidate_id))
+        } else {
+            Err(format!("Candidate '{candidate_id}' already consumed or reserved"))
+        }
+    }
+
+    /// Commit consumption of a reserved candidate using the reservation token.
+    fn commit_consumed(&self, candidate_id: &str, _token: &str) -> Result<bool, String> {
+        self.mark_consumed(&[candidate_id.to_string()]).map(|n| n > 0)
+    }
+
+    /// Release a reservation if rendering or downstream handoff fails.
+    fn release_reservation(&self, _candidate_id: &str, _token: &str) -> Result<bool, String> {
+        Ok(true)
+    }
 }
 
 pub trait SourceCapturePort: Send + Sync {

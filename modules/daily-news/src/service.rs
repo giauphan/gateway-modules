@@ -333,6 +333,8 @@ impl DailyNewsService {
         let policy = crate::discovery::CandidateEligibilityPolicy::from_config(&cfg, None, None, None);
         let mut all_candidates = self.storage.get_cached_candidates();
         let raw = self.get_feed(limit.max(25));
+        let mut updated = false;
+
         for r in raw {
             if let Ok(c) = self.normalize_item(&r) {
                 if let Some(existing) = all_candidates
@@ -340,20 +342,22 @@ impl DailyNewsService {
                     .find(|existing| existing.candidate_id == c.candidate_id)
                 {
                     crate::storage::merge_candidate_entry(existing, &c);
+                    updated = true;
                 } else {
                     all_candidates.push(c);
+                    updated = true;
                 }
             }
         }
 
         let mut seen_content_hashes = HashSet::new();
         let mut seen_title_hashes = HashSet::new();
-        let mut updated = false;
 
         let eligible: Vec<NormalizedCandidate> = all_candidates
-            .into_iter()
+            .iter()
             .filter(|c| !self.storage.is_consumed(&c.candidate_id))
             .filter(|c| policy.is_candidate_eligible(c, &mut seen_content_hashes, &mut seen_title_hashes))
+            .cloned()
             .map(|mut c| {
                 if self.reverify_cached_readiness_if_needed(&mut c) {
                     updated = true;
@@ -364,7 +368,7 @@ impl DailyNewsService {
 
         let ranked = self.scorer.rank_candidates(eligible, limit);
         if updated {
-            let _ = self.storage.save_candidates(&ranked);
+            self.storage.cache_candidates(&all_candidates);
         }
         ranked
     }
@@ -507,14 +511,19 @@ impl DailyNewsService {
             )
         })?;
 
-        // 2. Freshness check against sliding max_age_days
+        // 2. Freshness check against sliding max_age_days and freshness_window_hours
         let cfg = self.storage.load_config();
         let ref_epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(1793618000);
         let max_age_secs = (cfg.max_age_days as u64) * 86400;
-        let cutoff_epoch = ref_epoch.saturating_sub(max_age_secs);
+        let window_secs = if cfg.freshness_window_hours > 0.0 {
+            ((cfg.freshness_window_hours * 3600.0) as u64).min(max_age_secs)
+        } else {
+            max_age_secs
+        };
+        let cutoff_epoch = ref_epoch.saturating_sub(window_secs);
 
         let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
         let cand_epoch = parse_iso_to_epoch(effective_ts).unwrap_or(0);
@@ -522,8 +531,8 @@ impl DailyNewsService {
             return Err((
                 "STALE_CANDIDATE".to_string(),
                 format!(
-                    "Candidate '{candidate_id}' timestamp '{effective_ts}' is older than cutoff max age ({} days)",
-                    cfg.max_age_days
+                    "Candidate '{candidate_id}' timestamp '{effective_ts}' is older than cutoff max age ({} days / {} hours window)",
+                    cfg.max_age_days, cfg.freshness_window_hours
                 ),
             ));
         }
@@ -602,19 +611,21 @@ impl DailyNewsService {
             ));
         }
 
-        // 5. Atomic reservation / claim
-        let claimed = self
+        // 5. Atomic reservation / claim with lease token
+        let _token = self
             .storage
-            .mark_consumed(&[candidate_id.to_string()])
-            .map_err(|e| ("STORAGE_ERROR".to_string(), e))?;
-        if claimed == 0 {
-            return Err((
-                "ALREADY_CONSUMED".to_string(),
-                format!("Candidate '{candidate_id}' was claimed by another worker concurrently"),
-            ));
-        }
+            .reserve_handoff(candidate_id, 3600, "production_worker")
+            .map_err(|e| ("ALREADY_CONSUMED".to_string(), e))?;
 
         Ok(cand)
+    }
+
+    pub fn release_handoff(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+        self.storage.release_reservation(candidate_id, token)
+    }
+
+    pub fn commit_handoff(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+        self.storage.commit_consumed(candidate_id, token)
     }
 
     pub fn read_snapshot_bytes(&self, hash_or_ref: &str) -> Option<Vec<u8>> {

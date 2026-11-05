@@ -485,8 +485,11 @@ fn check_strict_video_ready_gates(
                 if let Some(audit_res) = audit_resolver {
                     if let Some(ref audit_ref) = vr.audit_trail_ref {
                         if let Some(audit_text) = audit_res(audit_ref) {
-                            return super::verification::is_audit_source_verified(&audit_text, vr)
-                                && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
+                            return super::verification::is_audit_source_verified_with_resolver(
+                                &audit_text,
+                                vr,
+                                secondary_resolver,
+                            ) && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
                         }
                     }
                 }

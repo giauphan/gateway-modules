@@ -284,14 +284,27 @@ impl StoragePort for FileStorageAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        // 1. Transactional isolation: build proposed set without mutating RAM yet
-        let current_consumed = self
-            .inner
-            .consumed
-            .read()
-            .map_err(|e| format!("Lock error reading consumed IDs: {e}"))?;
-        let mut proposed = current_consumed.clone();
-        drop(current_consumed);
+        // 1. Transactional isolation & inter-process sync: check on-disk consumed state
+        let consumed_path = self.state_dir.join("consumed.json");
+        let mut proposed = if consumed_path.is_file() {
+            fs::read_to_string(&consumed_path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .map(|v| v.into_iter().collect::<HashSet<String>>())
+                .unwrap_or_else(|| {
+                    self.inner
+                        .consumed
+                        .read()
+                        .map(|g| g.clone())
+                        .unwrap_or_default()
+                })
+        } else {
+            self.inner
+                .consumed
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_default()
+        };
 
         let mut count = 0;
         for id in candidate_ids {
@@ -306,7 +319,6 @@ impl StoragePort for FileStorageAdapter {
 
         // 2. Write to disk atomically first before committing to RAM
         let _ = fs::create_dir_all(&self.state_dir);
-        let consumed_path = self.state_dir.join("consumed.json");
         let unique_id = uuid::Uuid::new_v4();
         let tmp_path = self.state_dir.join(format!("consumed.{unique_id}.tmp"));
 
@@ -333,6 +345,50 @@ impl StoragePort for FileStorageAdapter {
         *guard = proposed;
 
         Ok(count)
+    }
+
+    fn reserve_handoff(
+        &self,
+        candidate_id: &str,
+        _lease_seconds: u64,
+        _worker_id: &str,
+    ) -> Result<String, String> {
+        if self.is_consumed(candidate_id) {
+            return Err(format!("Candidate '{candidate_id}' already consumed or reserved"));
+        }
+
+        let token = format!("claim_{}_{}", uuid::Uuid::new_v4(), candidate_id);
+        let claimed = self.mark_consumed(&[candidate_id.to_string()])?;
+        if claimed > 0 {
+            Ok(token)
+        } else {
+            Err(format!("Candidate '{candidate_id}' already claimed concurrently"))
+        }
+    }
+
+    fn release_reservation(&self, candidate_id: &str, _token: &str) -> Result<bool, String> {
+        let _persist_lock = self
+            .persist_mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let mut guard = self
+            .inner
+            .consumed
+            .write()
+            .map_err(|e| format!("Lock error releasing reservation: {e}"))?;
+        let removed = guard.remove(candidate_id);
+        if removed {
+            let list: Vec<String> = guard.iter().cloned().collect();
+            let consumed_path = self.state_dir.join("consumed.json");
+            let tmp_path = self.state_dir.join(format!("consumed.{}.tmp", uuid::Uuid::new_v4()));
+            if let Ok(json) = serde_json::to_string_pretty(&list) {
+                if fs::write(&tmp_path, json).is_ok() {
+                    let _ = fs::rename(&tmp_path, &consumed_path);
+                }
+            }
+        }
+        Ok(removed)
     }
 
     fn consumed_count(&self) -> usize {

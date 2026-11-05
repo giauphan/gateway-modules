@@ -183,7 +183,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let trusted_audit_sha = compute_sha256(trusted_audit_doc);
     std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
 
-    let license_doc = "Copyright 2026 Vendor. CC-BY license for commercial use of vis_v114_chart_prod.";
+    let license_doc = "Copyright 2026 Vendor Corp (example.com). CC-BY Creative Commons license for commercial use of vis_v114_chart_prod.";
     let lic_url_sha = compute_sha256("https://example.com/license");
     std::fs::write(evidence_dir.join(format!("{lic_url_sha}.txt")), license_doc.as_bytes()).unwrap();
 

@@ -583,7 +583,7 @@ fn dispatch_pipeline_and_admin(
             Some(handle_consume(service, body))
         }
         "/api/v1/handoff" | "/handoff" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+            if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
             }
             Some(handle_handoff(service, body))

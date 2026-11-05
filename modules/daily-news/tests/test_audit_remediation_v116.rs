@@ -152,7 +152,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
         verified_rights: Some(true),
     }];
 
-    let license_doc = "Copyright 2026 Vendor. CC-BY license for commercial use of vis_prod_chart.";
+    let license_doc = "Copyright 2026 Vendor Corp (example.com). CC-BY Creative Commons license for commercial use of vis_prod_chart.";
     let prod_sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())

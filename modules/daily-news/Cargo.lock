@@ -149,6 +149,8 @@ dependencies = [
 name = "daily-news"
 version = "1.19.0"
 dependencies = [
+ "crc32fast",
+ "miniz_oxide",
  "serde",
  "serde_json",
  "sha2",

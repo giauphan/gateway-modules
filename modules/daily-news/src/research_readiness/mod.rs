@@ -4,6 +4,7 @@
 //! facts from community discussions, and guards video production readiness.
 
 pub mod evaluator;
+pub mod media_decoder;
 pub mod types;
 pub mod verification;
 pub mod visual;

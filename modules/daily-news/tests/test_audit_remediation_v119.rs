@@ -119,7 +119,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     };
     assert!(!is_audit_source_verified(spoofed_text, &spoofed_rec));
 
-    // Case 1C: Genuine CertiK audit anchored with authoritative domain and report id -> IssuerAuthenticated
+    // Case 1C: Genuine CertiK audit anchored with authoritative domain and report id
     let authentic_text = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).";
     let auth_sha = compute_sha256(authentic_text);
     let authentic_rec = VerificationRecord {
@@ -135,9 +135,49 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         verification_record: Some(authentic_rec.clone()),
         ..fab_claim.clone()
     };
-    assert!(is_audit_source_verified(authentic_text, &authentic_rec));
+
+    let certik_resolved_report = "Official CertiK Benchmark Audit Report 2026-CERT-01. Verified 4x throughput improvement confirmed.";
+    let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use of vis_auth_1.";
+
+    let _sec_res_unresolved = move |r: &str| -> Option<String> {
+        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else {
+            None
+        }
+    };
+
+    let sec_res_authenticated = move |r: &str| -> Option<String> {
+        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else if r == "https://certik.com/reports/2026-CERT-01" || r == compute_sha256("https://certik.com/reports/2026-CERT-01") {
+            Some(certik_resolved_report.to_string())
+        } else {
+            None
+        }
+    };
+
+    // Case 1D: Even if audit_text mentions https://certik.com, without secondary_source_ref on accredited domain it fails closed as AuditContentMatched only
+    let unanchored_rec = VerificationRecord {
+        secondary_source_ref: None,
+        ..authentic_rec.clone()
+    };
     assert_eq!(
-        check_audit_provenance_level(authentic_text, &authentic_rec, &auth_claim),
+        daily_news::research_readiness::check_audit_provenance_level(
+            authentic_text,
+            &unanchored_rec,
+            &auth_claim
+        ),
+        AuditProvenanceStatus::AuditContentMatched
+    );
+
+    // Case 1E: With secondary_source_ref on accredited domain -> IssuerAuthenticated
+    assert_eq!(
+        daily_news::research_readiness::check_audit_provenance_level(
+            authentic_text,
+            &authentic_rec,
+            &auth_claim
+        ),
         AuditProvenanceStatus::IssuerAuthenticated
     );
 
@@ -156,14 +196,6 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         ..Default::default()
     }];
 
-    let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use of vis_auth_1.";
-    let sec_res = move |r: &str| -> Option<String> {
-        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
-            Some(license_doc.to_string())
-        } else {
-            None
-        }
-    };
     let asset_res = move |h: &str| -> Option<Vec<u8>> {
         if h == valid_png_sha { Some(valid_png_bytes.to_vec()) } else { None }
     };
@@ -181,7 +213,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         &[fab_claim],
         &valid_visuals,
         ContentOrigin::Article,
-        Some(&sec_res),
+        Some(&sec_res_authenticated),
         Some(&fab_audit_res),
         Some(&asset_res),
     );
@@ -194,7 +226,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         &[auth_claim],
         &valid_visuals,
         ContentOrigin::Article,
-        Some(&sec_res),
+        Some(&sec_res_authenticated),
         Some(&auth_audit_res),
         Some(&asset_res),
     );
@@ -258,6 +290,10 @@ fn test_issue3_real_media_decoding_containers() {
     // Corrupted PNG: Has bytes "IDAT" and "IEND" substring but truncated before zlib/IEND chunk
     let fake_marker_png = b"\x89PNG\r\n\x1a\nIDATIENDfakefakefakefakefakefakefakefakefake";
     assert!(!is_visual_media_decodable(fake_marker_png));
+
+    // Fake 59-byte PNG with fake IDAT and corrupt compression stream
+    let fake_59b_png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATfakeidatdata\0\0\0\0IEND\xaeB`\x82";
+    assert!(!is_visual_media_decodable(fake_59b_png));
 
     // PNG with invalid zlib header in IDAT
     let corrupt_zlib_png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDAT\xFF\xFF\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
@@ -352,6 +388,14 @@ fn test_issue4_cache_revision_merging_and_unified_try_cache_tier() {
     assert_eq!(disc_res.status, "ELIGIBLE");
     assert_eq!(disc_res.candidates.len(), 1);
 
+    // CRITICAL: Verify merged revision survives restart of storage adapter
+    let restarted = FileStorageAdapter::new(&tmp);
+    let recovered = restarted.get_cached_candidates();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].candidate_id, cand_id);
+    assert_eq!(recovered[0].title, "Updated Title Across Revision");
+    assert_ne!(recovered[0].content_hash, compute_sha256("content v1"));
+
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -381,7 +425,11 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let audit_sha = compute_sha256(audit_text);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
 
-    let license_text = "Copyright 2026 Vendor. CC-BY license for commercial use of asset_hnd.";
+    let certik_report = "Official CertiK Benchmark Audit Report 2026-HND. Verified 4x speedup on neural compiler benchmarks.";
+    let certik_url_sha = compute_sha256("https://certik.com/reports/2026-HND");
+    std::fs::write(evidence_dir.join(format!("{certik_url_sha}.txt")), certik_report).unwrap();
+
+    let license_text = "Copyright 2026 Vendor Corp (example.com). CC-BY Creative Commons license for commercial use of asset_hnd.";
     let lic_url_sha = compute_sha256("https://example.com/license");
     std::fs::write(evidence_dir.join(format!("{lic_url_sha}.txt")), license_text).unwrap();
 
@@ -480,6 +528,19 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let (code_stale, _) = handoff_stale.err().unwrap();
     assert_eq!(code_stale, "STALE_CANDIDATE");
 
+    // GET /handoff must be rejected with 405 Method Not Allowed
+    let req_get = json!({
+        "path": "/api/v1/handoff",
+        "method": "GET",
+        "body": { "candidate_id": "cand_handoff_01" }
+    });
+    let resp_get = handle_request(req_get, &service, &tmp);
+    assert_eq!(resp_get["status"], 405);
+
+    // Reservation release lifecycle
+    assert!(service.release_handoff("cand_handoff_01", "token").is_ok());
+    assert!(!storage.is_consumed("cand_handoff_01"));
+
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -541,6 +602,13 @@ fn test_issue6_feed_observed_discovery_admission_and_html_date_extraction() {
         extract_html_published_at(html_time),
         Some("2026-11-04T19:00:00Z".to_string())
     );
+
+    // Unicode HTML metadata date extraction without char boundary panic
+    let html_unicode = r#"<html><head><title>Unicode üöäß</title><meta property="article:published_time" content="2026-11-05T08:30:00Z"></head><body>Café Straße München äöü ß</body></html>"#;
+    assert_eq!(
+        extract_html_published_at(html_unicode),
+        Some("2026-11-05T08:30:00Z".to_string())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +664,20 @@ fn test_issue7_mcp_stateless_protocol_and_verify_production_handoff_schema() {
     assert_eq!(resp_stateless["status"], 200);
     let body_stateless: Value = serde_json::from_str(resp_stateless["body"].as_str().unwrap()).unwrap();
     assert!(body_stateless["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "verify_production_handoff"));
+
+    // 4. Request with canonical MCP 2026-07-28 metadata key "io.modelcontextprotocol/protocolVersion"
+    let req_canonical = json!({
+        "path": "/mcp",
+        "method": "POST",
+        "body": {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/list",
+            "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" }
+        }
+    });
+    let resp_canonical = handle_request(req_canonical, &service, &tmp);
+    assert_eq!(resp_canonical["status"], 200);
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

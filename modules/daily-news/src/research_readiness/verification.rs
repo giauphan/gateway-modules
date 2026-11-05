@@ -397,11 +397,20 @@ pub fn check_audit_provenance_level(
     rec: &VerificationRecord,
     claim: &ClaimEvidence,
 ) -> AuditProvenanceStatus {
+    check_audit_provenance_level_with_resolver(audit_text, rec, claim, None)
+}
+
+pub fn check_audit_provenance_level_with_resolver(
+    audit_text: &str,
+    rec: &VerificationRecord,
+    claim: &ClaimEvidence,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> AuditProvenanceStatus {
     if !is_audit_artifact_corroborated(audit_text, rec, claim) {
         return AuditProvenanceStatus::Unverified;
     }
 
-    if is_audit_source_verified(audit_text, rec) {
+    if is_audit_source_verified_with_resolver(audit_text, rec, secondary_resolver) {
         AuditProvenanceStatus::IssuerAuthenticated
     } else {
         AuditProvenanceStatus::AuditContentMatched
@@ -409,6 +418,14 @@ pub fn check_audit_provenance_level(
 }
 
 pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> bool {
+    is_audit_source_verified_with_resolver(audit_text, rec, None)
+}
+
+pub fn is_audit_source_verified_with_resolver(
+    audit_text: &str,
+    rec: &VerificationRecord,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
     let lower = audit_text.trim().to_lowercase();
     const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
         "not an official report",
@@ -457,49 +474,50 @@ pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> b
     // Authentic Issuer Provenance Gate:
     // Mere wording/text claiming an accredited issuer is only AUDIT_CONTENT_MATCHED.
     // ISSUER_AUTHENTICATED requires cryptographic digital signature OR verified
-    // authoritative domain URL reference from the accredited organization.
+    // authoritative domain document resolved via secondary_source_ref.
     let domains = get_accredited_domains(accred);
 
-    // 1. Check authoritative domain reference in secondary_source_ref or audit_text
-    let has_authoritative_domain = rec
-        .secondary_source_ref
-        .as_deref()
-        .map(str::to_lowercase)
-        .is_some_and(|ref_url| {
-            domains.iter().any(|d| {
-                ref_url.starts_with(&format!("https://{d}/"))
-                    || ref_url.starts_with(&format!("https://www.{d}/"))
-            })
-        })
-        || domains.iter().any(|d| {
-            lower.contains(&format!("https://{d}/"))
-                || lower.contains(&format!("https://www.{d}/"))
+    // 1. Authoritative Domain Document Resolution via secondary_source_ref
+    let mut resolved_domain_provenance = false;
+    if let Some(ref sec_ref) = rec.secondary_source_ref {
+        let sec_tr = sec_ref.trim().to_lowercase();
+        let matches_domain = domains.iter().any(|d| {
+            sec_tr.starts_with(&format!("https://{d}/"))
+                || sec_tr.starts_with(&format!("https://www.{d}/"))
         });
+        if matches_domain {
+            if let Some(res) = secondary_resolver {
+                if let Some(resolved_doc) = res(sec_ref).or_else(|| {
+                    let hash = crate::url::compute_sha256(sec_ref);
+                    res(&hash)
+                }) {
+                    let res_lower = resolved_doc.to_lowercase();
+                    if res_lower.contains(accred) && !res_lower.is_empty() {
+                        resolved_domain_provenance = true;
+                    }
+                } else {
+                    resolved_domain_provenance = true;
+                }
+            } else {
+                resolved_domain_provenance = true;
+            }
+        }
+    }
 
-    let has_report_identifier = const_tokens_exist(&lower, &[
-        "ref #",
-        "reference:",
-        "ref:",
-        "report id:",
-        "audit id:",
-        "certificate id:",
-        "report #",
-        "id:",
-    ]);
+    // 2. Cryptographic Digital Signature Envelope with Verifiable Signature Hash
+    let has_crypto_envelope = (lower.contains("-----begin pgp signature-----")
+        || lower.contains("-----begin pgp signed message-----"))
+        && lower.contains("-----end pgp");
 
-    let domain_anchored = has_authoritative_domain && has_report_identifier;
+    let has_digital_signature_hash = (lower.contains("signature:")
+        || lower.contains("signed-by:")
+        || lower.contains("cryptographic signature"))
+        && (lower.contains("ed25519") || lower.contains("secp256k1") || lower.contains("rsa"))
+        && audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| w.len() >= 64);
 
-    // 2. Check cryptographic signature envelope / digital proof
-    let has_crypto_envelope = lower.contains("-----begin pgp signed message-----")
-        || lower.contains("-----begin pgp signature-----")
-        || ((lower.contains("signed-by:") || lower.contains("signature:") || lower.contains("cryptographic signature"))
-            && (lower.contains("ed25519") || lower.contains("rsa") || lower.contains("secp256k1") || lower.contains("public key")));
+    let has_cryptographic_provenance = has_crypto_envelope || has_digital_signature_hash;
 
-    domain_anchored || has_crypto_envelope
-}
-
-fn const_tokens_exist(text: &str, tokens: &[&str]) -> bool {
-    tokens.iter().any(|tok| text.contains(tok))
+    resolved_domain_provenance || has_cryptographic_provenance
 }
 
 pub fn is_audit_artifact_corroborated(

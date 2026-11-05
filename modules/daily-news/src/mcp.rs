@@ -348,13 +348,20 @@ fn handle_single_jsonrpc_request(
     const SUPPORTED_MCP_VERSIONS: &[&str] = &["2026-07-28", "2024-11-05", "2024-10-07"];
 
     // Validate protocolVersion in _meta if provided (stateless MCP 2026-07-28 request metadata)
+    // Checks canonical "io.modelcontextprotocol/protocolVersion" key followed by legacy fallback.
     let meta_version = body
         .get("_meta")
-        .and_then(|m| m.get("protocolVersion"))
+        .and_then(|m| {
+            m.get("io.modelcontextprotocol/protocolVersion")
+                .or_else(|| m.get("protocolVersion"))
+        })
         .or_else(|| {
             body.get("params")
                 .and_then(|p| p.get("_meta"))
-                .and_then(|m| m.get("protocolVersion"))
+                .and_then(|m| {
+                    m.get("io.modelcontextprotocol/protocolVersion")
+                        .or_else(|| m.get("protocolVersion"))
+                })
         })
         .and_then(|v| v.as_str());
 
