@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "daily-news"
-version = "1.19.0"
+version = "1.19.1"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
