@@ -262,10 +262,12 @@ impl CandidateScorer {
         let feasibility = if let Some(ref readiness) = candidate.research_readiness {
             match readiness.status {
                 crate::domain::ReadinessStatus::VideoReady => 1.0,
+                crate::domain::ReadinessStatus::MockVerified => 0.85,
                 crate::domain::ReadinessStatus::NeedsVerification => 0.8,
                 crate::domain::ReadinessStatus::NeedsResearch => 0.6,
-                crate::domain::ReadinessStatus::NeedsSource => 0.3,
                 crate::domain::ReadinessStatus::NeedsVisualEvidence => 0.5,
+                crate::domain::ReadinessStatus::NeedsRevalidation => 0.5,
+                crate::domain::ReadinessStatus::NeedsSource => 0.3,
                 crate::domain::ReadinessStatus::Discovered => 0.4,
                 crate::domain::ReadinessStatus::Rejected => 0.0,
             }

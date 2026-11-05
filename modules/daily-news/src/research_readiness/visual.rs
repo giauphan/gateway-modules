@@ -239,6 +239,15 @@ pub fn verify_visual_asset_record(
     })
 }
 
+pub fn is_mock_visual_bytes(bytes: &[u8]) -> bool {
+    let lower_start = bytes[..bytes.len().min(64)].to_ascii_lowercase();
+    lower_start.starts_with(b"png mock")
+        || lower_start.starts_with(b"mock")
+        || lower_start.starts_with(b"dummy")
+        || lower_start.starts_with(b"synthetic")
+        || lower_start.starts_with(b"test asset")
+}
+
 pub fn are_visuals_provenance_verified(
     visuals: &[VisualEvidence],
     asset_resolver: AssetResolver,

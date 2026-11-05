@@ -6,7 +6,7 @@
 
 use crate::date::parse_iso_to_epoch;
 use crate::discovery::{
-    build_fail_closed_result, is_candidate_eligible, matches_topics, normalize_raw_item,
+    build_fail_closed_result, is_candidate_eligible, matches_topics,
     validate_date_bounds,
 };
 use crate::domain::{
@@ -103,10 +103,24 @@ impl DailyNewsService {
                 .and_then(|cap| cap.read_snapshot_text(hash))
         };
 
-        normalize_raw_item(
+        let audit_reader = |hash: &str| -> Option<String> {
+            self.capture
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_text(hash))
+        };
+
+        let asset_reader = |hash: &str| -> Option<Vec<u8>> {
+            self.capture
+                .as_ref()
+                .and_then(|cap| cap.read_snapshot_bytes(hash))
+        };
+
+        crate::discovery::normalize_raw_item_full(
             raw,
             snapshot_text.as_deref(),
             Some(&secondary_reader),
+            Some(&audit_reader),
+            Some(&asset_reader),
         )
     }
 

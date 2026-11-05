@@ -181,6 +181,7 @@ fn test_all_criteria_met_yields_video_ready() {
 
     let visuals = vec![sample_visual("vis_1", "chart", "https://example.com/chart.png")];
 
+    // Under unified verification gate, without audit & asset resolvers, readiness holds at NeedsVerification
     let readiness = evaluate_readiness_with_snapshot_text(
         Some(&source),
         Some(snapshot_text),
@@ -188,8 +189,46 @@ fn test_all_criteria_met_yields_video_ready() {
         &visuals,
         ContentOrigin::Article,
     );
-    assert_eq!(readiness.status, ReadinessStatus::VideoReady);
-    assert!(readiness.missing_fields.is_empty());
+    assert_ne!(readiness.status, ReadinessStatus::VideoReady);
+    assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
+
+    // With accredited issuer and valid media asset resolvers, evaluate_readiness_full yields VideoReady
+    let audit_doc = "Official Audit Report from CertiK: verified findings confirmed for 4x latency improvement across all systems.";
+    let audit_sha = compute_sha256(audit_doc);
+    let mut accredited_claims = claims;
+    accredited_claims[0].verification_record = Some(VerificationRecord {
+        record_id: "vr_prod_01".to_string(),
+        verified_at: "2026-11-04T05:00:00Z".to_string(),
+        reviewer_id: "certik_auditor".to_string(),
+        organization: "CertiK".to_string(),
+        method: "reproducible_benchmark".to_string(),
+        audit_trail_ref: Some(audit_sha.clone()),
+        secondary_source_ref: None,
+    });
+
+    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
+    let mut resolved_visuals = visuals;
+    resolved_visuals[0].checksum_sha256 = Some(png_sha.clone());
+
+    let audit_res = move |h: &str| -> Option<String> {
+        if h == audit_sha { Some(audit_doc.to_string()) } else { None }
+    };
+    let asset_res = move |h: &str| -> Option<Vec<u8>> {
+        if h == png_sha { Some(png_bytes.to_vec()) } else { None }
+    };
+
+    let readiness_full = daily_news::research_readiness::evaluate_readiness_full(
+        Some(&source),
+        Some(snapshot_text),
+        &accredited_claims,
+        &resolved_visuals,
+        ContentOrigin::Article,
+        None,
+        Some(&audit_res),
+        Some(&asset_res),
+    );
+    assert_eq!(readiness_full.status, ReadinessStatus::VideoReady);
 }
 
 #[test]
@@ -613,6 +652,7 @@ fn test_verification_record_structured_evidence() {
 
     let visuals = vec![sample_visual("vis_audit_diagram", "diagram", "https://example.com/diagram.png")];
 
+    // Under unified verification gate, evaluate_readiness_with_snapshot_text holds at NeedsVerification without resolvers
     let readiness = evaluate_readiness_with_snapshot_text(
         Some(&source),
         Some(snapshot_text),
@@ -620,7 +660,38 @@ fn test_verification_record_structured_evidence() {
         &visuals,
         ContentOrigin::Article,
     );
-    assert_eq!(readiness.status, ReadinessStatus::VideoReady);
+    assert_ne!(readiness.status, ReadinessStatus::VideoReady);
+    assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
+
+    // When resolvers are provided for accredited CertiK audit + valid visual bytes, evaluates to VideoReady
+    let audit_doc = "Official Cryptographic Audit Report #2026-001: CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
+    let audit_sha = compute_sha256(audit_doc);
+    let mut resolved_claims = claims;
+    resolved_claims[0].verification_record.as_mut().unwrap().audit_trail_ref = Some(audit_sha.clone());
+
+    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
+    let mut resolved_vis = visuals;
+    resolved_vis[0].checksum_sha256 = Some(png_sha.clone());
+
+    let audit_res = move |h: &str| -> Option<String> {
+        if h == audit_sha { Some(audit_doc.to_string()) } else { None }
+    };
+    let asset_res = move |h: &str| -> Option<Vec<u8>> {
+        if h == png_sha { Some(png_bytes.to_vec()) } else { None }
+    };
+
+    let readiness_full = daily_news::research_readiness::evaluate_readiness_full(
+        Some(&source),
+        Some(snapshot_text),
+        &resolved_claims,
+        &resolved_vis,
+        ContentOrigin::Article,
+        None,
+        Some(&audit_res),
+        Some(&asset_res),
+    );
+    assert_eq!(readiness_full.status, ReadinessStatus::VideoReady);
 }
 
 #[test]

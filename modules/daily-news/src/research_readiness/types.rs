@@ -206,6 +206,8 @@ pub enum ReadinessStatus {
     NeedsResearch,
     NeedsVerification,
     NeedsVisualEvidence,
+    NeedsRevalidation,
+    MockVerified,
     VideoReady,
     Rejected,
 }
@@ -218,6 +220,8 @@ impl ReadinessStatus {
             Self::NeedsResearch => "NEEDS_RESEARCH",
             Self::NeedsVerification => "NEEDS_VERIFICATION",
             Self::NeedsVisualEvidence => "NEEDS_VISUAL_EVIDENCE",
+            Self::NeedsRevalidation => "NEEDS_REVALIDATION",
+            Self::MockVerified => "MOCK_VERIFIED",
             Self::VideoReady => "VIDEO_READY",
             Self::Rejected => "REJECTED",
         }

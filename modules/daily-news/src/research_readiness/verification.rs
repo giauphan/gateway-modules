@@ -10,9 +10,6 @@ pub const ACCREDITED_ORGANIZATIONS: &[&str] = &[
     "politifact",
     "bbc verify",
     "afp fact check",
-    "benchmarking laboratory",
-    "benchmarking lab",
-    "national laboratory",
     "iso iec 17025",
     "stanford security lab",
     "mit csail",
@@ -24,6 +21,49 @@ pub const ACCREDITED_ORGANIZATIONS: &[&str] = &[
     "openzeppelin",
     "cure53",
 ];
+
+pub const MOCK_ORGANIZATIONS: &[&str] = &[
+    "benchmarking laboratory",
+    "benchmarking lab",
+];
+
+pub fn is_mock_organization(org: &str) -> bool {
+    let lower = org.trim().to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tokens
+        .iter()
+        .any(|&t| matches!(t, "mock" | "synthetic" | "sample"))
+    {
+        return true;
+    }
+    MOCK_ORGANIZATIONS.iter().any(|&m| {
+        let m_tokens: Vec<&str> = m.split_whitespace().collect();
+        tokens == m_tokens || tokens.windows(m_tokens.len()).any(|w| w == m_tokens.as_slice())
+    })
+}
+
+pub fn is_mock_reviewer_or_org(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tokens.iter().any(|&t| {
+        matches!(
+            t,
+            "mock" | "synthetic" | "sample" | "dummy" | "fake" | "attacker"
+        )
+    }) {
+        return true;
+    }
+    MOCK_ORGANIZATIONS.iter().any(|&m| {
+        let m_tokens: Vec<&str> = m.split_whitespace().collect();
+        tokens == m_tokens || tokens.windows(m_tokens.len()).any(|w| w == m_tokens.as_slice())
+    })
+}
 
 pub const DENIED_REVIEWER_TOKENS: &[&str] = &[
     "self",
@@ -125,7 +165,8 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
         && !rev_lower
             .split(|c: char| !c.is_alphanumeric())
             .any(|tok| DENIED_REVIEWER_TOKENS.contains(&tok));
-    let has_org = is_accredited_organization(&rec.organization);
+    let has_org = is_accredited_organization(&rec.organization)
+        || is_mock_organization(&rec.organization);
     let valid_method = matches!(
         rec.method.trim().to_lowercase().as_str(),
         "reproducible_benchmark"
@@ -334,6 +375,7 @@ pub fn is_audit_artifact_corroborated(
     }
     let declared_accred = ACCREDITED_ORGANIZATIONS
         .iter()
+        .chain(MOCK_ORGANIZATIONS.iter())
         .find(|&&a| org_lower.contains(a) && lower.contains(a));
     let Some(&accred_name) = declared_accred else {
         return false;

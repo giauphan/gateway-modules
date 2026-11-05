@@ -8,7 +8,9 @@ use crate::domain::{
     normalize_publisher, DiscoveryResult, ModuleConfig, NormalizedCandidate, RawNewsItem,
     RawProvenance, ResearchEvidenceFields,
 };
-use crate::research_readiness::{evaluate_readiness_with_snapshot_store, SecondaryResolver};
+use crate::research_readiness::{
+    evaluate_readiness_full, AssetResolver, AuditResolver, SecondaryResolver,
+};
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -140,6 +142,16 @@ pub fn normalize_raw_item(
     snapshot_text: Option<&str>,
     secondary_resolver: SecondaryResolver,
 ) -> Result<NormalizedCandidate, String> {
+    normalize_raw_item_full(raw, snapshot_text, secondary_resolver, None, None)
+}
+
+pub fn normalize_raw_item_full(
+    raw: &RawNewsItem,
+    snapshot_text: Option<&str>,
+    secondary_resolver: SecondaryResolver,
+    audit_resolver: AuditResolver,
+    asset_resolver: AssetResolver,
+) -> Result<NormalizedCandidate, String> {
     if raw.id.trim().is_empty() {
         return Err("Raw item missing required 'id'".to_string());
     }
@@ -169,13 +181,15 @@ pub fn normalize_raw_item(
     let thash = compute_title_hash(&raw.title);
     let topic = classify_topic_family(&raw.title, body_str.unwrap_or(""));
 
-    let readiness = evaluate_readiness_with_snapshot_store(
+    let readiness = evaluate_readiness_full(
         raw.primary_source.as_ref(),
         snapshot_text,
         &raw.claims,
         &raw.visual_evidence,
         raw.content_origin,
         secondary_resolver,
+        audit_resolver,
+        asset_resolver,
     );
 
     // Stable candidate identity deterministically derived from canonical URL (prevents caller ID spoofing)

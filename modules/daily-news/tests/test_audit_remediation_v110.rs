@@ -217,7 +217,8 @@ fn test_secondary_evidence_snapshot_artifact_verification() {
         "Secondary snapshot hash mismatch or missing excerpt must fail closed"
     );
 
-    // Case 3: Secondary snapshot artifact exists, SHA matches, and excerpt is grounded -> VIDEO_READY!
+    // Case 3: Secondary snapshot artifact exists, SHA matches, and excerpt is grounded.
+    // Under unified verification gate, without audit/asset resolvers, it holds at NeedsVerification!
     let valid_resolver = move |hash: &str| {
         if hash == sec_sha {
             Some(sec_text.to_string())
@@ -233,11 +234,12 @@ fn test_secondary_evidence_snapshot_artifact_verification() {
         ContentOrigin::Article,
         Some(&valid_resolver),
     );
-    assert_eq!(
+    assert_ne!(
         r_success.status,
         ReadinessStatus::VideoReady,
-        "Verified secondary artifact bytes and grounded excerpt must satisfy VIDEO_READY"
+        "Without audit/asset resolvers, candidates cannot bypass verification to VIDEO_READY"
     );
+    assert_eq!(r_success.status, ReadinessStatus::NeedsVerification);
 }
 
 #[test]
@@ -311,7 +313,7 @@ fn test_visual_evidence_checksum_and_rights_enforcement() {
     );
     assert_eq!(r3.status, ReadinessStatus::NeedsVisualEvidence);
 
-    // 4. Fully compliant visual evidence -> VIDEO_READY
+    // 4. Fully compliant visual evidence metadata without audit/asset resolvers holds at NeedsVerification
     let vis_valid = sample_visual("vis_1", "chart", "https://example.com/chart.png");
     let r4 = evaluate_readiness_with_snapshot_store(
         Some(&source),
@@ -321,7 +323,12 @@ fn test_visual_evidence_checksum_and_rights_enforcement() {
         ContentOrigin::Article,
         None,
     );
-    assert_eq!(r4.status, ReadinessStatus::VideoReady);
+    assert_ne!(
+        r4.status,
+        ReadinessStatus::VideoReady,
+        "Cannot reach VIDEO_READY without audit and asset resolvers"
+    );
+    assert_eq!(r4.status, ReadinessStatus::NeedsVerification);
 }
 
 #[test]

@@ -262,17 +262,41 @@ fn test_fake_audit_hash_and_unverified_record_fails_closed() {
         }
     };
 
-    let readiness_real = evaluate_readiness_full(
+    // Under unified verification gate, without asset resolver, readiness holds at NeedsVisualEvidence
+    let readiness_no_asset = evaluate_readiness_full(
         Some(&source),
         Some(text),
-        &[verified_claim],
+        std::slice::from_ref(&verified_claim),
         &visuals,
         ContentOrigin::Article,
         None,
         Some(&real_audit_resolver),
         None,
     );
-    assert_eq!(readiness_real.status, ReadinessStatus::VideoReady);
+    assert_eq!(readiness_no_asset.status, ReadinessStatus::NeedsVisualEvidence);
+    assert_ne!(readiness_no_asset.status, ReadinessStatus::VideoReady);
+
+    // When valid asset resolver is supplied alongside audit resolver:
+    let asset_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0\x1f\xf3\xffa";
+    let asset_sha = daily_news::url::compute_sha256_bytes(asset_bytes);
+    let mut visuals_resolved = visuals.clone();
+    visuals_resolved[0].checksum_sha256 = Some(asset_sha.clone());
+    let valid_asset_res = move |h: &str| -> Option<Vec<u8>> {
+        if h == asset_sha { Some(asset_bytes.to_vec()) } else { None }
+    };
+
+    let readiness_real = evaluate_readiness_full(
+        Some(&source),
+        Some(text),
+        &[verified_claim],
+        &visuals_resolved,
+        ContentOrigin::Article,
+        None,
+        Some(&real_audit_resolver),
+        Some(&valid_asset_res),
+    );
+    // Since Benchmarking Laboratory is used, it validates as MockVerified (not VideoReady)
+    assert_eq!(readiness_real.status, ReadinessStatus::MockVerified);
 }
 
 // =========================================================================
@@ -375,7 +399,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         extraction_method: None,
     };
 
-    let audit_text = "Verified report from Benchmarking Laboratory audit findings confirmed for compiler performance benchmarking.";
+    let audit_text = "Verified official audit report from CertiK: audit findings independently confirmed for compiler performance benchmarking.";
     let audit_sha = compute_sha256(audit_text);
     let claim = ClaimEvidence {
         claim_id: "c_valid".to_string(),
@@ -391,7 +415,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
             record_id: "vr_comp_01".to_string(),
             verified_at: "2026-11-04T05:00:00Z".to_string(),
             reviewer_id: "auditor_comp".to_string(),
-            organization: "Benchmarking Laboratory".to_string(),
+            organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(audit_sha.clone()),
             secondary_source_ref: None,

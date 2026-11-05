@@ -102,9 +102,9 @@ fn test_enrich_candidate_workflow_state_transitions() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // 2. Second stage enrichment: provide verified claims with accredited reviewer + CC-BY visual asset
-    let audit_content = "Official Audit Trail Report #2026-02: Benchmarking Laboratory independently verified the performance benchmarks and confirmed findings for 4x reduction in cache latency across all test runs.";
+    let audit_content = "Official Audit Trail Report #2026-02: CertiK independently verified the performance benchmarks and confirmed findings for 4x reduction in cache latency across all test runs.";
     let audit_sha = daily_news::url::compute_sha256(audit_content);
-    let chart_bytes = b"PNG MOCK COMPILER BENCHMARK ASSET FOR WORKFLOW TEST";
+    let chart_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
     let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
     let evidence_dir = tmp_dir.join(".state").join("evidence");
     let _ = std::fs::create_dir_all(&evidence_dir);
@@ -124,8 +124,8 @@ fn test_enrich_candidate_workflow_state_transitions() {
         verification_record: Some(daily_news::domain::VerificationRecord {
             record_id: "rec_enrich_01".to_string(),
             verified_at: "2026-11-04T05:00:00Z".to_string(),
-            reviewer_id: "benchmarking_auditor".to_string(),
-            organization: "Benchmarking Laboratory".to_string(),
+            reviewer_id: "certik_auditor".to_string(),
+            organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(audit_sha),
             secondary_source_ref: None,

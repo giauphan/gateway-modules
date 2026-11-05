@@ -148,7 +148,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let res_missing = service.enrich_candidate(cand_id, None, Some(claims_with_missing_audit), Some(visuals.clone())).unwrap();
     assert_eq!(res_missing.candidate.research_readiness.as_ref().unwrap().status, ReadinessStatus::NeedsVerification);
 
-    // 2. Corroborated audit file in storage verifies to VideoReady
+    // 2. Corroborated audit file in storage with mock provenance validates to MockVerified
     let audit_doc = "Official Audit Report #2026-V114: Benchmarking Laboratory independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
     let audit_sha = compute_sha256(audit_doc);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_doc.as_bytes()).unwrap();
@@ -157,7 +157,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
         claim_id: "c_v114_valid".to_string(),
         statement: "4x reduction in cache latency".to_string(),
         evidence_refs: vec![EvidenceRef {
-            source_ref: primary_sha,
+            source_ref: primary_sha.clone(),
             excerpt: "Our production deployment achieved a 4x reduction in cache latency across edge nodes.".to_string(),
             locator: Some("p:1".to_string()),
         }],
@@ -175,7 +175,54 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     }];
 
     let res_valid = service.enrich_candidate(cand_id, None, Some(claims_with_valid_audit), Some(visuals)).unwrap();
-    assert_eq!(res_valid.candidate.research_readiness.as_ref().unwrap().status, ReadinessStatus::VideoReady);
+    assert_eq!(res_valid.candidate.research_readiness.as_ref().unwrap().status, ReadinessStatus::MockVerified);
+    assert!(!res_valid.production_scoring.is_video_production_ready);
+
+    // 3. Trusted accredited issuer + real PNG bytes reaches production VideoReady
+    let trusted_audit_doc = "Official CertiK Audit Report #2026-V114: CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
+    let trusted_audit_sha = compute_sha256(trusted_audit_doc);
+    std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
+
+    let real_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let real_png_sha = compute_sha256_bytes(real_png_bytes);
+    std::fs::write(evidence_dir.join(format!("{real_png_sha}.txt")), real_png_bytes).unwrap();
+
+    let trusted_visuals = vec![VisualEvidence {
+        asset_ref: "vis_v114_chart_prod".to_string(),
+        kind: "chart".to_string(),
+        source_url: "https://example.com/v114_chart.png".to_string(),
+        source_snapshot_ref: None,
+        license_status: Some("cc-by".to_string()),
+        provenance_status: Some("verified".to_string()),
+        checksum_sha256: Some(real_png_sha),
+        license_evidence_ref: Some("https://example.com/license".to_string()),
+        verified_rights: Some(true),
+    }];
+
+    let claims_with_trusted_audit = vec![ClaimEvidence {
+        claim_id: "c_v114_trusted".to_string(),
+        statement: "4x reduction in cache latency".to_string(),
+        evidence_refs: vec![EvidenceRef {
+            source_ref: primary_sha,
+            excerpt: "Our production deployment achieved a 4x reduction in cache latency across edge nodes.".to_string(),
+            locator: Some("p:1".to_string()),
+        }],
+        verification_status: "INDEPENDENTLY_VERIFIED".to_string(),
+        reviewer: None,
+        verification_record: Some(VerificationRecord {
+            record_id: "vr_trusted_01".to_string(),
+            reviewer_id: "certik_lead_auditor".to_string(),
+            organization: "CertiK".to_string(),
+            method: "reproducible_benchmark".to_string(),
+            verified_at: "2026-11-04T00:00:00Z".to_string(),
+            audit_trail_ref: Some(trusted_audit_sha),
+            secondary_source_ref: None,
+        }),
+    }];
+
+    let res_trusted = service.enrich_candidate(cand_id, None, Some(claims_with_trusted_audit), Some(trusted_visuals)).unwrap();
+    assert_eq!(res_trusted.candidate.research_readiness.as_ref().unwrap().status, ReadinessStatus::VideoReady);
+    assert!(res_trusted.production_scoring.is_video_production_ready);
 }
 
 // =========================================================================

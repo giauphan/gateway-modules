@@ -71,6 +71,35 @@ fn merge_candidate_preserve_research(
 }
 
 fn merge_candidate_entry(existing: &mut NormalizedCandidate, incoming: &NormalizedCandidate) {
+    let content_changed = existing.content_hash != incoming.content_hash;
+
+    if content_changed {
+        // Content body changed across revisions! Stale research and verification cannot be preserved.
+        let mut updated = incoming.clone();
+        let incoming_has_readiness = incoming
+            .research
+            .research_readiness
+            .as_ref()
+            .is_some_and(|r| {
+                r.status == crate::domain::ReadinessStatus::VideoReady
+                    || r.status == crate::domain::ReadinessStatus::MockVerified
+            });
+
+        if !incoming_has_readiness {
+            updated.research_readiness = Some(crate::domain::ResearchReadiness {
+                status: crate::domain::ReadinessStatus::NeedsRevalidation,
+                reasons: vec![format!(
+                    "Content body modified across ingestion revisions (old content_hash: {}, new: {}); stale research invalidated",
+                    existing.content_hash, incoming.content_hash
+                )],
+                missing_fields: vec!["content_revalidation".to_string()],
+                contract_version: "2.0".to_string(),
+            });
+        }
+        *existing = updated;
+        return;
+    }
+
     let incoming_has_evidence =
         incoming.research.primary_source.is_some() || !incoming.research.claims.is_empty();
 
@@ -242,25 +271,46 @@ impl FileStorageAdapter {
             persist_mutex: Mutex::new(()),
         }
     }
+}
 
-    fn persist_consumed(&self) -> Result<(), String> {
+impl StoragePort for FileStorageAdapter {
+    fn is_consumed(&self, candidate_id: &str) -> bool {
+        self.inner.is_consumed(candidate_id)
+    }
+
+    fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
         let _persist_lock = self
             .persist_mutex
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+
+        // 1. Transactional isolation: build proposed set without mutating RAM yet
+        let current_consumed = self
+            .inner
+            .consumed
+            .read()
+            .map_err(|e| format!("Lock error reading consumed IDs: {e}"))?;
+        let mut proposed = current_consumed.clone();
+        drop(current_consumed);
+
+        let mut count = 0;
+        for id in candidate_ids {
+            if proposed.insert(id.clone()) {
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // 2. Write to disk atomically first before committing to RAM
         let _ = fs::create_dir_all(&self.state_dir);
         let consumed_path = self.state_dir.join("consumed.json");
         let unique_id = uuid::Uuid::new_v4();
         let tmp_path = self.state_dir.join(format!("consumed.{unique_id}.tmp"));
 
-        let guard = self
-            .inner
-            .consumed
-            .read()
-            .map_err(|e| format!("Lock error reading consumed IDs: {e}"))?;
-        let list: Vec<String> = guard.iter().cloned().collect();
-        drop(guard);
-
+        let list: Vec<String> = proposed.iter().cloned().collect();
         let json = serde_json::to_string_pretty(&list)
             .map_err(|e| format!("Failed to serialize consumed IDs: {e}"))?;
 
@@ -274,18 +324,14 @@ impl FileStorageAdapter {
             format!("Failed to finalize consumed state to {consumed_path:?}: {e}")
         })?;
 
-        Ok(())
-    }
-}
+        // 3. ONLY after disk write & rename succeed, commit to RAM!
+        let mut guard = self
+            .inner
+            .consumed
+            .write()
+            .map_err(|e| format!("Lock error updating consumed IDs: {e}"))?;
+        *guard = proposed;
 
-impl StoragePort for FileStorageAdapter {
-    fn is_consumed(&self, candidate_id: &str) -> bool {
-        self.inner.is_consumed(candidate_id)
-    }
-
-    fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
-        let count = self.inner.mark_consumed(candidate_ids)?;
-        self.persist_consumed()?;
         Ok(count)
     }
 
@@ -302,8 +348,9 @@ impl StoragePort for FileStorageAdapter {
             .persist_mutex
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+
+        // 1. Write to disk atomically first before mutating RAM
         let _ = fs::create_dir_all(&self.state_dir);
-        self.inner.save_config(config)?;
         let json = serde_json::to_string_pretty(config)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
         let unique_id = uuid::Uuid::new_v4();
@@ -318,6 +365,9 @@ impl StoragePort for FileStorageAdapter {
             let _ = fs::remove_file(&tmp_path);
             format!("Failed to finalize config state to {:?}: {e}", self.config_path)
         })?;
+
+        // 2. ONLY after disk write & rename succeed, commit to RAM!
+        self.inner.save_config(config)?;
 
         Ok(())
     }

@@ -5,8 +5,7 @@ use super::types::{
     PrimarySourceEvidence, ReadinessStatus, ResearchReadiness, SecondaryResolver, VisualEvidence,
 };
 use super::verification::{
-    is_claim_independently_verified, is_claim_independently_verified_with_audit_resolver,
-    is_verification_record_valid,
+    is_claim_independently_verified_with_audit_resolver, is_verification_record_valid,
 };
 use super::visual::are_visuals_provenance_verified;
 
@@ -307,7 +306,11 @@ fn is_evidence_ref_grounded(
         }
     } else {
         let is_valid_hex = ref_str.len() == 64 && ref_str.chars().all(|ch| ch.is_ascii_hexdigit());
-        let verified_check = is_claim_independently_verified(claim);
+        let verified_check = claim.verification_status == "INDEPENDENTLY_VERIFIED"
+            && claim
+                .verification_record
+                .as_ref()
+                .is_some_and(is_verification_record_valid);
         let has_secondary_link = claim
             .verification_record
             .as_ref()
@@ -497,9 +500,55 @@ pub fn evaluate_readiness_full(
         );
     }
 
+    // Full Verification Gate: Resolvers are mandatory to corroborate audit trail and asset bytes
+    if audit_resolver.is_none() {
+        return build_readiness(
+            ReadinessStatus::NeedsVerification,
+            "Independent verification audit resolver required to corroborate audit trail bytes before video readiness".to_string(),
+            "verified_audit_trail",
+        );
+    }
+
+    if asset_resolver.is_none() {
+        return build_readiness(
+            ReadinessStatus::NeedsVisualEvidence,
+            "Visual asset byte resolver required to verify visual asset bytes before video readiness".to_string(),
+            "verified_visual_bytes",
+        );
+    }
+
+    // Provenance Check: distinguish MOCK_VERIFIED from trusted production VIDEO_READY
+    let has_mock_audit = claims.iter().any(|c| {
+        c.verification_record.as_ref().is_some_and(|vr| {
+            super::verification::is_mock_reviewer_or_org(&vr.reviewer_id)
+                || super::verification::is_mock_reviewer_or_org(&vr.organization)
+        })
+    });
+
+    let has_mock_visual = visuals.iter().any(|v| {
+        v.provenance_status.as_deref().is_some_and(|p| p.trim().eq_ignore_ascii_case("mock"))
+            || v.asset_ref
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|tok| tok.eq_ignore_ascii_case("mock") || tok.eq_ignore_ascii_case("dummy"))
+            || asset_resolver.is_some_and(|res| {
+                v.checksum_sha256
+                    .as_deref()
+                    .and_then(res)
+                    .is_some_and(|bytes| super::visual::is_mock_visual_bytes(&bytes))
+            })
+    });
+
+    if has_mock_audit || has_mock_visual {
+        return build_readiness(
+            ReadinessStatus::MockVerified,
+            "Synthetically verified with mock/test artifacts; trusted accredited issuer and production media binary required for VIDEO_READY".to_string(),
+            "trusted_production_evidence",
+        );
+    }
+
     build_readiness(
         ReadinessStatus::VideoReady,
-        "All primary source, claim, and visual verification criteria satisfied".to_string(),
+        "All primary source, claim, and visual verification criteria satisfied with trusted provenance".to_string(),
         "",
     )
 }
