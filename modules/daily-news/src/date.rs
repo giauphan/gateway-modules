@@ -9,29 +9,7 @@ fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
     era * 146097 + doe as i64 - 719468
 }
 
-pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
-    let s = ts.trim();
-    if s.is_empty() {
-        return Err("Empty timestamp".to_string());
-    }
-
-    if let Ok(num) = s.parse::<u64>() {
-        let secs = if num > 100_000_000_000 {
-            num / 1000
-        } else {
-            num
-        };
-        return Ok(secs);
-    }
-
-    let (date_part, time_part) = if let Some((d, t)) = s.split_once('T') {
-        (d, Some(t))
-    } else if let Some((d, t)) = s.split_once(' ') {
-        (d, Some(t))
-    } else {
-        (s, None)
-    };
-
+fn parse_date_part(date_part: &str) -> Result<i64, String> {
     let d_parts: Vec<&str> = date_part.split('-').collect();
     if d_parts.len() != 3 {
         return Err(format!("Invalid date part: {date_part}"));
@@ -70,7 +48,107 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
     if days < 0 {
         return Err("Pre-1970 dates unsupported".to_string());
     }
+    Ok(days)
+}
 
+fn parse_timezone_offset(tz_info: Option<&str>) -> Result<i64, String> {
+    let tz = match tz_info {
+        Some(t) => t,
+        None => return Ok(0),
+    };
+    let sign = if tz.starts_with('-') { -1i64 } else { 1i64 };
+    let raw_tz = tz.trim_start_matches(['+', '-']);
+    let (off_h, off_m) = if let Some((h_str, m_str)) = raw_tz.split_once(':') {
+        let h: i64 = h_str
+            .parse()
+            .map_err(|e| format!("Invalid timezone hour: {e}"))?;
+        let m: i64 = m_str
+            .parse()
+            .map_err(|e| format!("Invalid timezone minute: {e}"))?;
+        (h, m)
+    } else if raw_tz.len() >= 4 {
+        let h: i64 = raw_tz
+            .get(..2)
+            .ok_or_else(|| format!("Invalid timezone offset: {raw_tz}"))?
+            .parse()
+            .map_err(|e| format!("Invalid timezone hour: {e}"))?;
+        let m: i64 = raw_tz
+            .get(2..4)
+            .ok_or_else(|| format!("Invalid timezone offset: {raw_tz}"))?
+            .parse()
+            .map_err(|e| format!("Invalid timezone minute: {e}"))?;
+        (h, m)
+    } else {
+        let h: i64 = raw_tz
+            .parse()
+            .map_err(|e| format!("Invalid timezone hour: {e}"))?;
+        (h, 0)
+    };
+    if !(0..=23).contains(&off_h) {
+        return Err(format!("Timezone hour offset {off_h} out of range (0-23)"));
+    }
+    if !(0..=59).contains(&off_m) {
+        return Err(format!("Timezone minute offset {off_m} out of range (0-59)"));
+    }
+    Ok(sign * (off_h * 3600 + off_m * 60))
+}
+
+fn parse_time_of_day(time_sub: &str) -> Result<i64, String> {
+    let t_parts: Vec<&str> = time_sub.trim().split(':').collect();
+    if t_parts.len() < 2 {
+        return Err(format!("Invalid time part: {time_sub}"));
+    }
+    let h: i64 = t_parts[0]
+        .parse()
+        .map_err(|e| format!("Invalid hour: {e}"))?;
+    let m: i64 = t_parts[1]
+        .parse()
+        .map_err(|e| format!("Invalid minute: {e}"))?;
+    if !(0..=23).contains(&h) {
+        return Err(format!("Hour {h} out of range (0-23)"));
+    }
+    if !(0..=59).contains(&m) {
+        return Err(format!("Minute {m} out of range (0-59)"));
+    }
+    let s_val: i64 = if t_parts.len() >= 3 {
+        let s_str = t_parts[2].split('.').next().unwrap_or("0");
+        let s: i64 = s_str
+            .parse()
+            .map_err(|e| format!("Invalid second: {e}"))?;
+        if !(0..=60).contains(&s) {
+            return Err(format!("Second {s} out of range (0-60)"));
+        }
+        s
+    } else {
+        0
+    };
+    Ok(h * 3600 + m * 60 + s_val)
+}
+
+pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
+    let s = ts.trim();
+    if s.is_empty() {
+        return Err("Empty timestamp".to_string());
+    }
+
+    if let Ok(num) = s.parse::<u64>() {
+        let secs = if num > 100_000_000_000 {
+            num / 1000
+        } else {
+            num
+        };
+        return Ok(secs);
+    }
+
+    let (date_part, time_part) = if let Some((d, t)) = s.split_once('T') {
+        (d, Some(t))
+    } else if let Some((d, t)) = s.split_once(' ') {
+        (d, Some(t))
+    } else {
+        (s, None)
+    };
+
+    let days = parse_date_part(date_part)?;
     let mut local_seconds: i64 = days * 86400;
     let mut offset_seconds: i64 = 0;
 
@@ -82,73 +160,8 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
             (t_clean.trim_end_matches(['Z', 'z']), None)
         };
 
-        if let Some(tz) = tz_info {
-            let sign = if tz.starts_with('-') { -1i64 } else { 1i64 };
-            let raw_tz = tz.trim_start_matches(['+', '-']);
-            let (off_h, off_m) = if let Some((h_str, m_str)) = raw_tz.split_once(':') {
-                let h: i64 = h_str
-                    .parse()
-                    .map_err(|e| format!("Invalid timezone hour: {e}"))?;
-                let m: i64 = m_str
-                    .parse()
-                    .map_err(|e| format!("Invalid timezone minute: {e}"))?;
-                (h, m)
-            } else if raw_tz.len() >= 4 {
-                let h: i64 = raw_tz
-                    .get(..2)
-                    .ok_or_else(|| format!("Invalid timezone offset: {raw_tz}"))?
-                    .parse()
-                    .map_err(|e| format!("Invalid timezone hour: {e}"))?;
-                let m: i64 = raw_tz
-                    .get(2..4)
-                    .ok_or_else(|| format!("Invalid timezone offset: {raw_tz}"))?
-                    .parse()
-                    .map_err(|e| format!("Invalid timezone minute: {e}"))?;
-                (h, m)
-            } else {
-                let h: i64 = raw_tz
-                    .parse()
-                    .map_err(|e| format!("Invalid timezone hour: {e}"))?;
-                (h, 0)
-            };
-            if !(0..=23).contains(&off_h) {
-                return Err(format!("Timezone hour offset {off_h} out of range (0-23)"));
-            }
-            if !(0..=59).contains(&off_m) {
-                return Err(format!("Timezone minute offset {off_m} out of range (0-59)"));
-            }
-            offset_seconds = sign * (off_h * 3600 + off_m * 60);
-        }
-
-        let t_parts: Vec<&str> = time_sub.trim().split(':').collect();
-        if t_parts.len() < 2 {
-            return Err(format!("Invalid time part: {time_sub}"));
-        }
-        let h: i64 = t_parts[0]
-            .parse()
-            .map_err(|e| format!("Invalid hour: {e}"))?;
-        let m: i64 = t_parts[1]
-            .parse()
-            .map_err(|e| format!("Invalid minute: {e}"))?;
-        if !(0..=23).contains(&h) {
-            return Err(format!("Hour {h} out of range (0-23)"));
-        }
-        if !(0..=59).contains(&m) {
-            return Err(format!("Minute {m} out of range (0-59)"));
-        }
-        let s_val: i64 = if t_parts.len() >= 3 {
-            let s_str = t_parts[2].split('.').next().unwrap_or("0");
-            let s: i64 = s_str
-                .parse()
-                .map_err(|e| format!("Invalid second: {e}"))?;
-            if !(0..=60).contains(&s) {
-                return Err(format!("Second {s} out of range (0-60)"));
-            }
-            s
-        } else {
-            0
-        };
-        local_seconds += h * 3600 + m * 60 + s_val;
+        offset_seconds = parse_timezone_offset(tz_info)?;
+        local_seconds += parse_time_of_day(time_sub)?;
     }
 
     let utc_seconds = local_seconds - offset_seconds;

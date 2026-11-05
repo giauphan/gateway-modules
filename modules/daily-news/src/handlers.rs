@@ -470,6 +470,134 @@ fn dispatch_mcp(
     }
 }
 
+fn dispatch_read_and_discovery(
+    route: &str,
+    method: &str,
+    body: &Value,
+    limit: usize,
+    service: &DailyNewsService,
+) -> Option<Value> {
+    match route {
+        "/health" | "/api/v1/health" => {
+            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
+                return Some(err);
+            }
+            Some(handle_health(service))
+        }
+        "/models" | "/api/v1/models" => {
+            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
+                return Some(err);
+            }
+            Some(handle_models())
+        }
+        "" | "/ui" => {
+            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
+                return Some(err);
+            }
+            Some(handle_ui(service, limit))
+        }
+        "/flow" | "/flowchart" => {
+            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
+                return Some(err);
+            }
+            Some(handle_flowchart())
+        }
+        "/chat/completions" | "/v1/chat/completions" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            Some(handle_chat_completions(service, limit))
+        }
+        "/api/v1/discover" | "/discover" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_discover(service, body, limit))
+        }
+        "/api/v1/candidates" | "/candidates" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_candidates(service, method, body, limit))
+        }
+        "/api/v1/feed" | "/feed" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_feed(service, body, limit))
+        }
+        "/api/v1/discussion" | "/discussion" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_discussion(service, body))
+        }
+        _ => None,
+    }
+}
+
+fn dispatch_pipeline_and_admin(
+    route: &str,
+    method: &str,
+    body: &Value,
+    service: &DailyNewsService,
+    base_dir: &Path,
+) -> Option<Value> {
+    match route {
+        "/api/v1/enrich-candidate" | "/enrich-candidate" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            let cid = body["candidate_id"].as_str().map(str::trim).unwrap_or("");
+            if cid.is_empty() {
+                Some(make_json_resp(
+                    400,
+                    json!({ "error": "Missing required parameter: 'candidate_id'" }),
+                ))
+            } else {
+                Some(handle_enrich_candidate(service, cid, body))
+            }
+        }
+        "/api/v1/capture" | "/capture" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            Some(handle_capture(service, body))
+        }
+        "/api/v1/enrich" | "/enrich" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            Some(handle_enrich(service, body))
+        }
+        "/api/v1/evidence" | "/evidence" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_evidence(base_dir, body))
+        }
+        "/api/v1/consume" | "/consume" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            Some(handle_consume(service, body))
+        }
+        "/api/v1/handoff" | "/handoff" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_handoff(service, body))
+        }
+        "/api/v1/config" | "/config" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return Some(err);
+            }
+            Some(handle_config(service, method, body))
+        }
+        _ => None,
+    }
+}
+
 fn dispatch_standard(
     route: &str,
     raw_path: &str,
@@ -479,116 +607,16 @@ fn dispatch_standard(
     service: &DailyNewsService,
     base_dir: &Path,
 ) -> Value {
-    match route {
-        "/health" | "/api/v1/health" => {
-            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
-                return err;
-            }
-            handle_health(service)
-        }
-        "/models" | "/api/v1/models" => {
-            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
-                return err;
-            }
-            handle_models()
-        }
-        "" | "/ui" => {
-            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
-                return err;
-            }
-            handle_ui(service, limit)
-        }
-        "/flow" | "/flowchart" => {
-            if let Err(err) = enforce_method(method, &["GET", "HEAD"]) {
-                return err;
-            }
-            handle_flowchart()
-        }
-        "/chat/completions" | "/v1/chat/completions" => {
-            if let Err(err) = enforce_method(method, &["POST"]) {
-                return err;
-            }
-            handle_chat_completions(service, limit)
-        }
-        "/api/v1/discover" | "/discover" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_discover(service, body, limit)
-        }
-        "/api/v1/candidates" | "/candidates" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_candidates(service, method, body, limit)
-        }
-        "/api/v1/feed" | "/feed" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_feed(service, body, limit)
-        }
-        "/api/v1/discussion" | "/discussion" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_discussion(service, body)
-        }
-        "/api/v1/enrich-candidate" | "/enrich-candidate" => {
-            if let Err(err) = enforce_method(method, &["POST"]) {
-                return err;
-            }
-            let cid = body["candidate_id"].as_str().map(str::trim).unwrap_or("");
-            if cid.is_empty() {
-                make_json_resp(
-                    400,
-                    json!({ "error": "Missing required parameter: 'candidate_id'" }),
-                )
-            } else {
-                handle_enrich_candidate(service, cid, body)
-            }
-        }
-        "/api/v1/capture" | "/capture" => {
-            if let Err(err) = enforce_method(method, &["POST"]) {
-                return err;
-            }
-            handle_capture(service, body)
-        }
-        "/api/v1/enrich" | "/enrich" => {
-            if let Err(err) = enforce_method(method, &["POST"]) {
-                return err;
-            }
-            handle_enrich(service, body)
-        }
-        "/api/v1/evidence" | "/evidence" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_evidence(base_dir, body)
-        }
-        "/api/v1/consume" | "/consume" => {
-            if let Err(err) = enforce_method(method, &["POST"]) {
-                return err;
-            }
-            handle_consume(service, body)
-        }
-        "/api/v1/handoff" | "/handoff" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_handoff(service, body)
-        }
-        "/api/v1/config" | "/config" => {
-            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
-                return err;
-            }
-            handle_config(service, method, body)
-        }
-        _ => make_json_resp(
-            404,
-            json!({ "error": format!("Route not found: {raw_path}") }),
-        ),
+    if let Some(resp) = dispatch_read_and_discovery(route, method, body, limit, service) {
+        return resp;
     }
+    if let Some(resp) = dispatch_pipeline_and_admin(route, method, body, service, base_dir) {
+        return resp;
+    }
+    make_json_resp(
+        404,
+        json!({ "error": format!("Route not found: {raw_path}") }),
+    )
 }
 
 pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Value {

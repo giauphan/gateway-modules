@@ -116,78 +116,89 @@ pub fn is_visual_evidence_valid(v: &VisualEvidence) -> bool {
     valid_prov && approved_lic && valid_checksum && valid_license_evidence && verified_rights
 }
 
-pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 {
-        return false;
-    }
+fn is_blocked_web_document(bytes: &[u8]) -> bool {
     let lower_start = bytes[..bytes.len().min(64)].to_ascii_lowercase();
-    if lower_start.starts_with(b"<!doctype")
+    lower_start.starts_with(b"<!doctype")
         || lower_start.starts_with(b"<html")
         || lower_start.starts_with(b"<?php")
         || lower_start.starts_with(b"javascript:")
+}
+
+fn is_valid_png_asset(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") && !bytes.starts_with(b"\x89PNG") {
+        return false;
+    }
+    if bytes.len() >= 16 && &bytes[12..16] == b"IHDR" {
+        if bytes.len() >= 24 {
+            let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+            let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+            return width > 0 && height > 0;
+        }
+        return true;
+    }
+    false
+}
+
+fn is_valid_gif_asset(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a") {
+        return false;
+    }
+    if bytes.len() >= 10 {
+        let width = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let height = u16::from_le_bytes([bytes[8], bytes[9]]);
+        return width > 0 && height > 0;
+    }
+    bytes.len() >= 8
+}
+
+fn is_valid_svg_asset(bytes: &[u8]) -> bool {
+    let Ok(utf8_str) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lower = utf8_str.to_ascii_lowercase();
+    if !lower.contains("<svg") || (!lower.contains("</svg>") && !lower.contains("/>")) {
+        return false;
+    }
+    if lower.contains("<script")
+        || lower.contains("<foreignobject")
+        || lower.contains("<iframe")
+        || lower.contains("javascript:")
+        || has_inline_event_handler(&lower)
     {
         return false;
     }
+    true
+}
 
-    // Reject all-zero dummy filler
-    if bytes.iter().all(|&b| b == 0) {
+pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
+    if bytes.len() < 4 || is_blocked_web_document(bytes) || bytes.iter().all(|&b| b == 0) {
         return false;
     }
 
-    // 1. PNG format: standard magic bytes with non-zero dimensions in IHDR chunk, or recognized test/mock header
     if is_mock_visual_bytes(bytes) {
         return true;
     }
 
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(b"\x89PNG") {
-        if bytes.len() >= 16 && &bytes[12..16] == b"IHDR" {
-            if bytes.len() >= 24 {
-                let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-                let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-                return width > 0 && height > 0;
-            }
-            return true;
-        }
-        return false;
+    if is_valid_png_asset(bytes) {
+        return true;
     }
 
-    // 2. JPEG magic bytes
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) && bytes.len() >= 4 {
         return true;
     }
 
-    // 3. GIF magic bytes with non-zero logical screen dimensions if complete
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        if bytes.len() >= 10 {
-            let width = u16::from_le_bytes([bytes[6], bytes[7]]);
-            let height = u16::from_le_bytes([bytes[8], bytes[9]]);
-            return width > 0 && height > 0;
-        }
-        return bytes.len() >= 8;
+    if is_valid_gif_asset(bytes) {
+        return true;
     }
 
-    // 4. WebP: RIFF....WEBP
     if bytes.len() >= 16 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return true;
     }
 
-    // 5. SVG vector graphic: must be valid UTF-8, contain <svg and closing </svg> or />, and no scripts/handlers
-    if let Ok(utf8_str) = std::str::from_utf8(bytes) {
-        let lower = utf8_str.to_ascii_lowercase();
-        if lower.contains("<svg") && (lower.contains("</svg>") || lower.contains("/>")) {
-            if lower.contains("<script")
-                || lower.contains("<foreignobject")
-                || lower.contains("<iframe")
-                || lower.contains("javascript:")
-                || has_inline_event_handler(&lower)
-            {
-                return false;
-            }
-            return true;
-        }
+    if is_valid_svg_asset(bytes) {
+        return true;
     }
 
-    // 6. MP4 video: ftyp or moov box
     if bytes.len() >= 16 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
         return true;
     }
@@ -400,6 +411,42 @@ pub fn is_visual_rights_verified(
     v.verified_rights.unwrap_or(false) && tr.starts_with("https://")
 }
 
+fn verify_single_visual_asset(v: &VisualEvidence, asset_resolver: AssetResolver) -> bool {
+    let Some(resolver) = asset_resolver else {
+        return true;
+    };
+    let Some(expected_sha) = v.checksum_sha256.as_deref().map(|s| s.trim().to_ascii_lowercase()) else {
+        return false;
+    };
+    let Some(bytes) = resolver(&expected_sha) else {
+        return false;
+    };
+    if !is_valid_visual_asset_format(&bytes) {
+        return false;
+    }
+    crate::url::compute_sha256_bytes(&bytes) == expected_sha
+}
+
+fn verify_single_license_evidence(
+    v: &VisualEvidence,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
+    let Some(ref lic_ref) = v.license_evidence_ref else {
+        return true;
+    };
+    let tr = lic_ref.trim().to_ascii_lowercase();
+    if tr.len() != 64 || !tr.chars().all(|c| c.is_ascii_hexdigit()) {
+        return true;
+    }
+    let Some(sec_res) = secondary_resolver else {
+        return false;
+    };
+    let Some(doc) = sec_res(&tr) else {
+        return false;
+    };
+    !doc.trim().is_empty() && crate::url::compute_sha256(&doc) == tr
+}
+
 pub fn are_visuals_provenance_verified_full(
     visuals: &[VisualEvidence],
     asset_resolver: AssetResolver,
@@ -410,49 +457,9 @@ pub fn are_visuals_provenance_verified_full(
     }
 
     visuals.iter().all(|v| {
-        if !is_visual_evidence_valid(v) {
-            return false;
-        }
-
-        if let Some(resolver) = asset_resolver {
-            let expected_sha = match v.checksum_sha256.as_deref() {
-                Some(sha) => sha.trim().to_ascii_lowercase(),
-                None => return false,
-            };
-            match resolver(&expected_sha) {
-                Some(bytes) => {
-                    if !is_valid_visual_asset_format(&bytes) {
-                        return false;
-                    }
-                    let computed = crate::url::compute_sha256_bytes(&bytes);
-                    if computed != expected_sha {
-                        return false;
-                    }
-                }
-                None => return false,
-            }
-        }
-
-        if let Some(ref lic_ref) = v.license_evidence_ref {
-            let tr = lic_ref.trim().to_ascii_lowercase();
-            if tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit()) {
-                if let Some(sec_res) = secondary_resolver {
-                    match sec_res(&tr) {
-                        Some(doc) => {
-                            let computed = crate::url::compute_sha256(&doc);
-                            if computed != tr || doc.trim().is_empty() {
-                                return false;
-                            }
-                        }
-                        None => return false,
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-
-        true
+        is_visual_evidence_valid(v)
+            && verify_single_visual_asset(v, asset_resolver)
+            && verify_single_license_evidence(v, secondary_resolver)
     })
 }
 

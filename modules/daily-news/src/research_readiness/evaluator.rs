@@ -444,6 +444,98 @@ pub fn evaluate_readiness_with_snapshot_store(
     )
 }
 
+fn check_mock_provenance(
+    claims: &[ClaimEvidence],
+    visuals: &[VisualEvidence],
+    asset_resolver: AssetResolver,
+) -> bool {
+    let has_mock_audit = claims.iter().any(|c| {
+        c.verification_record.as_ref().is_some_and(|vr| {
+            super::verification::is_mock_reviewer_or_org(&vr.reviewer_id)
+                || super::verification::is_mock_reviewer_or_org(&vr.organization)
+        })
+    });
+
+    let has_mock_visual = visuals.iter().any(|v| {
+        v.provenance_status.as_deref().is_some_and(|p| p.trim().eq_ignore_ascii_case("mock"))
+            || v.asset_ref
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|tok| tok.eq_ignore_ascii_case("mock") || tok.eq_ignore_ascii_case("dummy"))
+            || asset_resolver.is_some_and(|res| {
+                v.checksum_sha256
+                    .as_deref()
+                    .and_then(res)
+                    .is_some_and(|bytes| super::visual::is_mock_visual_bytes(&bytes))
+            })
+    });
+
+    has_mock_audit || has_mock_visual
+}
+
+fn check_strict_video_ready_gates(
+    claims: &[ClaimEvidence],
+    visuals: &[VisualEvidence],
+    secondary_resolver: SecondaryResolver,
+    audit_resolver: AuditResolver,
+    asset_resolver: AssetResolver,
+) -> Option<ResearchReadiness> {
+    let source_verified = claims.iter().any(|c| {
+        c.verification_status == "INDEPENDENTLY_VERIFIED"
+            && c.verification_record.as_ref().is_some_and(|vr| {
+                if let Some(audit_res) = audit_resolver {
+                    if let Some(ref audit_ref) = vr.audit_trail_ref {
+                        if let Some(audit_text) = audit_res(audit_ref) {
+                            return super::verification::is_audit_source_verified(&audit_text, vr)
+                                && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
+                        }
+                    }
+                }
+                false
+            })
+    });
+
+    if !source_verified {
+        return Some(build_readiness(
+            ReadinessStatus::NeedsVerification,
+            "Independent verification lacks verified accredited source provenance or contains self-declared markers".to_string(),
+            "source_verified",
+        ));
+    }
+
+    let media_decodable = visuals.iter().all(|v| {
+        if let Some(asset_res) = asset_resolver {
+            if let Some(ref sha) = v.checksum_sha256 {
+                if let Some(bytes) = asset_res(sha) {
+                    return super::visual::is_visual_media_decodable(&bytes);
+                }
+            }
+        }
+        false
+    });
+
+    if !media_decodable {
+        return Some(build_readiness(
+            ReadinessStatus::NeedsVisualEvidence,
+            "Visual assets are incomplete or undecodable (missing image raster chunks or corrupt media structure)".to_string(),
+            "media_decodable",
+        ));
+    }
+
+    let rights_verified = visuals.iter().all(|v| {
+        super::visual::is_visual_rights_verified(v, secondary_resolver)
+    });
+
+    if !rights_verified {
+        return Some(build_readiness(
+            ReadinessStatus::NeedsVisualEvidence,
+            "Visual asset license rights could not be verified from license evidence document".to_string(),
+            "rights_verified",
+        ));
+    }
+
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_readiness_full(
     primary_source: Option<&PrimarySourceEvidence>,
@@ -517,28 +609,7 @@ pub fn evaluate_readiness_full(
         );
     }
 
-    // Provenance Check: distinguish MOCK_VERIFIED from trusted production VIDEO_READY
-    let has_mock_audit = claims.iter().any(|c| {
-        c.verification_record.as_ref().is_some_and(|vr| {
-            super::verification::is_mock_reviewer_or_org(&vr.reviewer_id)
-                || super::verification::is_mock_reviewer_or_org(&vr.organization)
-        })
-    });
-
-    let has_mock_visual = visuals.iter().any(|v| {
-        v.provenance_status.as_deref().is_some_and(|p| p.trim().eq_ignore_ascii_case("mock"))
-            || v.asset_ref
-                .split(|c: char| !c.is_alphanumeric())
-                .any(|tok| tok.eq_ignore_ascii_case("mock") || tok.eq_ignore_ascii_case("dummy"))
-            || asset_resolver.is_some_and(|res| {
-                v.checksum_sha256
-                    .as_deref()
-                    .and_then(res)
-                    .is_some_and(|bytes| super::visual::is_mock_visual_bytes(&bytes))
-            })
-    });
-
-    if has_mock_audit || has_mock_visual {
+    if check_mock_provenance(claims, visuals, asset_resolver) {
         return build_readiness(
             ReadinessStatus::MockVerified,
             "Synthetically verified with mock/test artifacts; trusted accredited issuer and production media binary required for VIDEO_READY".to_string(),
@@ -546,62 +617,14 @@ pub fn evaluate_readiness_full(
         );
     }
 
-    // Three Strict Gates for VIDEO_READY:
-    // Gate 1: source_verified (Accredited issuer source verification)
-    let source_verified = claims.iter().any(|c| {
-        c.verification_status == "INDEPENDENTLY_VERIFIED"
-            && c.verification_record.as_ref().is_some_and(|vr| {
-                if let Some(audit_res) = audit_resolver {
-                    if let Some(ref audit_ref) = vr.audit_trail_ref {
-                        if let Some(audit_text) = audit_res(audit_ref) {
-                            return super::verification::is_audit_source_verified(&audit_text, vr)
-                                && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
-                        }
-                    }
-                }
-                false
-            })
-    });
-
-    if !source_verified {
-        return build_readiness(
-            ReadinessStatus::NeedsVerification,
-            "Independent verification lacks verified accredited source provenance or contains self-declared markers".to_string(),
-            "source_verified",
-        );
-    }
-
-    // Gate 2: media_decodable (Complete and decodable visual asset binaries)
-    let media_decodable = visuals.iter().all(|v| {
-        if let Some(asset_res) = asset_resolver {
-            if let Some(ref sha) = v.checksum_sha256 {
-                if let Some(bytes) = asset_res(sha) {
-                    return super::visual::is_visual_media_decodable(&bytes);
-                }
-            }
-        }
-        false
-    });
-
-    if !media_decodable {
-        return build_readiness(
-            ReadinessStatus::NeedsVisualEvidence,
-            "Visual assets are incomplete or undecodable (missing image raster chunks or corrupt media structure)".to_string(),
-            "media_decodable",
-        );
-    }
-
-    // Gate 3: rights_verified (Corroborated license evidence rights)
-    let rights_verified = visuals.iter().all(|v| {
-        super::visual::is_visual_rights_verified(v, secondary_resolver)
-    });
-
-    if !rights_verified {
-        return build_readiness(
-            ReadinessStatus::NeedsVisualEvidence,
-            "Visual asset license rights could not be verified from license evidence document".to_string(),
-            "rights_verified",
-        );
+    if let Some(gate_err) = check_strict_video_ready_gates(
+        claims,
+        visuals,
+        secondary_resolver,
+        audit_resolver,
+        asset_resolver,
+    ) {
+        return gate_err;
     }
 
     build_readiness(

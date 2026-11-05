@@ -218,7 +218,7 @@ impl DailyNewsService {
         }
         let cfg = self.storage.load_config();
         let effective_sources: Vec<String> = sources
-            .map(|s| s.to_vec())
+            .map(<[String]>::to_vec)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| cfg.default_sources.clone());
 
