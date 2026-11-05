@@ -135,7 +135,7 @@ pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
     }
 
     // 1. PNG format: standard magic bytes with non-zero dimensions in IHDR chunk, or recognized test/mock header
-    if is_mock_visual_bytes(bytes) || bytes.starts_with(b"PNG ") {
+    if is_mock_visual_bytes(bytes) {
         return true;
     }
 
@@ -285,6 +285,119 @@ pub fn is_mock_visual_bytes(bytes: &[u8]) -> bool {
         || lower_start.starts_with(b"dummy")
         || lower_start.starts_with(b"synthetic")
         || lower_start.starts_with(b"test asset")
+}
+
+pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
+    if !is_valid_visual_asset_format(bytes) {
+        return false;
+    }
+    if is_mock_visual_bytes(bytes) {
+        return true;
+    }
+
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(b"\x89PNG") {
+        let has_idat = bytes.windows(4).any(|w| w == b"IDAT");
+        let has_iend = bytes.windows(4).any(|w| w == b"IEND");
+        return has_idat && has_iend && bytes.len() >= 45;
+    }
+
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return bytes.len() >= 4 && bytes.windows(2).any(|w| w == [0xFF, 0xD9]);
+    }
+
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return bytes.len() >= 14 && bytes.contains(&0x3B);
+    }
+
+    if bytes.len() >= 16 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return bytes.windows(4).any(|w| w == b"VP8 " || w == b"VP8L" || w == b"VP8X");
+    }
+
+    if let Ok(utf8_str) = std::str::from_utf8(bytes) {
+        let lower = utf8_str.to_ascii_lowercase();
+        if lower.contains("<svg") && (lower.contains("</svg>") || lower.contains("/>")) {
+            return !lower.contains("<script")
+                && !lower.contains("<foreignobject")
+                && !lower.contains("<iframe")
+                && !lower.contains("javascript:")
+                && !has_inline_event_handler(&lower);
+        }
+    }
+
+    if bytes.len() >= 16 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
+        return true;
+    }
+
+    false
+}
+
+pub fn is_visual_rights_verified(
+    v: &VisualEvidence,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
+    let lic_status = v.license_status.as_deref().unwrap_or("").trim().to_lowercase();
+    if !APPROVED_LICENSES.contains(&lic_status.as_str()) {
+        return false;
+    }
+
+    let Some(ref lic_ref) = v.license_evidence_ref else {
+        return false;
+    };
+    let tr = lic_ref.trim();
+    if tr.is_empty() {
+        return false;
+    }
+
+    if let Some(res) = secondary_resolver {
+        let doc_opt = if tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit()) {
+            res(tr)
+        } else if tr.starts_with("https://") {
+            res(tr).or_else(|| {
+                let url_hash = crate::url::compute_sha256(tr);
+                res(&url_hash)
+            })
+        } else {
+            res(tr)
+        };
+
+        if let Some(doc) = doc_opt {
+            let lower = doc.to_lowercase();
+            const PROHIBITED_TERMS: &[&str] = &[
+                "all rights reserved",
+                "unauthorized",
+                "infringement",
+                "restricted reproduction",
+                "prohibited without prior written",
+            ];
+            if PROHIBITED_TERMS.iter().any(|p| lower.contains(p)) {
+                return false;
+            }
+
+            const AFFIRMATIVE_GRANT_TERMS: &[&str] = &[
+                "license",
+                "permitted",
+                "grant",
+                "granted",
+                "commercial use",
+                "creative commons",
+                "cc-by",
+                "public domain",
+                "cc0",
+                "apache",
+                "mit",
+                "authorized",
+            ];
+            return AFFIRMATIVE_GRANT_TERMS.iter().any(|g| lower.contains(g));
+        } else if tr.len() == 64 {
+            return false;
+        }
+    }
+
+    if matches!(lic_status.as_str(), "cc0" | "public-domain") {
+        return v.verified_rights.unwrap_or(false);
+    }
+
+    v.verified_rights.unwrap_or(false) && tr.starts_with("https://")
 }
 
 pub fn are_visuals_provenance_verified_full(

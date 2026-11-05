@@ -61,7 +61,7 @@ impl McpToolResponse {
 }
 
 fn handle_discover_candidates(service: &DailyNewsService, args: &Value) -> McpToolResponse {
-    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    let limit = (args["limit"].as_u64().unwrap_or(10) as usize).clamp(1, 100);
     let topics = extract_topics(args);
     let from_date = args["from_date"].as_str();
     let to_date = args["to_date"].as_str();
@@ -227,10 +227,35 @@ fn handle_get_discussion(service: &DailyNewsService, args: &Value) -> McpToolRes
         return McpToolResponse::error("Missing required parameter: 'url_or_id', 'url', or 'id'");
     }
 
-    let limit = args["limit"].as_u64().map(|v| v as usize);
+    let limit = args["limit"].as_u64().map(|v| (v as usize).clamp(1, 100));
     match service.get_discussion(url_or_id, limit) {
         Ok(thread) => McpToolResponse::success(json!(thread).to_string()),
         Err(e) => McpToolResponse::error(e),
+    }
+}
+
+fn handle_verify_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let candidate_id = match args["candidate_id"]
+        .as_str()
+        .or_else(|| args["id"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(cid) => cid,
+        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
+    };
+
+    match service.verify_production_handoff(candidate_id) {
+        Ok(c) => McpToolResponse::success(
+            json!({
+                "status": "APPROVED",
+                "candidate_id": candidate_id,
+                "readiness": c.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
+                "candidate": c
+            })
+            .to_string(),
+        ),
+        Err((code, msg)) => McpToolResponse::error(format!("{code}: {msg}")),
     }
 }
 
@@ -287,6 +312,9 @@ pub fn dispatch_mcp_tool(
         "verify_research_readiness" | "verify_readiness" => {
             handle_verify_research_readiness(service, base_dir, arguments)
         }
+        "verify_production_handoff" | "handoff" => {
+            handle_verify_production_handoff(service, arguments)
+        }
         "get_evidence_snapshot" | "evidence" => handle_get_evidence_snapshot(base_dir, arguments),
         "get_discussion" | "discussion" => handle_get_discussion(service, arguments),
         other => McpToolResponse::error(format!("Unknown or unsupported MCP tool: '{other}'")),
@@ -323,7 +351,7 @@ fn handle_single_jsonrpc_request(
                 .as_str()
                 .unwrap_or("2024-11-05");
             let negotiated = match requested_ver {
-                "2024-11-05" | "2024-10-07" => requested_ver,
+                "2026-07-28" | "2024-11-05" | "2024-10-07" => requested_ver,
                 _ => "2024-11-05",
             };
             Some(json!({
@@ -344,6 +372,27 @@ fn handle_single_jsonrpc_request(
                 }
             }))
         }
+        "server/discover" | "discovery" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": ["2026-07-28", "2024-11-05", "2024-10-07"],
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "resources": { "subscribe": false, "listChanged": false },
+                    "prompts": { "listChanged": false }
+                },
+                "_meta": {
+                    "io.modelcontextprotocol/serverInfo": {
+                        "name": "daily-news",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                },
+                "ttlMs": 3600000,
+                "cacheScope": "public"
+            }
+        })),
         "ping" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -422,13 +471,18 @@ fn handle_single_jsonrpc_request(
                 .unwrap_or(params);
 
             let result = dispatch_mcp_tool(service, base_dir, tool_name, arguments);
+            let meta = params.get("_meta").or_else(|| body.get("_meta"));
+            let mut result_obj = json!({
+                "content": result.content,
+                "isError": result.is_error
+            });
+            if let Some(m) = meta {
+                result_obj["_meta"] = m.clone();
+            }
             Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": {
-                    "content": result.content,
-                    "isError": result.is_error
-                }
+                "result": result_obj
             }))
         }
         other => Some(json!({

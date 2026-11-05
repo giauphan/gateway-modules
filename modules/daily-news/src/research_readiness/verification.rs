@@ -362,6 +362,64 @@ fn has_auditor_attribution(text: &str, accred: &str) -> bool {
     false
 }
 
+pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> bool {
+    let lower = audit_text.trim().to_lowercase();
+    const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
+        "not an official report",
+        "self-certified",
+        "self-assessment",
+        "self-evaluation",
+        "self-audit",
+        "self-reported",
+        "self-generated",
+        "self-declared",
+        "internal evaluation",
+        "internal review only",
+        "internal notes only",
+        "unverified draft",
+        "unofficial draft",
+        "author audit",
+        "author-verified",
+        "user-generated",
+        "unaccredited report",
+        "unverified document",
+        "author statement",
+        "simulated report",
+        "mock verification",
+        "draft evaluation",
+    ];
+    if UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+
+    let org_lower = rec.organization.trim().to_lowercase();
+    if is_mock_organization(&org_lower) || is_mock_reviewer_or_org(&rec.reviewer_id) {
+        return false;
+    }
+
+    let Some(accred) = find_accredited_issuer(&org_lower) else {
+        return false;
+    };
+    if !lower.contains(accred) {
+        return false;
+    }
+
+    const PROVENANCE_INDICATORS: &[&str] = &[
+        "report",
+        "certificate",
+        "audit trail",
+        "ref #",
+        "reference:",
+        "ref:",
+        "id:",
+        "certification",
+        "evaluation report",
+        "verification report",
+        "https://",
+    ];
+    PROVENANCE_INDICATORS.iter().any(|ind| lower.contains(ind))
+}
+
 pub fn is_audit_artifact_corroborated(
     audit_text: &str,
     rec: &VerificationRecord,
@@ -400,6 +458,8 @@ pub fn is_audit_artifact_corroborated(
         "self-evaluation",
         "self-audit",
         "self-reported",
+        "self-generated",
+        "self-declared",
         "internal evaluation",
         "internal review only",
         "internal notes only",
@@ -407,6 +467,13 @@ pub fn is_audit_artifact_corroborated(
         "unofficial draft",
         "author audit",
         "author-verified",
+        "user-generated",
+        "unaccredited report",
+        "unverified document",
+        "author statement",
+        "simulated report",
+        "mock verification",
+        "draft evaluation",
     ];
     if UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m)) {
         return false;

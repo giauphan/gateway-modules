@@ -206,7 +206,7 @@ fn test_all_criteria_met_yields_video_ready() {
         secondary_source_ref: None,
     });
 
-    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
     let mut resolved_visuals = visuals;
     resolved_visuals[0].checksum_sha256 = Some(png_sha.clone());
@@ -669,7 +669,7 @@ fn test_verification_record_structured_evidence() {
     let mut resolved_claims = claims;
     resolved_claims[0].verification_record.as_mut().unwrap().audit_trail_ref = Some(audit_sha.clone());
 
-    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
     let mut resolved_vis = visuals;
     resolved_vis[0].checksum_sha256 = Some(png_sha.clone());

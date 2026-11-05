@@ -325,6 +325,39 @@ pub fn handle_evidence(base_dir: &Path, body: &Value) -> Value {
     }
 }
 
+pub fn handle_handoff(service: &DailyNewsService, body: &Value) -> Value {
+    let cid = body["candidate_id"]
+        .as_str()
+        .or_else(|| body["id"].as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if cid.is_empty() {
+        return make_json_resp(
+            400,
+            json!({ "error": "Missing required parameter: 'candidate_id'" }),
+        );
+    }
+    match service.verify_production_handoff(cid) {
+        Ok(candidate) => make_json_resp(
+            200,
+            json!({
+                "status": "APPROVED",
+                "candidate_id": cid,
+                "readiness": candidate.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
+                "candidate": candidate
+            }),
+        ),
+        Err((code, msg)) => make_json_resp(
+            422,
+            json!({
+                "status": "REJECTED",
+                "code": code,
+                "error": msg
+            }),
+        ),
+    }
+}
+
 pub fn handle_config(service: &DailyNewsService, method: &str, body: &Value) -> Value {
     if method == "POST" {
         if !body.is_object() {
@@ -539,6 +572,12 @@ fn dispatch_standard(
             }
             handle_consume(service, body)
         }
+        "/api/v1/handoff" | "/handoff" => {
+            if let Err(err) = enforce_method(method, &["GET", "POST"]) {
+                return err;
+            }
+            handle_handoff(service, body)
+        }
         "/api/v1/config" | "/config" => {
             if let Err(err) = enforce_method(method, &["GET", "POST"]) {
                 return err;
@@ -553,13 +592,16 @@ fn dispatch_standard(
 }
 
 pub fn handle_request(req: Value, service: &DailyNewsService, base_dir: &Path) -> Value {
-    if let Some(b) = req.get("body").and_then(|v| v.as_str()) {
-        if b.len() > 2 * 1024 * 1024 {
-            return make_json_resp(
-                413,
-                json!({ "error": "Payload Too Large: request body exceeds 2MB limit" }),
-            );
-        }
+    let body_len = match req.get("body") {
+        Some(Value::String(s)) => s.len(),
+        Some(v) => serde_json::to_string(v).map(|s| s.len()).unwrap_or(0),
+        None => 0,
+    };
+    if body_len > 2 * 1024 * 1024 {
+        return make_json_resp(
+            413,
+            json!({ "error": "Payload Too Large: request body exceeds 2MB limit" }),
+        );
     }
 
     let raw_path = req["path"].as_str().unwrap_or("");

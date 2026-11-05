@@ -100,7 +100,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
             }),
         }];
 
-        let chart_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+        let chart_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
         let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
         let evidence_dir = tmp_dir.join(".state").join("evidence");
         let _ = std::fs::create_dir_all(&evidence_dir);

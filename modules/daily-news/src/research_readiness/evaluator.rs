@@ -546,6 +546,64 @@ pub fn evaluate_readiness_full(
         );
     }
 
+    // Three Strict Gates for VIDEO_READY:
+    // Gate 1: source_verified (Accredited issuer source verification)
+    let source_verified = claims.iter().any(|c| {
+        c.verification_status == "INDEPENDENTLY_VERIFIED"
+            && c.verification_record.as_ref().is_some_and(|vr| {
+                if let Some(audit_res) = audit_resolver {
+                    if let Some(ref audit_ref) = vr.audit_trail_ref {
+                        if let Some(audit_text) = audit_res(audit_ref) {
+                            return super::verification::is_audit_source_verified(&audit_text, vr)
+                                && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
+                        }
+                    }
+                }
+                false
+            })
+    });
+
+    if !source_verified {
+        return build_readiness(
+            ReadinessStatus::NeedsVerification,
+            "Independent verification lacks verified accredited source provenance or contains self-declared markers".to_string(),
+            "source_verified",
+        );
+    }
+
+    // Gate 2: media_decodable (Complete and decodable visual asset binaries)
+    let media_decodable = visuals.iter().all(|v| {
+        if let Some(asset_res) = asset_resolver {
+            if let Some(ref sha) = v.checksum_sha256 {
+                if let Some(bytes) = asset_res(sha) {
+                    return super::visual::is_visual_media_decodable(&bytes);
+                }
+            }
+        }
+        false
+    });
+
+    if !media_decodable {
+        return build_readiness(
+            ReadinessStatus::NeedsVisualEvidence,
+            "Visual assets are incomplete or undecodable (missing image raster chunks or corrupt media structure)".to_string(),
+            "media_decodable",
+        );
+    }
+
+    // Gate 3: rights_verified (Corroborated license evidence rights)
+    let rights_verified = visuals.iter().all(|v| {
+        super::visual::is_visual_rights_verified(v, secondary_resolver)
+    });
+
+    if !rights_verified {
+        return build_readiness(
+            ReadinessStatus::NeedsVisualEvidence,
+            "Visual asset license rights could not be verified from license evidence document".to_string(),
+            "rights_verified",
+        );
+    }
+
     build_readiness(
         ReadinessStatus::VideoReady,
         "All primary source, claim, and visual verification criteria satisfied with trusted provenance".to_string(),

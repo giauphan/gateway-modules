@@ -430,7 +430,8 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         }
     };
 
-    let real_image_bytes = b"PNG REAL IMAGE BYTES FOR VERIFIED CHART";
+    // Valid 68-byte decodable 1x1 RGBA PNG
+    let real_image_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let real_image_sha = compute_sha256_bytes(real_image_bytes);
 
     let visual = VisualEvidence {

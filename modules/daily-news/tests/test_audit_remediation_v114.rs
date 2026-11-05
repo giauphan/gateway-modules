@@ -183,7 +183,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let trusted_audit_sha = compute_sha256(trusted_audit_doc);
     std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
 
-    let real_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x20\0\0\0\x20\x08\x06\0\0\0sp\x8b\xcf";
+    let real_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let real_png_sha = compute_sha256_bytes(real_png_bytes);
     std::fs::write(evidence_dir.join(format!("{real_png_sha}.txt")), real_png_bytes).unwrap();
 

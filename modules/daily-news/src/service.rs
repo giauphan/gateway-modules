@@ -6,11 +6,11 @@
 
 use crate::date::parse_iso_to_epoch;
 use crate::discovery::{
-    build_fail_closed_result, is_candidate_eligible, matches_topics,
-    validate_date_bounds,
+    build_fail_closed_result, matches_topics, validate_date_bounds,
 };
 use crate::domain::{
     DiscoveryResult, DiscussionThread, ModuleConfig, NormalizedCandidate, RawNewsItem,
+    ReadinessStatus, ResearchReadiness,
 };
 use crate::ports::{
     DiscussionFetcherPort, FeedFetcherPort, NoopDiscussionFetcher, SourceCapturePort, StoragePort,
@@ -137,19 +137,9 @@ impl DailyNewsService {
         limit: usize,
     ) -> Vec<NormalizedCandidate> {
         let cfg = self.storage.load_config();
-        let ref_epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(1793618000);
-
-        let cutoff = from_epoch.unwrap_or_else(|| {
-            let window_secs = (cfg.freshness_window_hours * 3600.0) as u64;
-            ref_epoch.saturating_sub(window_secs)
-        });
-        let max_age_secs = (cfg.max_age_days as u64) * 86400;
-        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
-        let cutoff = cutoff.max(max_age_cutoff);
-        let upper_bound = to_epoch.unwrap_or(ref_epoch + 300);
+        let policy = crate::discovery::CandidateEligibilityPolicy::from_config(
+            &cfg, from_epoch, to_epoch, topics,
+        );
 
         let mut seen_content_hashes = HashSet::new();
         let mut seen_title_hashes = HashSet::new();
@@ -165,15 +155,10 @@ impl DailyNewsService {
                 continue;
             }
 
-            if !is_candidate_eligible(
+            if !policy.is_candidate_eligible(
                 &cand,
-                &cfg,
-                from_epoch,
-                cutoff,
-                upper_bound,
                 &mut seen_content_hashes,
                 &mut seen_title_hashes,
-                topics,
             ) {
                 continue;
             }
@@ -353,6 +338,8 @@ impl DailyNewsService {
     }
 
     pub fn get_candidates(&self, limit: usize) -> Vec<NormalizedCandidate> {
+        let cfg = self.storage.load_config();
+        let policy = crate::discovery::CandidateEligibilityPolicy::from_config(&cfg, None, None, None);
         let mut all_candidates = self.storage.get_cached_candidates();
         let raw = self.get_feed(limit.max(25));
         for r in raw {
@@ -366,14 +353,215 @@ impl DailyNewsService {
             }
         }
 
-        let unconsumed: Vec<NormalizedCandidate> = all_candidates
+        let mut seen_content_hashes = HashSet::new();
+        let mut seen_title_hashes = HashSet::new();
+        let mut updated = false;
+
+        let eligible: Vec<NormalizedCandidate> = all_candidates
             .into_iter()
             .filter(|c| !self.storage.is_consumed(&c.candidate_id))
+            .filter(|c| policy.is_candidate_eligible(c, &mut seen_content_hashes, &mut seen_title_hashes))
+            .map(|mut c| {
+                if self.reverify_cached_readiness_if_needed(&mut c) {
+                    updated = true;
+                }
+                c
+            })
             .collect();
 
-        let ranked = self.scorer.rank_candidates(unconsumed, limit);
-        let _ = self.storage.save_candidates(&ranked);
+        let ranked = self.scorer.rank_candidates(eligible, limit);
+        if updated {
+            let _ = self.storage.save_candidates(&ranked);
+        }
         ranked
+    }
+
+    pub fn reverify_cached_readiness_if_needed(&self, cand: &mut NormalizedCandidate) -> bool {
+        let is_video_ready = cand
+            .research
+            .research_readiness
+            .as_ref()
+            .is_some_and(|r| r.status == ReadinessStatus::VideoReady);
+
+        if !is_video_ready {
+            return false;
+        }
+
+        if let Some(reason) = self.check_primary_snapshot_integrity(cand) {
+            cand.research.research_readiness = Some(ResearchReadiness {
+                status: ReadinessStatus::NeedsRevalidation,
+                reasons: vec![reason],
+                missing_fields: vec!["snapshot_storage".to_string()],
+                contract_version: "2.0".to_string(),
+            });
+            return true;
+        }
+
+        if let Some(reason) = self.check_visual_evidence_integrity(cand) {
+            cand.research.research_readiness = Some(ResearchReadiness {
+                status: ReadinessStatus::NeedsRevalidation,
+                reasons: vec![reason],
+                missing_fields: vec!["visual_storage".to_string()],
+                contract_version: "2.0".to_string(),
+            });
+            return true;
+        }
+
+        if let Some(reason) = self.check_claims_audit_integrity(cand) {
+            cand.research.research_readiness = Some(ResearchReadiness {
+                status: ReadinessStatus::NeedsRevalidation,
+                reasons: vec![reason],
+                missing_fields: vec!["audit_storage".to_string()],
+                contract_version: "2.0".to_string(),
+            });
+            return true;
+        }
+
+        false
+    }
+
+    fn check_primary_snapshot_integrity(&self, cand: &NormalizedCandidate) -> Option<String> {
+        let ps = cand.research.primary_source.as_ref()?;
+        let sha = ps.snapshot_sha256.as_ref()?;
+        let text = ps
+            .snapshot_ref
+            .as_deref()
+            .and_then(|r| self.read_snapshot_text(r))
+            .or_else(|| self.read_snapshot_text(sha));
+        match text {
+            Some(t) => {
+                let computed = crate::url::compute_sha256(&t);
+                if computed != *sha {
+                    Some(format!(
+                        "Primary source snapshot checksum mismatch: expected {sha}, found {computed}"
+                    ))
+                } else {
+                    None
+                }
+            }
+            None => Some(format!("Primary source snapshot '{sha}' missing from storage")),
+        }
+    }
+
+    fn check_visual_evidence_integrity(&self, cand: &NormalizedCandidate) -> Option<String> {
+        for v in &cand.research.visual_evidence {
+            if let Some(ref sha) = v.checksum_sha256 {
+                let bytes = self.read_snapshot_bytes(sha);
+                match bytes {
+                    Some(b) => {
+                        let computed = crate::url::compute_sha256_bytes(&b);
+                        if computed != *sha {
+                            return Some(format!("Visual asset '{sha}' checksum mismatch on disk"));
+                        }
+                    }
+                    None => return Some(format!("Visual asset '{sha}' missing from storage")),
+                }
+            }
+        }
+        None
+    }
+
+    fn check_claims_audit_integrity(&self, cand: &NormalizedCandidate) -> Option<String> {
+        for c in &cand.research.claims {
+            if let Some(ref vr) = c.verification_record {
+                if let Some(ref sha) = vr.audit_trail_ref {
+                    let text = self.read_snapshot_text(sha);
+                    match text {
+                        Some(t) => {
+                            let computed = crate::url::compute_sha256(&t);
+                            if computed != *sha {
+                                return Some(format!(
+                                    "Audit trail artifact '{sha}' checksum mismatch on disk"
+                                ));
+                            }
+                        }
+                        None => {
+                            return Some(format!(
+                                "Audit trail artifact '{sha}' missing from storage"
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
+        let mut cand = self.storage.get_candidate(candidate_id)?;
+        if self.reverify_cached_readiness_if_needed(&mut cand) {
+            let _ = self.storage.save_candidates(std::slice::from_ref(&cand));
+        }
+        Some(cand)
+    }
+
+    pub fn verify_production_handoff(
+        &self,
+        candidate_id: &str,
+    ) -> Result<NormalizedCandidate, (String, String)> {
+        let mut cand = self.get_candidate(candidate_id).ok_or_else(|| {
+            (
+                "CANDIDATE_NOT_FOUND".to_string(),
+                format!("Candidate '{candidate_id}' not found"),
+            )
+        })?;
+
+        let ps = cand.research.primary_source.as_ref();
+        let snapshot = ps.and_then(|p| {
+            p.snapshot_ref
+                .as_deref()
+                .and_then(|r| self.read_snapshot_text(r))
+                .or_else(|| {
+                    p.snapshot_sha256
+                        .as_deref()
+                        .and_then(|h| self.read_snapshot_text(h))
+                })
+        });
+
+        let text_reader = |h: &str| self.read_snapshot_text(h);
+        let asset_reader = |h: &str| self.read_snapshot_bytes(h);
+
+        let fresh = crate::research_readiness::evaluate_readiness_full(
+            ps,
+            snapshot.as_deref(),
+            &cand.research.claims,
+            &cand.research.visual_evidence,
+            cand.content_origin,
+            Some(&text_reader),
+            Some(&text_reader),
+            Some(&asset_reader),
+        );
+
+        let changed = cand
+            .research
+            .research_readiness
+            .as_ref()
+            .map(|r| r.status)
+            != Some(fresh.status);
+        let status = fresh.status;
+        cand.research.research_readiness = Some(fresh);
+
+        if changed {
+            let _ = self.storage.save_candidates(std::slice::from_ref(&cand));
+        }
+
+        if status != ReadinessStatus::VideoReady {
+            return Err((
+                "HANDOFF_REJECTED".to_string(),
+                format!(
+                    "Candidate '{candidate_id}' readiness status is '{}'; VIDEO_READY required for production handoff",
+                    status.as_str()
+                ),
+            ));
+        }
+
+        Ok(cand)
+    }
+
+    pub fn read_snapshot_bytes(&self, hash_or_ref: &str) -> Option<Vec<u8>> {
+        self.capture
+            .as_ref()
+            .and_then(|c| c.read_snapshot_bytes(hash_or_ref))
     }
 
     pub fn consume(&self, ids: &[String]) -> Result<usize, String> {
@@ -425,10 +613,6 @@ impl DailyNewsService {
 
     pub fn cached_candidates_count(&self) -> usize {
         self.storage.get_cached_candidates().len()
-    }
-
-    pub fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
-        self.storage.get_candidate(candidate_id)
     }
 
     pub fn read_snapshot_text(&self, hash_or_ref: &str) -> Option<String> {

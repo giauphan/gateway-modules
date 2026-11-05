@@ -1,6 +1,6 @@
 [package]
 name = "daily-news"
-version = "1.17.0"
+version = "1.18.0"
 edition = "2021"
 description = "Native Rust engine and stdio-stream adapter for Daily News & Content Discovery Service"
 license = "MIT"

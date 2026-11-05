@@ -98,6 +98,101 @@ pub fn build_fail_closed_result(
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CandidateEligibilityPolicy<'a> {
+    pub cutoff_epoch: u64,
+    pub upper_bound_epoch: u64,
+    pub require_latest_news: bool,
+    pub topics: Option<&'a [String]>,
+}
+
+impl<'a> CandidateEligibilityPolicy<'a> {
+    pub fn from_config(
+        cfg: &ModuleConfig,
+        from_epoch: Option<u64>,
+        to_epoch: Option<u64>,
+        topics: Option<&'a [String]>,
+    ) -> Self {
+        let ref_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1793618000);
+
+        let default_cutoff = {
+            let window_secs = (cfg.freshness_window_hours * 3600.0) as u64;
+            ref_epoch.saturating_sub(window_secs)
+        };
+        let cutoff = from_epoch.unwrap_or(default_cutoff);
+        let max_age_secs = (cfg.max_age_days as u64) * 86400;
+        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
+        let cutoff = cutoff.max(max_age_cutoff);
+        let upper_bound = to_epoch.unwrap_or(ref_epoch + 300);
+
+        Self {
+            cutoff_epoch: cutoff,
+            upper_bound_epoch: upper_bound,
+            require_latest_news: cfg.require_latest_news || from_epoch.is_some(),
+            topics,
+        }
+    }
+
+    pub fn is_candidate_eligible(
+        &self,
+        cand: &NormalizedCandidate,
+        seen_content_hashes: &mut HashSet<String>,
+        seen_title_hashes: &mut HashSet<String>,
+    ) -> bool {
+        // 1. Topic filtering must be checked BEFORE deduplication hashing
+        if let Some(topic_filter) = self.topics {
+            if !matches_topics(cand, topic_filter) {
+                return false;
+            }
+        }
+
+        // 2. Derive effective publication epoch with feed observation handling
+        let effective_epoch = if cand.published_at_kind == "feed_observed" {
+            let primary_pub = cand
+                .primary_source
+                .as_ref()
+                .and_then(|p| p.published_at.as_deref())
+                .and_then(|ts| parse_iso_to_epoch(ts).ok());
+
+            if let Some(ep) = primary_pub {
+                ep
+            } else if cand.content_origin == crate::domain::ContentOrigin::Article
+                && self.require_latest_news
+            {
+                // Reshared external articles lacking verified original publication time fail freshness gate
+                return false;
+            } else {
+                let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
+                parse_iso_to_epoch(effective_ts).unwrap_or(0)
+            }
+        } else {
+            let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
+            parse_iso_to_epoch(effective_ts).unwrap_or(0)
+        };
+
+        if effective_epoch > self.upper_bound_epoch {
+            return false;
+        }
+
+        if effective_epoch < self.cutoff_epoch && (self.require_latest_news || !cand.is_evergreen) {
+            return false;
+        }
+
+        // 3. Deduplication after passing topic and freshness checks
+        if !seen_content_hashes.insert(cand.content_hash.clone()) {
+            return false;
+        }
+        if !seen_title_hashes.insert(cand.title_hash.clone()) {
+            return false;
+        }
+
+        true
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn is_candidate_eligible(
     cand: &NormalizedCandidate,
@@ -109,32 +204,13 @@ pub fn is_candidate_eligible(
     seen_title_hashes: &mut HashSet<String>,
     topics: Option<&[String]>,
 ) -> bool {
-    let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
-    let effective_epoch = parse_iso_to_epoch(effective_ts).unwrap_or(0);
-
-    if effective_epoch > upper_bound {
-        return false;
-    }
-
-    let enforce_latest = cfg.require_latest_news || from_epoch.is_some();
-    if effective_epoch < cutoff && (enforce_latest || !cand.is_evergreen) {
-        return false;
-    }
-
-    if !seen_content_hashes.insert(cand.content_hash.clone()) {
-        return false;
-    }
-    if !seen_title_hashes.insert(cand.title_hash.clone()) {
-        return false;
-    }
-
-    if let Some(topic_filter) = topics {
-        if !matches_topics(cand, topic_filter) {
-            return false;
-        }
-    }
-
-    true
+    let policy = CandidateEligibilityPolicy {
+        cutoff_epoch: cutoff,
+        upper_bound_epoch: upper_bound,
+        require_latest_news: cfg.require_latest_news || from_epoch.is_some(),
+        topics,
+    };
+    policy.is_candidate_eligible(cand, seen_content_hashes, seen_title_hashes)
 }
 
 pub fn normalize_raw_item(
