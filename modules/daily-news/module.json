@@ -2,7 +2,7 @@
   "id": "daily-news",
   "name": "Daily News & Content Discovery Service",
   "short_name": "Daily News",
-  "version": "1.18.1",
+  "version": "1.19.0",
   "namespace": "/custom/daily-news",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -202,6 +202,20 @@
           "candidate_id": {
             "type": "string",
             "description": "Candidate ID to evaluate for video production readiness"
+          }
+        },
+        "required": ["candidate_id"]
+      }
+    },
+    {
+      "name": "verify_production_handoff",
+      "description": "Verify candidate VIDEO_READY readiness, freshness, and perform atomic claim for production handoff.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "description": "Unique candidate identifier to verify and claim for production handoff"
           }
         },
         "required": ["candidate_id"]

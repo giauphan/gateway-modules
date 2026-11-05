@@ -189,6 +189,67 @@ pub fn clean_html_entities(text: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+pub fn extract_html_published_at(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    // 1. Common article publication meta tags
+    const META_TAGS: &[&str] = &[
+        "article:published_time",
+        "og:published_time",
+        "pubdate",
+        "publishdate",
+        "dc.date.issued",
+        "date",
+    ];
+    for &tag in META_TAGS {
+        let pattern = format!("\"{tag}\"");
+        if let Some(pos) = lower.find(&pattern) {
+            let window_start = pos.saturating_sub(150);
+            let window_end = (pos + 200).min(html.len());
+            let window = &html[window_start..window_end];
+            if let Some(c_pos) = window.to_lowercase().find("content=\"") {
+                let after = &window[c_pos + 9..];
+                if let Some(end_quote) = after.find('"') {
+                    let val = after[..end_quote].trim();
+                    if crate::date::parse_iso_to_epoch(val).is_ok() {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. <time datetime="..."> tags
+    if let Some(time_pos) = lower.find("<time") {
+        let window_end = (time_pos + 200).min(html.len());
+        let window = &html[time_pos..window_end];
+        if let Some(dt_pos) = window.to_lowercase().find("datetime=\"") {
+            let after = &window[dt_pos + 10..];
+            if let Some(end_quote) = after.find('"') {
+                let val = after[..end_quote].trim();
+                if crate::date::parse_iso_to_epoch(val).is_ok() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+
+    // 3. JSON-LD datePublished property
+    if let Some(dp_pos) = lower.find("\"datepublished\":") {
+        let after = &html[dp_pos + 16..];
+        let trimmed = after.trim_start();
+        if trimmed.starts_with('"') {
+            if let Some(end_quote) = trimmed[1..].find('"') {
+                let val = &trimmed[1..=end_quote];
+                if crate::date::parse_iso_to_epoch(val).is_ok() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn is_block_tag(t: &str) -> bool {
     matches!(
         t,
@@ -447,13 +508,15 @@ impl SourceCapturePort for HttpSourceCaptureAdapter {
                     ),
                 };
 
+            let published_at = extract_html_published_at(&text_content);
+
             return Ok(PrimarySourceEvidence {
                 url: current_url,
                 fetch_status,
                 content_quality,
                 content_type: Some(content_type),
                 title: page_title,
-                published_at: None,
+                published_at,
                 excerpt: Some(excerpt),
                 snapshot_ref: Some(snapshot_ref),
                 snapshot_sha256: Some(snapshot_sha256),

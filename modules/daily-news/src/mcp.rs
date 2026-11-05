@@ -345,6 +345,32 @@ fn handle_single_jsonrpc_request(
         return None;
     }
 
+    const SUPPORTED_MCP_VERSIONS: &[&str] = &["2026-07-28", "2024-11-05", "2024-10-07"];
+
+    // Validate protocolVersion in _meta if provided (stateless MCP 2026-07-28 request metadata)
+    let meta_version = body
+        .get("_meta")
+        .and_then(|m| m.get("protocolVersion"))
+        .or_else(|| {
+            body.get("params")
+                .and_then(|p| p.get("_meta"))
+                .and_then(|m| m.get("protocolVersion"))
+        })
+        .and_then(|v| v.as_str());
+
+    if let Some(meta_ver) = meta_version {
+        if !SUPPORTED_MCP_VERSIONS.contains(&meta_ver) {
+            return Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": format!("Unsupported MCP protocolVersion: '{meta_ver}'. Supported versions: 2026-07-28, 2024-11-05, 2024-10-07")
+                }
+            }));
+        }
+    }
+
     match method {
         "initialize" => {
             let requested_ver = body["params"]["protocolVersion"]

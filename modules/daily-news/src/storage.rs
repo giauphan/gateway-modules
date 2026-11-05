@@ -70,7 +70,7 @@ fn merge_candidate_preserve_research(
     }
 }
 
-fn merge_candidate_entry(existing: &mut NormalizedCandidate, incoming: &NormalizedCandidate) {
+pub(crate) fn merge_candidate_entry(existing: &mut NormalizedCandidate, incoming: &NormalizedCandidate) {
     let content_changed = existing.content_hash != incoming.content_hash;
 
     if content_changed {

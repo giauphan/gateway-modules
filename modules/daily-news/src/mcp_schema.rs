@@ -95,6 +95,20 @@ pub fn get_mcp_tools_list() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "verify_production_handoff",
+            "description": "Verify that a candidate article meets strict VIDEO_READY readiness criteria, check freshness, and perform atomic claim for production pipeline handoff.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Candidate ID to verify and claim for production handoff"
+                    }
+                },
+                "required": ["candidate_id"]
+            }
+        }),
+        json!({
             "name": "get_evidence_snapshot",
             "description": "Fetch the immutable, SHA-256 content-addressed text snapshot of a captured primary or secondary source.",
             "inputSchema": {

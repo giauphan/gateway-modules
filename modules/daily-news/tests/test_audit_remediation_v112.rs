@@ -87,7 +87,7 @@ fn test_mcp_jsonrpc_protocol_conformance() {
     assert_eq!(list_body["jsonrpc"], "2.0");
     assert_eq!(list_body["id"], 2);
     let tools = list_body["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 7);
 
     // 3. tools/call dispatches correctly with params.name and params.arguments
     let call_req = json!({
@@ -180,7 +180,7 @@ fn test_mcp_route_dispatch_via_handlers() {
     let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
     assert_eq!(body["jsonrpc"], "2.0");
     assert_eq!(body["id"], 99);
-    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 7);
 
     let _ = fs::remove_dir_all(tmp);
 }
@@ -399,7 +399,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         extraction_method: None,
     };
 
-    let audit_text = "Verified official audit report from CertiK: audit findings independently confirmed for compiler performance benchmarking.";
+    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): audit findings independently confirmed for compiler performance benchmarking.";
     let audit_sha = compute_sha256(audit_text);
     let claim = ClaimEvidence {
         claim_id: "c_valid".to_string(),
@@ -418,13 +418,22 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
             organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(audit_sha.clone()),
-            secondary_source_ref: None,
+            secondary_source_ref: Some("https://certik.com/reports/2026-CERT-01".to_string()),
         }),
     };
 
     let audit_resolver = move |h: &str| -> Option<String> {
         if h == audit_sha {
             Some(audit_text.to_string())
+        } else {
+            None
+        }
+    };
+
+    let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of chart_01.";
+    let secondary_resolver = move |ref_str: &str| -> Option<String> {
+        if ref_str == "https://example.com/terms" || ref_str == compute_sha256("https://example.com/terms") {
+            Some(license_text.to_string())
         } else {
             None
         }
@@ -454,7 +463,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         std::slice::from_ref(&claim),
         std::slice::from_ref(&visual),
         ContentOrigin::Article,
-        None,
+        Some(&secondary_resolver),
         Some(&audit_resolver),
         Some(&empty_asset_resolver),
     );
@@ -468,7 +477,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         std::slice::from_ref(&claim),
         std::slice::from_ref(&visual),
         ContentOrigin::Article,
-        None,
+        Some(&secondary_resolver),
         Some(&audit_resolver),
         Some(&corrupted_asset_resolver),
     );
@@ -489,7 +498,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         &[claim],
         std::slice::from_ref(&visual),
         ContentOrigin::Article,
-        None,
+        Some(&secondary_resolver),
         Some(&audit_resolver),
         Some(&valid_asset_resolver),
     );

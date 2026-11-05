@@ -162,7 +162,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
         verified_rights: Some(true),
     }];
 
-    let official_audit = "Official Cryptographic Audit Trail Report #2026-CERT-01: CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.";
+    let official_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.";
     let official_audit_sha = compute_sha256(official_audit);
     let official_claims = vec![ClaimEvidence {
         claim_id: "c_official_1".to_string(),
@@ -181,7 +181,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
             organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(official_audit_sha.clone()),
-            secondary_source_ref: None,
+            secondary_source_ref: Some("https://certik.com/reports/2026-CERT-01".to_string()),
         }),
     }];
 
@@ -191,6 +191,14 @@ fn test_issue1_false_positive_video_ready_prevention() {
     let truncated_asset_res = move |h: &str| -> Option<Vec<u8>> {
         if h == truncated_png_sha { Some(truncated_png_bytes.to_vec()) } else { None }
     };
+    let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1 and vis_trunc.";
+    let sec_resolver = move |ref_str: &str| -> Option<String> {
+        if ref_str == "https://example.com/license" || ref_str == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else {
+            None
+        }
+    };
 
     let res_trunc_visual = evaluate_readiness_full(
         Some(&primary_source),
@@ -198,7 +206,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
         &official_claims,
         &truncated_visuals,
         ContentOrigin::Article,
-        None,
+        Some(&sec_resolver),
         Some(&official_audit_res),
         Some(&truncated_asset_res),
     );
@@ -212,7 +220,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
         &official_claims,
         &valid_visuals,
         ContentOrigin::Article,
-        None,
+        Some(&sec_resolver),
         Some(&official_audit_res),
         Some(&valid_asset_res),
     );
@@ -237,9 +245,13 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Cryptographic Audit Trail Report #2026-H1: CertiK independently verified findings confirmed for 4x improvement across test runs.";
+    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.";
     let audit_sha = compute_sha256(audit_text);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
+
+    let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
+    let lic_url_sha = compute_sha256("https://example.com/license");
+    std::fs::write(evidence_dir.join(format!("{lic_url_sha}.txt")), license_text).unwrap();
 
     let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let png_sha = compute_sha256_bytes(png_bytes);
@@ -281,7 +293,7 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
             organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(audit_sha.clone()),
-            secondary_source_ref: None,
+            secondary_source_ref: Some("https://certik.com/reports/2026-H1".to_string()),
         }),
     }];
     candidate.research.visual_evidence = vec![VisualEvidence {
@@ -302,29 +314,39 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
         contract_version: "2.0".to_string(),
     });
 
-    storage.save_candidates(&[candidate.clone()]).unwrap();
+    let mut candidate2 = candidate.clone();
+    candidate2.candidate_id = "cand_video_ready_02".to_string();
+    candidate2.canonical_url = "https://example.com/item2".to_string();
 
-    // Verification before corruption: handoff succeeds
+    storage.save_candidates(&[candidate.clone(), candidate2.clone()]).unwrap();
+
+    // Verification before corruption: handoff succeeds and claims candidate
     let handoff_ok = service.verify_production_handoff("cand_video_ready_01");
     if let Err(ref e) = handoff_ok {
         panic!("HANDOFF ERR: {:?}", e);
     }
     assert!(handoff_ok.is_ok());
 
+    // Already consumed candidate cannot be handed off twice
+    let re_handoff = service.verify_production_handoff("cand_video_ready_01");
+    assert!(re_handoff.is_err());
+    assert_eq!(re_handoff.err().unwrap().0, "ALREADY_CONSUMED");
+
     // Scenario: Visual asset file is deleted from disk
     let asset_path = assets_dir.join(format!("{png_sha}.bin"));
     std::fs::remove_file(asset_path).unwrap();
 
-    // When candidate is retrieved, readiness is invalidated from VIDEO_READY to NEEDS_REVALIDATION
-    let retrieved = service.get_candidate("cand_video_ready_01").unwrap();
+    // When candidate 2 is retrieved, readiness is invalidated from VIDEO_READY to NEEDS_REVALIDATION
+    let retrieved = service.get_candidate("cand_video_ready_02").unwrap();
     assert_ne!(retrieved.research.research_readiness.as_ref().unwrap().status, ReadinessStatus::VideoReady);
     assert_eq!(retrieved.research.research_readiness.as_ref().unwrap().status, ReadinessStatus::NeedsRevalidation);
 
-    // Production handoff must fail closed with 422
-    let handoff_err = service.verify_production_handoff("cand_video_ready_01");
+    // Production handoff on candidate 2 must fail closed with HANDOFF_REJECTED
+    let handoff_err = service.verify_production_handoff("cand_video_ready_02");
     assert!(handoff_err.is_err());
     let (code, msg) = handoff_err.err().unwrap();
     assert_eq!(code, "HANDOFF_REJECTED");
+    assert!(msg.contains("NEEDS_VISUAL_EVIDENCE") || msg.contains("NEEDS_REVALIDATION"));
     assert!(msg.contains("NEEDS_VISUAL_EVIDENCE") || msg.contains("NEEDS_REVALIDATION"));
 
     let _ = std::fs::remove_dir_all(&tmp);

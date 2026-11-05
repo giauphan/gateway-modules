@@ -159,12 +159,9 @@ impl<'a> CandidateEligibilityPolicy<'a> {
 
             if let Some(ep) = primary_pub {
                 ep
-            } else if cand.content_origin == crate::domain::ContentOrigin::Article
-                && self.require_latest_news
-            {
-                // Reshared external articles lacking verified original publication time fail freshness gate
-                return false;
             } else {
+                // Articles with unverified original publication time are admitted to discovery & research queue
+                // using their feed observation timestamp; verified freshness is enforced at production handoff gate
                 let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
                 parse_iso_to_epoch(effective_ts).unwrap_or(0)
             }

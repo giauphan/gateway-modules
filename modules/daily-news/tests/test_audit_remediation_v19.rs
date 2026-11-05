@@ -77,7 +77,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
         let primary_sha = enriched_1.candidate.primary_source.as_ref().unwrap().snapshot_sha256.clone().unwrap();
 
         // Enrich Candidate 2 -> with accredited reviewer and visual evidence -> VIDEO_READY
-        let audit_content = "Official Audit Trail Report #2026-01: CertiK independently verified the performance benchmarks and confirmed findings for 4x reduction in cache latency across all test runs.";
+        let audit_content = "Official Cryptographic Audit Trail Report #2026-01 from CertiK (https://certik.com/reports/benchmark ref #: 2026-01): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.";
         let audit_sha = compute_sha256(audit_content);
         let verified_claims = vec![ClaimEvidence {
             claim_id: "claim_verified_02".to_string(),
@@ -96,16 +96,23 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
                 method: "reproducible_benchmark".to_string(),
                 verified_at: "2026-11-04T05:00:00Z".to_string(),
                 audit_trail_ref: Some(audit_sha.clone()),
-                secondary_source_ref: None,
+                secondary_source_ref: Some("https://certik.com/reports/benchmark".to_string()),
             }),
         }];
 
         let chart_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
         let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
         let evidence_dir = tmp_dir.join(".state").join("evidence");
+        let assets_dir = tmp_dir.join(".state").join("assets");
         let _ = std::fs::create_dir_all(&evidence_dir);
+        let _ = std::fs::create_dir_all(&assets_dir);
         let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), chart_bytes);
+        let _ = std::fs::write(assets_dir.join(format!("{chart_sha}.bin")), chart_bytes);
         let _ = std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_content.as_bytes());
+
+        let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_benchmark_chart.";
+        let lic_sha = compute_sha256("https://example.com/license");
+        let _ = std::fs::write(evidence_dir.join(format!("{lic_sha}.txt")), license_text.as_bytes());
 
         let visuals = vec![VisualEvidence {
             asset_ref: "vis_benchmark_chart".to_string(),

@@ -6,10 +6,10 @@
 
 use crate::date::parse_iso_to_epoch;
 use crate::discovery::{
-    build_fail_closed_result, matches_topics, validate_date_bounds,
+    build_fail_closed_result, validate_date_bounds,
 };
 use crate::domain::{
-    DiscoveryResult, DiscussionThread, ModuleConfig, NormalizedCandidate, RawNewsItem,
+    ContentOrigin, DiscoveryResult, DiscussionThread, ModuleConfig, NormalizedCandidate, RawNewsItem,
     ReadinessStatus, ResearchReadiness,
 };
 use crate::ports::{
@@ -253,43 +253,34 @@ impl DailyNewsService {
         count: usize,
     ) -> Option<DiscoveryResult> {
         let cfg = self.storage.load_config();
-        let ref_epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(1793618000);
-        let max_age_secs = (cfg.max_age_days as u64) * 86400;
-        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
-        let effective_cutoff = from_epoch.unwrap_or(max_age_cutoff).max(max_age_cutoff);
+        let policy = crate::discovery::CandidateEligibilityPolicy::from_config(
+            &cfg,
+            from_epoch,
+            to_epoch,
+            topics,
+        );
 
         let cached = self.storage.get_cached_candidates();
-        let mut unconsumed: Vec<NormalizedCandidate> = cached
+        let mut seen_content_hashes = HashSet::new();
+        let mut seen_title_hashes = HashSet::new();
+
+        let eligible: Vec<NormalizedCandidate> = cached
             .into_iter()
             .filter(|c| !self.storage.is_consumed(&c.candidate_id))
+            .filter(|c| policy.is_candidate_eligible(c, &mut seen_content_hashes, &mut seen_title_hashes))
             .collect();
 
-        if let Some(topic_filter) = topics {
-            unconsumed.retain(|cand| matches_topics(cand, topic_filter));
-        }
-        unconsumed.retain(|c| {
-            let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
-            parse_iso_to_epoch(ts).is_ok_and(|ep| ep >= effective_cutoff)
-        });
-        if let Some(to_e) = to_epoch {
-            unconsumed.retain(|c| {
-                let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
-                parse_iso_to_epoch(ts).is_ok_and(|ep| ep <= to_e)
-            });
-        }
-
-        if unconsumed.is_empty() {
+        if eligible.is_empty() {
             return None;
         }
-        let c_len = unconsumed.len().min(count);
+
+        let ranked = self.scorer.rank_candidates(eligible, count);
+        let c_len = ranked.len();
         Some(DiscoveryResult {
             tier: "tier_2_cache".to_string(),
             status: "ELIGIBLE".to_string(),
             count: c_len,
-            candidates: unconsumed.into_iter().take(count).collect(),
+            candidates: ranked,
             source_file: Some("cached_candidates".to_string()),
             reason: None,
             diagnostics: json!({ "tier": "tier_2_cache" }),
@@ -344,10 +335,12 @@ impl DailyNewsService {
         let raw = self.get_feed(limit.max(25));
         for r in raw {
             if let Ok(c) = self.normalize_item(&r) {
-                if !all_candidates
-                    .iter()
-                    .any(|existing| existing.candidate_id == c.candidate_id)
+                if let Some(existing) = all_candidates
+                    .iter_mut()
+                    .find(|existing| existing.candidate_id == c.candidate_id)
                 {
+                    crate::storage::merge_candidate_entry(existing, &c);
+                } else {
                     all_candidates.push(c);
                 }
             }
@@ -499,6 +492,14 @@ impl DailyNewsService {
         &self,
         candidate_id: &str,
     ) -> Result<NormalizedCandidate, (String, String)> {
+        // 1. Check if already consumed / claimed
+        if self.storage.is_consumed(candidate_id) {
+            return Err((
+                "ALREADY_CONSUMED".to_string(),
+                format!("Candidate '{candidate_id}' has already been consumed and claimed for production"),
+            ));
+        }
+
         let mut cand = self.get_candidate(candidate_id).ok_or_else(|| {
             (
                 "CANDIDATE_NOT_FOUND".to_string(),
@@ -506,6 +507,52 @@ impl DailyNewsService {
             )
         })?;
 
+        // 2. Freshness check against sliding max_age_days
+        let cfg = self.storage.load_config();
+        let ref_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1793618000);
+        let max_age_secs = (cfg.max_age_days as u64) * 86400;
+        let cutoff_epoch = ref_epoch.saturating_sub(max_age_secs);
+
+        let effective_ts = cand.updated_at.as_deref().unwrap_or(&cand.published_at_utc);
+        let cand_epoch = parse_iso_to_epoch(effective_ts).unwrap_or(0);
+        if cand_epoch < cutoff_epoch && (cfg.require_latest_news || !cand.is_evergreen) {
+            return Err((
+                "STALE_CANDIDATE".to_string(),
+                format!(
+                    "Candidate '{candidate_id}' timestamp '{effective_ts}' is older than cutoff max age ({} days)",
+                    cfg.max_age_days
+                ),
+            ));
+        }
+
+        // 3. For feed_observed articles, require verified primary source publication freshness
+        if cand.published_at_kind == "feed_observed" && cand.content_origin == ContentOrigin::Article {
+            let primary_pub = cand
+                .primary_source
+                .as_ref()
+                .and_then(|p| p.published_at.as_deref())
+                .and_then(|ts| parse_iso_to_epoch(ts).ok());
+            match primary_pub {
+                Some(ep) if ep >= cutoff_epoch => {},
+                Some(_) => {
+                    return Err((
+                        "STALE_CANDIDATE".to_string(),
+                        format!("Candidate '{candidate_id}' verified original article publication time is stale"),
+                    ));
+                }
+                None => {
+                    return Err((
+                        "UNVERIFIED_PUBLICATION_DATE".to_string(),
+                        format!("Candidate '{candidate_id}' feed-observed article lacks verified primary source publication date for production handoff"),
+                    ));
+                }
+            }
+        }
+
+        // 4. Re-evaluate readiness
         let ps = cand.research.primary_source.as_ref();
         let snapshot = ps.and_then(|p| {
             p.snapshot_ref
@@ -552,6 +599,18 @@ impl DailyNewsService {
                     "Candidate '{candidate_id}' readiness status is '{}'; VIDEO_READY required for production handoff",
                     status.as_str()
                 ),
+            ));
+        }
+
+        // 5. Atomic reservation / claim
+        let claimed = self
+            .storage
+            .mark_consumed(&[candidate_id.to_string()])
+            .map_err(|e| ("STORAGE_ERROR".to_string(), e))?;
+        if claimed == 0 {
+            return Err((
+                "ALREADY_CONSUMED".to_string(),
+                format!("Candidate '{candidate_id}' was claimed by another worker concurrently"),
             ));
         }
 

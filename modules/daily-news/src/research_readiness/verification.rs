@@ -195,7 +195,8 @@ pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     let valid_sec_ref = match rec.secondary_source_ref.as_deref() {
         Some(s) => {
             let tr = s.trim();
-            tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
+            (tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit()))
+                || (tr.starts_with("https://") && crate::url::is_safe_url(tr, None))
         }
         None => true,
     };
@@ -362,6 +363,51 @@ fn has_auditor_attribution(text: &str, accred: &str) -> bool {
     false
 }
 
+pub fn get_accredited_domains(accred: &str) -> &'static [&'static str] {
+    match accred {
+        "certik" => &["certik.com"],
+        "trail of bits" => &["trailofbits.com"],
+        "openzeppelin" => &["openzeppelin.com"],
+        "cure53" => &["cure53.de"],
+        "ncc group" => &["nccgroup.com"],
+        "reuters" => &["reuters.com"],
+        "associated press" | "ap fact check" => &["apnews.com"],
+        "snopes" => &["snopes.com"],
+        "politifact" => &["politifact.com"],
+        "bbc verify" => &["bbc.com", "bbc.co.uk"],
+        "afp fact check" => &["factcheck.afp.com", "afp.com"],
+        "iso iec 17025" => &["iso.org"],
+        "stanford security lab" => &["stanford.edu"],
+        "mit csail" => &["csail.mit.edu", "mit.edu"],
+        "cmu sei" => &["sei.cmu.edu", "cmu.edu"],
+        "berkeley ai research" => &["bair.berkeley.edu", "berkeley.edu"],
+        _ => &[],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditProvenanceStatus {
+    Unverified,
+    AuditContentMatched,
+    IssuerAuthenticated,
+}
+
+pub fn check_audit_provenance_level(
+    audit_text: &str,
+    rec: &VerificationRecord,
+    claim: &ClaimEvidence,
+) -> AuditProvenanceStatus {
+    if !is_audit_artifact_corroborated(audit_text, rec, claim) {
+        return AuditProvenanceStatus::Unverified;
+    }
+
+    if is_audit_source_verified(audit_text, rec) {
+        AuditProvenanceStatus::IssuerAuthenticated
+    } else {
+        AuditProvenanceStatus::AuditContentMatched
+    }
+}
+
 pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> bool {
     let lower = audit_text.trim().to_lowercase();
     const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
@@ -404,20 +450,56 @@ pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> b
         return false;
     }
 
-    const PROVENANCE_INDICATORS: &[&str] = &[
-        "report",
-        "certificate",
-        "audit trail",
+    if !has_auditor_attribution(&lower, accred) {
+        return false;
+    }
+
+    // Authentic Issuer Provenance Gate:
+    // Mere wording/text claiming an accredited issuer is only AUDIT_CONTENT_MATCHED.
+    // ISSUER_AUTHENTICATED requires cryptographic digital signature OR verified
+    // authoritative domain URL reference from the accredited organization.
+    let domains = get_accredited_domains(accred);
+
+    // 1. Check authoritative domain reference in secondary_source_ref or audit_text
+    let has_authoritative_domain = rec
+        .secondary_source_ref
+        .as_deref()
+        .map(str::to_lowercase)
+        .is_some_and(|ref_url| {
+            domains.iter().any(|d| {
+                ref_url.starts_with(&format!("https://{d}/"))
+                    || ref_url.starts_with(&format!("https://www.{d}/"))
+            })
+        })
+        || domains.iter().any(|d| {
+            lower.contains(&format!("https://{d}/"))
+                || lower.contains(&format!("https://www.{d}/"))
+        });
+
+    let has_report_identifier = const_tokens_exist(&lower, &[
         "ref #",
         "reference:",
         "ref:",
+        "report id:",
+        "audit id:",
+        "certificate id:",
+        "report #",
         "id:",
-        "certification",
-        "evaluation report",
-        "verification report",
-        "https://",
-    ];
-    PROVENANCE_INDICATORS.iter().any(|ind| lower.contains(ind))
+    ]);
+
+    let domain_anchored = has_authoritative_domain && has_report_identifier;
+
+    // 2. Check cryptographic signature envelope / digital proof
+    let has_crypto_envelope = lower.contains("-----begin pgp signed message-----")
+        || lower.contains("-----begin pgp signature-----")
+        || ((lower.contains("signed-by:") || lower.contains("signature:") || lower.contains("cryptographic signature"))
+            && (lower.contains("ed25519") || lower.contains("rsa") || lower.contains("secp256k1") || lower.contains("public key")));
+
+    domain_anchored || has_crypto_envelope
+}
+
+fn const_tokens_exist(text: &str, tokens: &[&str]) -> bool {
+    tokens.iter().any(|tok| text.contains(tok))
 }
 
 pub fn is_audit_artifact_corroborated(

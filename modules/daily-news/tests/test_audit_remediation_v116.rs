@@ -114,7 +114,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
     assert_ne!(readiness_mock.status, ReadinessStatus::VideoReady);
 
     // 2. Trusted Accredited Issuer ("CertiK") + Real PNG Media Bytes -> VIDEO_READY
-    let prod_audit_text = "Official Cryptographic Audit Trail Report #2026-P1: CertiK independently verified the performance benchmarks and confirmed findings for 4x latency reduction across all test runs.";
+    let prod_audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-P1 ref #: 2026-P1): CertiK independently verified the performance benchmarks and confirmed findings for 4x latency reduction across all test runs.";
     let prod_audit_sha = compute_sha256(prod_audit_text);
     let prod_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let prod_png_sha = compute_sha256_bytes(prod_png_bytes);
@@ -136,7 +136,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
             organization: "CertiK".to_string(),
             method: "reproducible_benchmark".to_string(),
             audit_trail_ref: Some(prod_audit_sha.clone()),
-            secondary_source_ref: None,
+            secondary_source_ref: Some("https://certik.com/reports/2026-P1".to_string()),
         }),
     }];
 
@@ -152,6 +152,15 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
         verified_rights: Some(true),
     }];
 
+    let license_doc = "Copyright 2026 Vendor. CC-BY license for commercial use of vis_prod_chart.";
+    let prod_sec_res = move |r: &str| -> Option<String> {
+        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else {
+            None
+        }
+    };
+
     let prod_audit_res = move |h: &str| -> Option<String> {
         if h == prod_audit_sha { Some(prod_audit_text.to_string()) } else { None }
     };
@@ -165,7 +174,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
         &prod_claims,
         &prod_visuals,
         daily_news::domain::ContentOrigin::Article,
-        None,
+        Some(&prod_sec_res),
         Some(&prod_audit_res),
         Some(&prod_asset_res),
     );

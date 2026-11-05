@@ -179,9 +179,13 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     assert!(!res_valid.production_scoring.is_video_production_ready);
 
     // 3. Trusted accredited issuer + real PNG bytes reaches production VideoReady
-    let trusted_audit_doc = "Official CertiK Audit Report #2026-V114: CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
+    let trusted_audit_doc = "Official CertiK Audit Report from CertiK (https://certik.com/reports/2026-V114 ref #: 2026-V114): CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
     let trusted_audit_sha = compute_sha256(trusted_audit_doc);
     std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
+
+    let license_doc = "Copyright 2026 Vendor. CC-BY license for commercial use of vis_v114_chart_prod.";
+    let lic_url_sha = compute_sha256("https://example.com/license");
+    std::fs::write(evidence_dir.join(format!("{lic_url_sha}.txt")), license_doc.as_bytes()).unwrap();
 
     let real_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let real_png_sha = compute_sha256_bytes(real_png_bytes);
@@ -216,7 +220,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
             method: "reproducible_benchmark".to_string(),
             verified_at: "2026-11-04T00:00:00Z".to_string(),
             audit_trail_ref: Some(trusted_audit_sha),
-            secondary_source_ref: None,
+            secondary_source_ref: Some("https://certik.com/reports/2026-V114".to_string()),
         }),
     }];
 

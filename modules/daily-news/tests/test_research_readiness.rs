@@ -193,7 +193,7 @@ fn test_all_criteria_met_yields_video_ready() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // With accredited issuer and valid media asset resolvers, evaluate_readiness_full yields VideoReady
-    let audit_doc = "Official Audit Report from CertiK: verified findings confirmed for 4x latency improvement across all systems.";
+    let audit_doc = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.";
     let audit_sha = compute_sha256(audit_doc);
     let mut accredited_claims = claims;
     accredited_claims[0].verification_record = Some(VerificationRecord {
@@ -203,13 +203,22 @@ fn test_all_criteria_met_yields_video_ready() {
         organization: "CertiK".to_string(),
         method: "reproducible_benchmark".to_string(),
         audit_trail_ref: Some(audit_sha.clone()),
-        secondary_source_ref: None,
+        secondary_source_ref: Some("https://certik.com/reports/2026-01".to_string()),
     });
 
     let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
     let mut resolved_visuals = visuals;
     resolved_visuals[0].checksum_sha256 = Some(png_sha.clone());
+
+    let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
+    let sec_res = move |r: &str| -> Option<String> {
+        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else {
+            None
+        }
+    };
 
     let audit_res = move |h: &str| -> Option<String> {
         if h == audit_sha { Some(audit_doc.to_string()) } else { None }
@@ -224,7 +233,7 @@ fn test_all_criteria_met_yields_video_ready() {
         &accredited_claims,
         &resolved_visuals,
         ContentOrigin::Article,
-        None,
+        Some(&sec_res),
         Some(&audit_res),
         Some(&asset_res),
     );
@@ -664,15 +673,25 @@ fn test_verification_record_structured_evidence() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // When resolvers are provided for accredited CertiK audit + valid visual bytes, evaluates to VideoReady
-    let audit_doc = "Official Cryptographic Audit Report #2026-001: CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
+    let audit_doc = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
     let audit_sha = compute_sha256(audit_doc);
     let mut resolved_claims = claims;
     resolved_claims[0].verification_record.as_mut().unwrap().audit_trail_ref = Some(audit_sha.clone());
+    resolved_claims[0].verification_record.as_mut().unwrap().secondary_source_ref = Some("https://certik.com/reports/2026-001".to_string());
 
     let png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let png_sha = daily_news::url::compute_sha256_bytes(png_bytes);
     let mut resolved_vis = visuals;
     resolved_vis[0].checksum_sha256 = Some(png_sha.clone());
+
+    let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_audit_diagram.";
+    let sec_res = move |r: &str| -> Option<String> {
+        if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
+            Some(license_doc.to_string())
+        } else {
+            None
+        }
+    };
 
     let audit_res = move |h: &str| -> Option<String> {
         if h == audit_sha { Some(audit_doc.to_string()) } else { None }
@@ -687,7 +706,7 @@ fn test_verification_record_structured_evidence() {
         &resolved_claims,
         &resolved_vis,
         ContentOrigin::Article,
-        None,
+        Some(&sec_res),
         Some(&audit_res),
         Some(&asset_res),
     );

@@ -86,13 +86,14 @@ fn create_test_service(base_dir: &PathBuf) -> (DailyNewsService, Arc<FileStorage
 #[test]
 fn test_mcp_tools_list_schema() {
     let tools = get_mcp_tools_list();
-    assert_eq!(tools.len(), 6, "Must expose exactly 6 declared MCP tools");
+    assert_eq!(tools.len(), 7, "Must expose declared MCP tools including verify_production_handoff");
 
     let expected_names = [
         "discover_candidates",
         "get_candidate",
         "enrich_candidate",
         "verify_research_readiness",
+        "verify_production_handoff",
         "get_evidence_snapshot",
         "get_discussion",
     ];
