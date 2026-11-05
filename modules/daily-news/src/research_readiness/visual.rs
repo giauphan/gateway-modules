@@ -134,20 +134,25 @@ pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
         return false;
     }
 
-    // 1. PNG format: standard magic bytes with non-zero dimensions if IHDR is present, or recognized mock
-    if bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"PNG") {
-        if bytes.len() >= 24 && &bytes[12..16] == b"IHDR" {
-            let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-            let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-            return width > 0 && height > 0;
-        }
+    // 1. PNG format: standard magic bytes with non-zero dimensions in IHDR chunk, or recognized test/mock header
+    if is_mock_visual_bytes(bytes) || bytes.starts_with(b"PNG ") {
         return true;
     }
 
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(b"\x89PNG") {
+        if bytes.len() >= 16 && &bytes[12..16] == b"IHDR" {
+            if bytes.len() >= 24 {
+                let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+                let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+                return width > 0 && height > 0;
+            }
+            return true;
+        }
+        return false;
+    }
+
     // 2. JPEG magic bytes
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF])
-        || (bytes.starts_with(&[0xFF, 0xD8]) && bytes.len() >= 4 && bytes[2] == 0xFF)
-    {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) && bytes.len() >= 4 {
         return true;
     }
 
@@ -158,26 +163,60 @@ pub fn is_valid_visual_asset_format(bytes: &[u8]) -> bool {
             let height = u16::from_le_bytes([bytes[8], bytes[9]]);
             return width > 0 && height > 0;
         }
-        return true;
+        return bytes.len() >= 8;
     }
 
     // 4. WebP: RIFF....WEBP
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+    if bytes.len() >= 16 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return true;
     }
 
-    // 5. SVG vector graphic: must contain <svg
-    let sample_len = bytes.len().min(2048);
-    let sample = String::from_utf8_lossy(&bytes[..sample_len]).to_ascii_lowercase();
-    if sample.contains("<svg") {
-        return true;
+    // 5. SVG vector graphic: must be valid UTF-8, contain <svg and closing </svg> or />, and no scripts/handlers
+    if let Ok(utf8_str) = std::str::from_utf8(bytes) {
+        let lower = utf8_str.to_ascii_lowercase();
+        if lower.contains("<svg") && (lower.contains("</svg>") || lower.contains("/>")) {
+            if lower.contains("<script")
+                || lower.contains("<foreignobject")
+                || lower.contains("<iframe")
+                || lower.contains("javascript:")
+                || has_inline_event_handler(&lower)
+            {
+                return false;
+            }
+            return true;
+        }
     }
 
     // 6. MP4 video: ftyp or moov box
-    if bytes.len() >= 8 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
+    if bytes.len() >= 16 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
         return true;
     }
 
+    false
+}
+
+fn has_inline_event_handler(lower: &str) -> bool {
+    let b = lower.as_bytes();
+    let mut i = 0;
+    while i + 2 < b.len() {
+        let boundary = i == 0
+            || b[i - 1].is_ascii_whitespace()
+            || matches!(b[i - 1], b'"' | b'\'' | b'/');
+        if boundary && b[i] == b'o' && b[i + 1] == b'n' {
+            let mut j = i + 2;
+            while j < b.len() && b[j].is_ascii_alphabetic() {
+                j += 1;
+            }
+            let name_len = j - (i + 2);
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if name_len > 0 && j < b.len() && b[j] == b'=' {
+                return true;
+            }
+        }
+        i += 1;
+    }
     false
 }
 
@@ -248,9 +287,10 @@ pub fn is_mock_visual_bytes(bytes: &[u8]) -> bool {
         || lower_start.starts_with(b"test asset")
 }
 
-pub fn are_visuals_provenance_verified(
+pub fn are_visuals_provenance_verified_full(
     visuals: &[VisualEvidence],
     asset_resolver: AssetResolver,
+    secondary_resolver: super::types::SecondaryResolver,
 ) -> bool {
     if visuals.is_empty() {
         return false;
@@ -280,8 +320,34 @@ pub fn are_visuals_provenance_verified(
             }
         }
 
+        if let Some(ref lic_ref) = v.license_evidence_ref {
+            let tr = lic_ref.trim().to_ascii_lowercase();
+            if tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit()) {
+                if let Some(sec_res) = secondary_resolver {
+                    match sec_res(&tr) {
+                        Some(doc) => {
+                            let computed = crate::url::compute_sha256(&doc);
+                            if computed != tr || doc.trim().is_empty() {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+
         true
     })
+}
+
+pub fn are_visuals_provenance_verified(
+    visuals: &[VisualEvidence],
+    asset_resolver: AssetResolver,
+) -> bool {
+    are_visuals_provenance_verified_full(visuals, asset_resolver, None)
 }
 
 pub fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {

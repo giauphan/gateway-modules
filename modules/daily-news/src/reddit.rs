@@ -262,6 +262,12 @@ pub fn parse_reddit_post_data(
     item.evidence.evidence_excerpt = Some(summary.chars().take(280).collect());
     item.tags = vec!["reddit".to_string(), subreddit.to_lowercase()];
     item.extra = extra;
+    item.published_at_kind = crate::domain::PublishedAtKind::FeedObserved;
+    item.content_origin = if is_self {
+        crate::domain::ContentOrigin::Discussion
+    } else {
+        crate::domain::ContentOrigin::Article
+    };
 
     Some(item)
 }

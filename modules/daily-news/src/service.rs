@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct DailyNewsService {
-    fetcher: Arc<dyn FeedFetcherPort>,
+    fetcher: std::sync::RwLock<Arc<dyn FeedFetcherPort>>,
     storage: Arc<dyn StoragePort>,
     scorer: CandidateScorer,
     discussion: Arc<dyn DiscussionFetcherPort>,
@@ -35,12 +35,16 @@ impl DailyNewsService {
         scorer: CandidateScorer,
     ) -> Self {
         Self {
-            fetcher,
+            fetcher: std::sync::RwLock::new(fetcher),
             storage,
             scorer,
             discussion: Arc::new(NoopDiscussionFetcher),
             capture: None,
         }
+    }
+
+    fn fetcher(&self) -> Arc<dyn FeedFetcherPort> {
+        self.fetcher.read().unwrap().clone()
     }
 
     pub fn with_discussion_fetcher(mut self, discussion: Arc<dyn DiscussionFetcherPort>) -> Self {
@@ -142,6 +146,9 @@ impl DailyNewsService {
             let window_secs = (cfg.freshness_window_hours * 3600.0) as u64;
             ref_epoch.saturating_sub(window_secs)
         });
+        let max_age_secs = (cfg.max_age_days as u64) * 86400;
+        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
+        let cutoff = cutoff.max(max_age_cutoff);
         let upper_bound = to_epoch.unwrap_or(ref_epoch + 300);
 
         let mut seen_content_hashes = HashSet::new();
@@ -219,16 +226,21 @@ impl DailyNewsService {
         topics: Option<&[String]>,
         count: usize,
     ) -> Result<Option<DiscoveryResult>, (String, String)> {
-        let raw = match sources {
-            Some(s) => self
-                .fetcher
-                .fetch_sources(s, count.max(30))
-                .unwrap_or_default(),
-            None => self
-                .fetcher
-                .fetch_raw_items(count.max(30))
-                .unwrap_or_default(),
-        };
+        if let Some(s) = sources {
+            if s.is_empty() {
+                return Ok(None);
+            }
+        }
+        let cfg = self.storage.load_config();
+        let effective_sources: Vec<String> = sources
+            .map(|s| s.to_vec())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.default_sources.clone());
+
+        let raw = self
+            .fetcher()
+            .fetch_sources(&effective_sources, count.max(30))
+            .unwrap_or_default();
         let ranked = self.filter_and_score(&raw, from_epoch, to_epoch, topics, count);
         if ranked.is_empty() {
             return Ok(None);
@@ -255,6 +267,15 @@ impl DailyNewsService {
         topics: Option<&[String]>,
         count: usize,
     ) -> Option<DiscoveryResult> {
+        let cfg = self.storage.load_config();
+        let ref_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1793618000);
+        let max_age_secs = (cfg.max_age_days as u64) * 86400;
+        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
+        let effective_cutoff = from_epoch.unwrap_or(max_age_cutoff).max(max_age_cutoff);
+
         let cached = self.storage.get_cached_candidates();
         let mut unconsumed: Vec<NormalizedCandidate> = cached
             .into_iter()
@@ -264,12 +285,10 @@ impl DailyNewsService {
         if let Some(topic_filter) = topics {
             unconsumed.retain(|cand| matches_topics(cand, topic_filter));
         }
-        if let Some(from_e) = from_epoch {
-            unconsumed.retain(|c| {
-                let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
-                parse_iso_to_epoch(ts).is_ok_and(|ep| ep >= from_e)
-            });
-        }
+        unconsumed.retain(|c| {
+            let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
+            parse_iso_to_epoch(ts).is_ok_and(|ep| ep >= effective_cutoff)
+        });
         if let Some(to_e) = to_epoch {
             unconsumed.retain(|c| {
                 let ts = c.updated_at.as_deref().unwrap_or(&c.published_at_utc);
@@ -319,14 +338,14 @@ impl DailyNewsService {
     }
 
     pub fn get_feed(&self, limit: usize) -> Vec<RawNewsItem> {
-        let mut items = self.fetcher.fetch_raw_items(limit).unwrap_or_default();
+        let mut items = self.fetcher().fetch_raw_items(limit).unwrap_or_default();
         items.truncate(limit);
         items
     }
 
     pub fn get_feed_sources(&self, sources: &[String], limit: usize) -> Vec<RawNewsItem> {
         let mut items = self
-            .fetcher
+            .fetcher()
             .fetch_sources(sources, limit)
             .unwrap_or_default();
         items.truncate(limit);
@@ -334,21 +353,26 @@ impl DailyNewsService {
     }
 
     pub fn get_candidates(&self, limit: usize) -> Vec<NormalizedCandidate> {
+        let mut all_candidates = self.storage.get_cached_candidates();
         let raw = self.get_feed(limit.max(25));
-        let candidates: Vec<NormalizedCandidate> = raw
-            .iter()
-            .filter_map(|r| self.normalize_item(r).ok())
-            .collect();
-        let ranked = self.scorer.rank_candidates(candidates, limit);
-        // Propagate persistence error as eprintln; fall back to cached candidates on failure
-        // so callers (chat_completion, MCP dispatch) always get a usable list.
-        if let Err(e) = self.storage.save_candidates(&ranked) {
-            eprintln!(
-                "[daily-news] WARNING: get_candidates persistence failed, \
-                 serving stale cache. Error: {e}"
-            );
-            return self.storage.get_cached_candidates();
+        for r in raw {
+            if let Ok(c) = self.normalize_item(&r) {
+                if !all_candidates
+                    .iter()
+                    .any(|existing| existing.candidate_id == c.candidate_id)
+                {
+                    all_candidates.push(c);
+                }
+            }
         }
+
+        let unconsumed: Vec<NormalizedCandidate> = all_candidates
+            .into_iter()
+            .filter(|c| !self.storage.is_consumed(&c.candidate_id))
+            .collect();
+
+        let ranked = self.scorer.rank_candidates(unconsumed, limit);
+        let _ = self.storage.save_candidates(&ranked);
         ranked
     }
 
@@ -362,6 +386,10 @@ impl DailyNewsService {
 
     pub fn update_config(&self, new_config: ModuleConfig) -> Result<ModuleConfig, String> {
         self.storage.save_config(&new_config)?;
+        let new_fetcher = crate::fetcher::build_live_feed_fetcher(&new_config);
+        if let Ok(mut g) = self.fetcher.write() {
+            *g = Arc::new(new_fetcher);
+        }
         Ok(new_config)
     }
 

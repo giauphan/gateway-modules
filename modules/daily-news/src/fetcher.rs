@@ -37,6 +37,33 @@ impl LiveFeedFetcher {
         self.reddit_provider = Some(reddit);
         self
     }
+}
+
+pub fn build_live_feed_fetcher(cfg: &crate::domain::ModuleConfig) -> LiveFeedFetcher {
+    let redis_provider = cfg.redis_enabled.then(|| {
+        crate::redis::RedisFeedProvider::new(&cfg.redis_url, &cfg.redis_key, &cfg.redis_type)
+    });
+
+    let reddit_provider = cfg.reddit_enabled.then(|| {
+        crate::reddit::RedditFeedProvider::new(cfg.reddit_subreddits.clone())
+            .with_credentials(
+                cfg.reddit_client_id.clone(),
+                cfg.reddit_client_secret.clone(),
+            )
+            .with_base_url(cfg.reddit_base_url.clone())
+    });
+
+    let mut fetcher = LiveFeedFetcher::new(Some(cfg.newsnow_url.clone()));
+    if let Some(rp) = redis_provider {
+        fetcher = fetcher.with_redis(rp);
+    }
+    if let Some(rp) = reddit_provider {
+        fetcher = fetcher.with_reddit(rp);
+    }
+    fetcher
+}
+
+impl LiveFeedFetcher {
 
     fn fetch_newsnow_source(&self, base_url: &str, source: &str, limit: usize) -> Vec<RawNewsItem> {
         let endpoint = format!("{}/api/s?id={source}", base_url.trim_end_matches('/'));

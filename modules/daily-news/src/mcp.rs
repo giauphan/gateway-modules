@@ -313,28 +313,37 @@ fn handle_single_jsonrpc_request(
     let method = body["method"].as_str().unwrap_or("").trim();
 
     // Notifications are fire-and-forget per MCP spec: no response body
-    if method.starts_with("notifications/") {
+    if method.starts_with("notifications/") || method == "initialized" {
         return None;
     }
 
     match method {
-        "initialize" => Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": { "listChanged": false },
-                    "resources": { "subscribe": false, "listChanged": false },
-                    "prompts": { "listChanged": false },
-                    "logging": {}
-                },
-                "serverInfo": {
-                    "name": "daily-news",
-                    "version": env!("CARGO_PKG_VERSION")
+        "initialize" => {
+            let requested_ver = body["params"]["protocolVersion"]
+                .as_str()
+                .unwrap_or("2024-11-05");
+            let negotiated = match requested_ver {
+                "2024-11-05" | "2024-10-07" => requested_ver,
+                _ => "2024-11-05",
+            };
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": negotiated,
+                    "capabilities": {
+                        "tools": { "listChanged": false },
+                        "resources": { "subscribe": false, "listChanged": false },
+                        "prompts": { "listChanged": false },
+                        "logging": {}
+                    },
+                    "serverInfo": {
+                        "name": "daily-news",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
                 }
-            }
-        })),
+            }))
+        }
         "ping" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,

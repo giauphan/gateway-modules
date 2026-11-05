@@ -76,6 +76,7 @@ pub const DENIED_REVIEWER_TOKENS: &[&str] = &[
     "fake",
     "dummy",
     "attacker",
+    "internal",
 ];
 
 pub const GENERIC_UNTRUSTED_REVIEWERS: &[&str] = &[
@@ -87,6 +88,9 @@ pub const GENERIC_UNTRUSTED_REVIEWERS: &[&str] = &[
     "test reviewer",
     "auditor",
     "peer reviewer",
+    "internal team",
+    "internal lead",
+    "engineering team",
 ];
 
 pub fn is_accredited_organization(org: &str) -> bool {
@@ -160,7 +164,10 @@ pub fn is_accredited_reviewer(reviewer: &str) -> bool {
 
 pub fn is_verification_record_valid(rec: &VerificationRecord) -> bool {
     let has_id = !rec.record_id.trim().is_empty();
-    let rev_lower = rec.reviewer_id.to_lowercase();
+    let rev_lower = rec.reviewer_id.trim().to_lowercase();
+    if GENERIC_UNTRUSTED_REVIEWERS.contains(&rev_lower.as_str()) {
+        return false;
+    }
     let has_rev = !rec.reviewer_id.trim().is_empty()
         && !rev_lower
             .split(|c: char| !c.is_alphanumeric())
@@ -389,9 +396,17 @@ pub fn is_audit_artifact_corroborated(
     const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
         "not an official report",
         "self-certified",
-        "unverified draft",
+        "self-assessment",
+        "self-evaluation",
+        "self-audit",
+        "self-reported",
+        "internal evaluation",
+        "internal review only",
         "internal notes only",
+        "unverified draft",
         "unofficial draft",
+        "author audit",
+        "author-verified",
     ];
     if UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m)) {
         return false;
@@ -428,13 +443,11 @@ pub fn is_audit_artifact_corroborated(
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| s.len() >= 4)
         .collect();
-    let mentions_claim = !claim_tokens.is_empty()
+    !claim_tokens.is_empty()
         && (claim_tokens
             .iter()
             .any(|tok| lower.contains(&tok.to_lowercase()))
-            || lower.contains(&claim.claim_id.to_lowercase()));
-
-    mentions_claim
+            || lower.contains(&claim.claim_id.to_lowercase()))
 }
 
 pub fn is_claim_independently_verified_with_audit_resolver(

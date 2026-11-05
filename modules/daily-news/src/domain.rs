@@ -106,25 +106,7 @@ impl Default for ModuleConfig {
 }
 
 impl ModuleConfig {
-    pub fn apply_updates_validated(&mut self, body: &serde_json::Value) -> Result<(), String> {
-        let obj = body
-            .as_object()
-            .ok_or_else(|| "Configuration updates payload must be a JSON object".to_string())?;
-
-        if obj.is_empty() {
-            return Err("Configuration updates payload cannot be empty".to_string());
-        }
-
-        if let Some(val) = obj.get("newsnow_url") {
-            let url = val
-                .as_str()
-                .ok_or_else(|| "'newsnow_url' must be a string".to_string())?;
-            if !url.trim().is_empty() && !crate::url::is_safe_url(url, None) {
-                return Err(format!("'newsnow_url' is invalid or not an allowed URL: {url}"));
-            }
-            self.newsnow_url = url.to_string();
-        }
-
+    fn apply_content_updates(&mut self, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
         if let Some(val) = obj.get("freshness_window_hours") {
             let h = val
                 .as_f64()
@@ -149,6 +131,37 @@ impl ModuleConfig {
             self.require_latest_news = val
                 .as_bool()
                 .ok_or_else(|| "'require_latest_news' must be a boolean".to_string())?;
+        }
+
+        if let Some(val) = obj.get("default_sources") {
+            let arr = val
+                .as_array()
+                .ok_or_else(|| "'default_sources' must be an array of strings".to_string())?;
+            let mut sources = Vec::new();
+            for item in arr {
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| "'default_sources' elements must be strings".to_string())?;
+                let tr = s.trim().to_lowercase();
+                if !tr.is_empty() {
+                    sources.push(tr);
+                }
+            }
+            self.default_sources = sources;
+        }
+
+        Ok(())
+    }
+
+    fn apply_redis_and_newsnow_updates(&mut self, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+        if let Some(val) = obj.get("newsnow_url") {
+            let url = val
+                .as_str()
+                .ok_or_else(|| "'newsnow_url' must be a string".to_string())?;
+            if !url.trim().is_empty() && !crate::url::is_safe_url(url, None) {
+                return Err(format!("'newsnow_url' is invalid or not an allowed URL: {url}"));
+            }
+            self.newsnow_url = url.to_string();
         }
 
         if let Some(val) = obj.get("redis_enabled") {
@@ -178,6 +191,10 @@ impl ModuleConfig {
                 .to_string();
         }
 
+        Ok(())
+    }
+
+    fn apply_reddit_updates(&mut self, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
         if let Some(val) = obj.get("reddit_enabled") {
             self.reddit_enabled = val
                 .as_bool()
@@ -216,6 +233,22 @@ impl ModuleConfig {
         if let Some(val) = obj.get("reddit_base_url") {
             self.reddit_base_url = val.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
+
+        Ok(())
+    }
+
+    pub fn apply_updates_validated(&mut self, body: &serde_json::Value) -> Result<(), String> {
+        let obj = body
+            .as_object()
+            .ok_or_else(|| "Configuration updates payload must be a JSON object".to_string())?;
+
+        if obj.is_empty() {
+            return Err("Configuration updates payload cannot be empty".to_string());
+        }
+
+        self.apply_content_updates(obj)?;
+        self.apply_redis_and_newsnow_updates(obj)?;
+        self.apply_reddit_updates(obj)?;
 
         Ok(())
     }

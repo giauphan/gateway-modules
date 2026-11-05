@@ -198,8 +198,7 @@ pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str
         .to_lowercase();
     let clean_url = canonical_url.trim().to_lowercase();
     let body_str = body.unwrap_or("").trim();
-    let limit = body_str.chars().take(500).collect::<String>();
-    let clean_body: String = limit
+    let clean_body: String = body_str
         .split_whitespace()
         .collect::<Vec<&str>>()
         .join(" ")

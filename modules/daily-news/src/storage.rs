@@ -282,7 +282,7 @@ impl StoragePort for FileStorageAdapter {
         let _persist_lock = self
             .persist_mutex
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // 1. Transactional isolation: build proposed set without mutating RAM yet
         let current_consumed = self
@@ -347,7 +347,7 @@ impl StoragePort for FileStorageAdapter {
         let _persist_lock = self
             .persist_mutex
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // 1. Write to disk atomically first before mutating RAM
         let _ = fs::create_dir_all(&self.state_dir);
@@ -381,10 +381,10 @@ impl StoragePort for FileStorageAdapter {
     }
 
     fn save_candidates(&self, candidates: &[NormalizedCandidate]) -> Result<usize, String> {
-        let _lock = match self.persist_mutex.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = self
+            .persist_mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // 1. Transactional isolation: build proposed candidate list without mutating RAM yet
         let mut proposed = self.inner.get_cached_candidates();

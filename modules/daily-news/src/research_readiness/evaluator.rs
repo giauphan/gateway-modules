@@ -7,7 +7,7 @@ use super::types::{
 use super::verification::{
     is_claim_independently_verified_with_audit_resolver, is_verification_record_valid,
 };
-use super::visual::are_visuals_provenance_verified;
+use super::visual::are_visuals_provenance_verified_full;
 
 fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
     let tr_excerpt = excerpt.trim();
@@ -484,7 +484,7 @@ pub fn evaluate_readiness_full(
         );
     }
 
-    if !are_visuals_provenance_verified(visuals, asset_resolver) {
+    if !are_visuals_provenance_verified_full(visuals, asset_resolver, secondary_resolver) {
         return build_readiness(
             ReadinessStatus::NeedsVisualEvidence,
             "No verified visual evidence assets available (assets must have valid checksum SHA-256, approved license, license evidence reference, and verified rights)".to_string(),

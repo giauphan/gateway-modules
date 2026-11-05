@@ -15,6 +15,15 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
         return Err("Empty timestamp".to_string());
     }
 
+    if let Ok(num) = s.parse::<u64>() {
+        let secs = if num > 100_000_000_000 {
+            num / 1000
+        } else {
+            num
+        };
+        return Ok(secs);
+    }
+
     let (date_part, time_part) = if let Some((d, t)) = s.split_once('T') {
         (d, Some(t))
     } else if let Some((d, t)) = s.split_once(' ') {
@@ -45,15 +54,38 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
         return Err("Pre-1970 dates unsupported".to_string());
     }
 
-    let mut seconds = (days as u64) * 86400;
+    let mut local_seconds: i64 = days * 86400;
+    let mut offset_seconds: i64 = 0;
+
     if let Some(t_str) = time_part {
-        let t_clean = t_str.trim_end_matches('Z');
-        let t_clean = t_clean.split('+').next().unwrap_or(t_clean);
-        let t_parts: Vec<&str> = t_clean.split(':').collect();
+        let t_clean = t_str.trim();
+        let (time_sub, tz_info) = if let Some(idx) = t_clean.find(['+', '-']) {
+            (&t_clean[..idx], Some(&t_clean[idx..]))
+        } else {
+            (t_clean.trim_end_matches(['Z', 'z']), None)
+        };
+
+        if let Some(tz) = tz_info {
+            let sign = if tz.starts_with('-') { -1i64 } else { 1i64 };
+            let raw_tz = tz.trim_start_matches(['+', '-']);
+            let (off_h, off_m) = if let Some((h_str, m_str)) = raw_tz.split_once(':') {
+                (h_str.parse::<i64>().unwrap_or(0), m_str.parse::<i64>().unwrap_or(0))
+            } else if raw_tz.len() >= 4 {
+                (
+                    raw_tz[..2].parse::<i64>().unwrap_or(0),
+                    raw_tz[2..4].parse::<i64>().unwrap_or(0),
+                )
+            } else {
+                (raw_tz.parse::<i64>().unwrap_or(0), 0)
+            };
+            offset_seconds = sign * (off_h * 3600 + off_m * 60);
+        }
+
+        let t_parts: Vec<&str> = time_sub.split(':').collect();
         if t_parts.len() >= 2 {
-            let h: u64 = t_parts[0].parse().unwrap_or(0);
-            let m: u64 = t_parts[1].parse().unwrap_or(0);
-            let s_val: u64 = if t_parts.len() >= 3 {
+            let h: i64 = t_parts[0].parse().unwrap_or(0);
+            let m: i64 = t_parts[1].parse().unwrap_or(0);
+            let s_val: i64 = if t_parts.len() >= 3 {
                 t_parts[2]
                     .split('.')
                     .next()
@@ -63,10 +95,15 @@ pub fn parse_iso_to_epoch(ts: &str) -> Result<u64, String> {
             } else {
                 0
             };
-            seconds += h * 3600 + m * 60 + s_val;
+            local_seconds += h * 3600 + m * 60 + s_val;
         }
     }
-    Ok(seconds)
+
+    let utc_seconds = local_seconds - offset_seconds;
+    if utc_seconds < 0 {
+        return Err("Pre-1970 timestamp".to_string());
+    }
+    Ok(utc_seconds as u64)
 }
 
 pub fn parse_boundary_datetime(val: &str, is_end_of_day: bool) -> Result<u64, String> {
