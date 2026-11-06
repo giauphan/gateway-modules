@@ -137,13 +137,14 @@ fn test_adapter_flowchart_endpoint() {
 
 #[test]
 fn test_adapter_candidates_custom_items() {
+    let now = daily_news::date::current_utc_timestamp();
     let raw_items = json!([
         {
             "id": "item-1",
             "url": "https://docs.anthropic.com/agent-tools",
             "title": "Anthropic Enhances Tool Use in Claude",
             "publisher": "Anthropic",
-            "published_at": "2026-11-04T10:00:00+00:00",
+            "published_at": now,
             "body": "Detailed guide on tool invocation with schema enforcement."
         }
     ]);

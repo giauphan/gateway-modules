@@ -13,7 +13,7 @@ use daily_news::rpc::make_json_resp;
 use daily_news::scoring::CandidateScorer;
 use daily_news::service::DailyNewsService;
 use daily_news::source_capture::HttpSourceCaptureAdapter;
-use daily_news::storage::FileStorageAdapter;
+use daily_news::storage::{FileStorageAdapter, SqliteStorageAdapter};
 use daily_news::StoragePort;
 use serde_json::{json, Value};
 use std::io::{self, BufRead};
@@ -31,7 +31,17 @@ fn main() {
                 cur
             }
         });
-    let storage = Arc::new(FileStorageAdapter::new(&base_dir));
+    let storage: Arc<dyn StoragePort> = if std::env::var("DAILY_NEWS_STORAGE_ENGINE").as_deref() == Ok("sqlite") {
+        match SqliteStorageAdapter::new(&base_dir) {
+            Ok(sqlite) => Arc::new(sqlite),
+            Err(e) => {
+                eprintln!("[daily-news] Warning: Failed to open SQLite storage ({e}), falling back to FileStorageAdapter");
+                Arc::new(FileStorageAdapter::new(&base_dir))
+            }
+        }
+    } else {
+        Arc::new(FileStorageAdapter::new(&base_dir))
+    };
     let initial_config = storage.load_config();
     let redis_provider = initial_config.redis_enabled.then(|| {
         RedisFeedProvider::new(

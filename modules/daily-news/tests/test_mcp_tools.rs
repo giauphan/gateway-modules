@@ -18,11 +18,12 @@ use std::sync::Arc;
 struct MockFeedFetcher;
 impl daily_news::ports::FeedFetcherPort for MockFeedFetcher {
     fn fetch_raw_items(&self, _limit: usize) -> Result<Vec<RawNewsItem>, String> {
+        let now = daily_news::date::current_utc_timestamp();
         let mut item1 = RawNewsItem::new(
             "hn_mcp_1",
             "https://example.com/rust-mcp-engine",
             "Rust Native MCP Engine Released",
-            "2026-11-04T10:00:00Z",
+            &now,
         );
         item1.tags = vec!["rust".to_string(), "mcp".to_string()];
 
@@ -30,7 +31,7 @@ impl daily_news::ports::FeedFetcherPort for MockFeedFetcher {
             "hn_mcp_2",
             "https://example.com/ai-agent-protocols",
             "Autonomous Agent Protocols Standardized",
-            "2026-11-04T09:00:00Z",
+            &now,
         );
         item2.tags = vec!["ai".to_string()];
 

@@ -8,7 +8,6 @@ use std::collections::HashMap;
 pub use crate::date::*;
 pub use crate::research_readiness::*;
 pub use crate::scoring::ProductionReadinessScoring;
-pub use crate::storage::resolve_state_dir;
 pub use crate::url::*;
 
 fn default_newsnow_url() -> String {
