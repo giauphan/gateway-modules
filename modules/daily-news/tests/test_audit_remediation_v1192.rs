@@ -123,6 +123,24 @@ fn test_audit_provenance_fail_open_eliminated() {
         ),
         AuditProvenanceStatus::IssuerAuthenticated
     );
+
+    // D. Empty or whitespace-only record_id and reviewer_id MUST NOT match arbitrary resolved doc
+    let empty_rec = VerificationRecord {
+        record_id: "   ".to_string(),
+        verified_at: "2026-11-04T00:00:00Z".to_string(),
+        reviewer_id: "".to_string(),
+        organization: "CertiK".to_string(),
+        method: "benchmark".to_string(),
+        audit_trail_ref: None,
+        secondary_source_ref: Some("https://certik.com".to_string()),
+    };
+    let arbitrary_certik_doc = "Generic CertiK homepage with no specific audit record or slug.";
+    let arbitrary_resolver = move |_r: &str| -> Option<String> { Some(arbitrary_certik_doc.to_string()) };
+    assert!(!is_audit_source_verified_with_resolver(
+        audit_text,
+        &empty_rec,
+        Some(&arbitrary_resolver)
+    ));
 }
 
 // ---------------------------------------------------------------------------

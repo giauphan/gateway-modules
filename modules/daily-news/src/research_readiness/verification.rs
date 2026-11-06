@@ -480,11 +480,13 @@ fn check_authoritative_domain_match(
     let matches_record = rec
         .audit_trail_ref
         .as_deref()
-        .is_some_and(|r| res_lower.contains(&r.to_lowercase()))
-        || res_lower.contains(&rec.record_id.to_lowercase())
-        || res_lower.contains(&rec.reviewer_id.to_lowercase())
+        .is_some_and(|r| !r.trim().is_empty() && res_lower.contains(&r.trim().to_lowercase()))
+        || (!rec.record_id.trim().is_empty()
+            && res_lower.contains(&rec.record_id.trim().to_lowercase()))
+        || (!rec.reviewer_id.trim().is_empty()
+            && res_lower.contains(&rec.reviewer_id.trim().to_lowercase()))
         || (rec.secondary_source_ref.as_deref().is_some_and(|s| {
-            let report_slug = s.split('/').next_back().unwrap_or("").to_lowercase();
+            let report_slug = s.split('/').next_back().unwrap_or("").trim().to_lowercase();
             !report_slug.is_empty() && res_lower.contains(&report_slug)
         }));
 
