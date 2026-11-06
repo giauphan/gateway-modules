@@ -389,6 +389,7 @@ pub fn get_accredited_domains(accred: &str) -> &'static [&'static str] {
 pub enum AuditProvenanceStatus {
     Unverified,
     AuditContentMatched,
+    ResolvedDocument,
     IssuerAuthenticated,
 }
 
@@ -398,6 +399,23 @@ pub fn check_audit_provenance_level(
     claim: &ClaimEvidence,
 ) -> AuditProvenanceStatus {
     check_audit_provenance_level_with_resolver(audit_text, rec, claim, None)
+}
+
+fn has_resolved_document_linkage(
+    rec: &VerificationRecord,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
+    let Some(res) = secondary_resolver else {
+        return false;
+    };
+    let Some(ref sec_ref) = rec.secondary_source_ref else {
+        return false;
+    };
+    let doc_opt = res(sec_ref).or_else(|| {
+        let hash = crate::url::compute_sha256(sec_ref);
+        res(&hash)
+    });
+    doc_opt.is_some_and(|d| !d.trim().is_empty())
 }
 
 pub fn check_audit_provenance_level_with_resolver(
@@ -412,6 +430,8 @@ pub fn check_audit_provenance_level_with_resolver(
 
     if is_audit_source_verified_with_resolver(audit_text, rec, secondary_resolver) {
         AuditProvenanceStatus::IssuerAuthenticated
+    } else if has_resolved_document_linkage(rec, secondary_resolver) {
+        AuditProvenanceStatus::ResolvedDocument
     } else {
         AuditProvenanceStatus::AuditContentMatched
     }
@@ -477,6 +497,29 @@ fn check_authoritative_domain_match(
     };
 
     let res_lower = doc.to_lowercase();
+    if has_untrusted_audit_markers(&res_lower) || res_lower.len() < 30 {
+        return false;
+    }
+
+    const AUTHENTIC_REPORT_MARKERS: &[&str] = &[
+        "audit report",
+        "audit trail",
+        "audit findings",
+        "security assessment",
+        "formal verification",
+        "benchmark evaluation",
+        "benchmark report",
+        "benchmarking",
+        "verification report",
+        "evaluation report",
+        "technical review",
+        "certification report",
+        "security review",
+    ];
+    if !AUTHENTIC_REPORT_MARKERS.iter().any(|m| res_lower.contains(m)) {
+        return false;
+    }
+
     let matches_record = rec
         .audit_trail_ref
         .as_deref()
@@ -490,7 +533,7 @@ fn check_authoritative_domain_match(
             !report_slug.is_empty() && res_lower.contains(&report_slug)
         }));
 
-    res_lower.contains(accred) && matches_record && !res_lower.is_empty()
+    res_lower.contains(accred) && matches_record
 }
 
 fn verify_cryptographic_provenance(

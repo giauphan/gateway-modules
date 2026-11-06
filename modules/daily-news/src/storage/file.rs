@@ -64,7 +64,7 @@ impl FileStorageAdapter {
         };
 
         let consumed_path = state_dir.join("consumed.json");
-        let initial_consumed: HashSet<String> = if consumed_path.is_file() {
+        let mut initial_consumed: HashSet<String> = if consumed_path.is_file() {
             fs::read_to_string(&consumed_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -92,6 +92,14 @@ impl FileStorageAdapter {
         } else {
             HashMap::new()
         };
+
+        // State reconciliation: any candidate marked Published in reservations.json
+        // is authoritatively consumed, preventing desync across unexpected restarts.
+        for (cid, res) in &initial_reservations {
+            if res.status == ReservationStatus::Published {
+                initial_consumed.insert(cid.clone());
+            }
+        }
 
         Self {
             config_path,
@@ -459,11 +467,16 @@ impl StoragePort for FileStorageAdapter {
             consumed_set.insert(candidate_id.to_string());
 
             let tmp_c = self.state_dir.join(format!("consumed.{}.tmp", uuid::Uuid::new_v4()));
-            if let Ok(cj) = serde_json::to_string_pretty(&consumed_set) {
-                if fs::write(&tmp_c, cj).is_ok() {
-                    let _ = fs::rename(&tmp_c, &consumed_path);
-                }
-            }
+            let cj = serde_json::to_string_pretty(&consumed_set)
+                .map_err(|e| format!("Failed to serialize consumed set: {e}"))?;
+            fs::write(&tmp_c, cj).map_err(|e| {
+                let _ = fs::remove_file(&tmp_c);
+                format!("Failed to write consumed set to {tmp_c:?}: {e}")
+            })?;
+            fs::rename(&tmp_c, &consumed_path).map_err(|e| {
+                let _ = fs::remove_file(&tmp_c);
+                format!("Failed to finalize consumed set to {consumed_path:?}: {e}")
+            })?;
 
             if let Ok(mut guard) = self.inner.reservations.write() {
                 *guard = reservations;

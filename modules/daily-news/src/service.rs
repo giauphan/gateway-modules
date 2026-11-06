@@ -350,6 +350,13 @@ impl DailyNewsService {
             }
         }
 
+        // Reverify cached readiness in place on all_candidates before filtering/ranking
+        for c in &mut all_candidates {
+            if !self.storage.is_consumed(&c.candidate_id) && self.reverify_cached_readiness_if_needed(c) {
+                updated = true;
+            }
+        }
+
         let mut seen_content_hashes = HashSet::new();
         let mut seen_title_hashes = HashSet::new();
 
@@ -358,17 +365,11 @@ impl DailyNewsService {
             .filter(|c| !self.storage.is_consumed(&c.candidate_id))
             .filter(|c| policy.is_candidate_eligible(c, &mut seen_content_hashes, &mut seen_title_hashes))
             .cloned()
-            .map(|mut c| {
-                if self.reverify_cached_readiness_if_needed(&mut c) {
-                    updated = true;
-                }
-                c
-            })
             .collect();
 
         let ranked = self.scorer.rank_candidates(eligible, limit);
         if updated {
-            self.storage.cache_candidates(&all_candidates);
+            let _ = self.storage.save_candidates(&all_candidates);
         }
         ranked
     }

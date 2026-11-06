@@ -109,6 +109,46 @@ pub fn get_mcp_tools_list() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "release_production_handoff",
+            "description": "Release an active production handoff reservation using its secret reservation token, returning the candidate to the available pool.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Unique candidate identifier whose reservation is to be released"
+                    },
+                    "token": {
+                        "type": "string",
+                        "description": "Secret reservation token received during handoff verification"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for releasing the reservation"
+                    }
+                },
+                "required": ["candidate_id", "token"]
+            }
+        }),
+        json!({
+            "name": "commit_production_handoff",
+            "description": "Commit an active production handoff reservation as PUBLISHED using its secret reservation token, permanently completing the handoff lifecycle.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Unique candidate identifier to mark permanently PUBLISHED"
+                    },
+                    "token": {
+                        "type": "string",
+                        "description": "Secret reservation token received during handoff verification"
+                    }
+                },
+                "required": ["candidate_id", "token"]
+            }
+        }),
+        json!({
             "name": "get_evidence_snapshot",
             "description": "Fetch the immutable, SHA-256 content-addressed text snapshot of a captured primary or secondary source.",
             "inputSchema": {

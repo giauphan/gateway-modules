@@ -86,7 +86,7 @@ fn create_test_service(base_dir: &PathBuf) -> (DailyNewsService, Arc<FileStorage
 #[test]
 fn test_mcp_tools_list_schema() {
     let tools = get_mcp_tools_list();
-    assert_eq!(tools.len(), 7, "Must expose declared MCP tools including verify_production_handoff");
+    assert_eq!(tools.len(), 9, "Must expose declared MCP tools including production handoff lifecycle");
 
     let expected_names = [
         "discover_candidates",
@@ -94,6 +94,8 @@ fn test_mcp_tools_list_schema() {
         "enrich_candidate",
         "verify_research_readiness",
         "verify_production_handoff",
+        "release_production_handoff",
+        "commit_production_handoff",
         "get_evidence_snapshot",
         "get_discussion",
     ];

@@ -87,7 +87,7 @@ fn test_mcp_jsonrpc_protocol_conformance() {
     assert_eq!(list_body["jsonrpc"], "2.0");
     assert_eq!(list_body["id"], 2);
     let tools = list_body["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 9);
 
     // 3. tools/call dispatches correctly with params.name and params.arguments
     let call_req = json!({
@@ -180,7 +180,7 @@ fn test_mcp_route_dispatch_via_handlers() {
     let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
     assert_eq!(body["jsonrpc"], "2.0");
     assert_eq!(body["id"], 99);
-    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 9);
 
     let _ = fs::remove_dir_all(tmp);
 }
