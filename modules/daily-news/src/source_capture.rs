@@ -225,8 +225,7 @@ fn safe_char_ceil(s: &str, mut idx: usize) -> usize {
     idx
 }
 
-pub fn extract_html_published_at(html: &str) -> Option<String> {
-    // 1. Common article publication meta tags
+fn extract_meta_tag_published_at(html: &str) -> Option<String> {
     const META_TAGS: &[&str] = &[
         "article:published_time",
         "og:published_time",
@@ -253,40 +252,45 @@ pub fn extract_html_published_at(html: &str) -> Option<String> {
             }
         }
     }
-
-    // 2. <time datetime="..."> tags
-    if let Some(time_pos) = find_ascii_ci(html, "<time") {
-        let window_start = safe_char_floor(html, time_pos);
-        let window_end = safe_char_ceil(html, (time_pos + 200).min(html.len()));
-        let window = &html[window_start..window_end];
-        if let Some(dt_pos) = find_ascii_ci(window, "datetime=\"") {
-            let val_start = safe_char_ceil(window, dt_pos + 10);
-            let after = &window[val_start..];
-            if let Some(end_quote) = after.find('"') {
-                let val = after[..end_quote].trim();
-                if crate::date::parse_iso_to_epoch(val).is_ok() {
-                    return Some(val.to_string());
-                }
-            }
-        }
-    }
-
-    // 3. JSON-LD datePublished property
-    if let Some(dp_pos) = find_ascii_ci(html, "\"datepublished\":") {
-        let after_start = safe_char_ceil(html, dp_pos + 16);
-        let after = &html[after_start..];
-        let trimmed = after.trim_start();
-        if let Some(rest) = trimmed.strip_prefix('"') {
-            if let Some(end_quote) = rest.find('"') {
-                let val = &rest[..end_quote];
-                if crate::date::parse_iso_to_epoch(val).is_ok() {
-                    return Some(val.to_string());
-                }
-            }
-        }
-    }
-
     None
+}
+
+fn extract_time_tag_published_at(html: &str) -> Option<String> {
+    let time_pos = find_ascii_ci(html, "<time")?;
+    let window_start = safe_char_floor(html, time_pos);
+    let window_end = safe_char_ceil(html, (time_pos + 200).min(html.len()));
+    let window = &html[window_start..window_end];
+    let dt_pos = find_ascii_ci(window, "datetime=\"")?;
+    let val_start = safe_char_ceil(window, dt_pos + 10);
+    let after = &window[val_start..];
+    let end_quote = after.find('"')?;
+    let val = after[..end_quote].trim();
+    if crate::date::parse_iso_to_epoch(val).is_ok() {
+        Some(val.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_jsonld_published_at(html: &str) -> Option<String> {
+    let dp_pos = find_ascii_ci(html, "\"datepublished\":")?;
+    let after_start = safe_char_ceil(html, dp_pos + 16);
+    let after = &html[after_start..];
+    let trimmed = after.trim_start();
+    let rest = trimmed.strip_prefix('"')?;
+    let end_quote = rest.find('"')?;
+    let val = &rest[..end_quote];
+    if crate::date::parse_iso_to_epoch(val).is_ok() {
+        Some(val.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn extract_html_published_at(html: &str) -> Option<String> {
+    extract_meta_tag_published_at(html)
+        .or_else(|| extract_time_tag_published_at(html))
+        .or_else(|| extract_jsonld_published_at(html))
 }
 
 fn is_block_tag(t: &str) -> bool {

@@ -5,16 +5,64 @@
 use super::visual::{has_inline_event_handler, is_mock_visual_bytes, is_valid_visual_asset_format};
 
 pub fn decode_png_stream(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    let Some((hdr, compressed_idat)) = parse_png_chunks(bytes) else {
+        return false;
+    };
+    let Some(row_bytes) = calculate_png_row_bytes(&hdr) else {
+        return false;
+    };
+    let Some(min_expected) = (hdr.height as usize).checked_mul(row_bytes) else {
+        return false;
+    };
+
+    // Zip bomb & RAM limit protection: max 32 MB decompressed output
+    const MAX_DECOMPRESSED_PNG_BYTES: usize = 32 * 1024 * 1024;
+    if min_expected > MAX_DECOMPRESSED_PNG_BYTES {
         return false;
     }
+
+    let Ok(decompressed) = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &compressed_idat,
+        MAX_DECOMPRESSED_PNG_BYTES,
+    ) else {
+        return false;
+    };
+
+    if decompressed.len() < min_expected {
+        return false;
+    }
+
+    validate_png_scanlines(&decompressed, hdr.height, row_bytes, hdr.interlace)
+}
+
+struct PngHeader {
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    color_type: u8,
+    interlace: u8,
+}
+
+fn parse_png_chunk_crc(bytes: &[u8], pos: usize, chunk_len: usize) -> bool {
+    let data_end = pos + 8 + chunk_len;
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&bytes[pos + 4..data_end]);
+    let expected_crc = u32::from_be_bytes([
+        bytes[data_end],
+        bytes[data_end + 1],
+        bytes[data_end + 2],
+        bytes[data_end + 3],
+    ]);
+    hasher.finalize() == expected_crc
+}
+
+fn parse_png_chunks(bytes: &[u8]) -> Option<(PngHeader, Vec<u8>)> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
     let mut pos = 8;
-    let mut saw_ihdr = false;
+    let mut header = None;
     let mut saw_iend = false;
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut bit_depth = 0u8;
-    let mut color_type = 0u8;
     let mut compressed_idat = Vec::new();
 
     while pos + 8 <= bytes.len() {
@@ -22,42 +70,39 @@ pub fn decode_png_stream(bytes: &[u8]) -> bool {
         let chunk_type = &bytes[pos + 4..pos + 8];
         let data_start = pos + 8;
         let data_end = data_start + chunk_len;
-        let chunk_end = data_end + 4; // plus 4 bytes CRC
+        let chunk_end = data_end + 4;
 
-        if chunk_end > bytes.len() {
-            return false;
-        }
-
-        // Validate CRC32 of chunk (type + data)
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&bytes[pos + 4..data_end]);
-        let expected_crc = u32::from_be_bytes([
-            bytes[data_end],
-            bytes[data_end + 1],
-            bytes[data_end + 2],
-            bytes[data_end + 3],
-        ]);
-        if hasher.finalize() != expected_crc {
-            return false;
+        if chunk_end > bytes.len() || !parse_png_chunk_crc(bytes, pos, chunk_len) {
+            return None;
         }
 
         match chunk_type {
             b"IHDR" => {
-                if chunk_len < 13 || saw_ihdr {
-                    return false;
+                if chunk_len < 13 || header.is_some() {
+                    return None;
                 }
-                width = u32::from_be_bytes([bytes[data_start], bytes[data_start + 1], bytes[data_start + 2], bytes[data_start + 3]]);
-                height = u32::from_be_bytes([bytes[data_start + 4], bytes[data_start + 5], bytes[data_start + 6], bytes[data_start + 7]]);
-                bit_depth = bytes[data_start + 8];
-                color_type = bytes[data_start + 9];
-                if width == 0 || height == 0 {
-                    return false;
+                let width = u32::from_be_bytes([bytes[data_start], bytes[data_start + 1], bytes[data_start + 2], bytes[data_start + 3]]);
+                let height = u32::from_be_bytes([bytes[data_start + 4], bytes[data_start + 5], bytes[data_start + 6], bytes[data_start + 7]]);
+                if width == 0 || height == 0 || width > 10000 || height > 10000 {
+                    return None;
                 }
-                saw_ihdr = true;
+                let bit_depth = bytes[data_start + 8];
+                let color_type = bytes[data_start + 9];
+                let interlace = bytes[data_start + 12];
+                if !matches!(bit_depth, 1 | 2 | 4 | 8 | 16) || interlace > 1 {
+                    return None;
+                }
+                header = Some(PngHeader {
+                    width,
+                    height,
+                    bit_depth,
+                    color_type,
+                    interlace,
+                });
             }
             b"IDAT" => {
-                if !saw_ihdr || chunk_len == 0 {
-                    return false;
+                if header.is_none() || chunk_len == 0 {
+                    return None;
                 }
                 compressed_idat.extend_from_slice(&bytes[data_start..data_end]);
             }
@@ -70,70 +115,37 @@ pub fn decode_png_stream(bytes: &[u8]) -> bool {
         pos = chunk_end;
     }
 
-    if !saw_ihdr || !saw_iend || compressed_idat.is_empty() {
-        return false;
+    if let (Some(hdr), true) = (header, saw_iend) {
+        if !compressed_idat.is_empty() {
+            return Some((hdr, compressed_idat));
+        }
     }
+    None
+}
 
-    if width == 0 || height == 0 || width > 10000 || height > 10000 {
-        return false;
-    }
-
-    let bpp = match color_type {
-        0 => 1usize,
+fn calculate_png_row_bytes(hdr: &PngHeader) -> Option<usize> {
+    let bpp = match hdr.color_type {
+        0 | 3 => 1usize,
         2 => 3usize,
-        3 => 1usize,
         4 => 2usize,
         6 => 4usize,
-        _ => return false,
+        _ => return None,
     };
-    let bits_per_pixel = match bpp.checked_mul(bit_depth as usize) {
-        Some(b) => b,
-        None => return false,
-    };
-    let row_data_bits = match (width as usize).checked_mul(bits_per_pixel) {
-        Some(b) => b,
-        None => return false,
-    };
+    let bits_per_pixel = bpp.checked_mul(hdr.bit_depth as usize)?;
+    let row_data_bits = (hdr.width as usize).checked_mul(bits_per_pixel)?;
     let row_data_bytes = (row_data_bits + 7) / 8;
-    let row_bytes = match 1usize.checked_add(row_data_bytes) {
-        Some(b) => b,
-        None => return false,
-    };
-    let min_expected = match (height as usize).checked_mul(row_bytes) {
-        Some(m) => m,
-        None => return false,
-    };
+    1usize.checked_add(row_data_bytes)
+}
 
-    // Zip bomb & RAM limit protection: max 32 MB decompressed output
-    const MAX_DECOMPRESSED_PNG_BYTES: usize = 32 * 1024 * 1024;
-    if min_expected > MAX_DECOMPRESSED_PNG_BYTES {
-        return false;
-    }
-
-    // Real decompression using miniz_oxide with bounded memory limit
-    let Ok(decompressed) = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
-        &compressed_idat,
-        MAX_DECOMPRESSED_PNG_BYTES,
-    ) else {
-        return false;
-    };
-
-    if decompressed.len() < min_expected {
-        return false;
-    }
-
-    // Scanline structure validation: each scanline starts with a filter byte (0..=4)
-    for r in 0..(height as usize) {
-        let offset = r * row_bytes;
-        if offset >= decompressed.len() {
-            return false;
-        }
-        let filter_type = decompressed[offset];
-        if filter_type > 4 {
-            return false;
+fn validate_png_scanlines(decompressed: &[u8], height: u32, row_bytes: usize, interlace: u8) -> bool {
+    if interlace == 0 {
+        for r in 0..(height as usize) {
+            let offset = r * row_bytes;
+            if offset >= decompressed.len() || decompressed[offset] > 4 {
+                return false;
+            }
         }
     }
-
     true
 }
 
@@ -191,6 +203,39 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
     saw_sof && saw_eoi
 }
 
+fn skip_gif_sub_blocks(bytes: &[u8], mut pos: usize) -> Option<usize> {
+    while pos < bytes.len() {
+        let sub_len = bytes[pos] as usize;
+        pos += 1;
+        if sub_len == 0 {
+            return Some(pos);
+        }
+        pos += sub_len;
+    }
+    None
+}
+
+fn process_gif_image_descriptor(bytes: &[u8], pos: usize) -> Option<(usize, bool)> {
+    if pos + 10 > bytes.len() {
+        return None;
+    }
+    let img_w = u16::from_le_bytes([bytes[pos + 5], bytes[pos + 6]]);
+    let img_h = u16::from_le_bytes([bytes[pos + 7], bytes[pos + 8]]);
+    let valid_dim = img_w > 0 && img_h > 0;
+    let lcl_packed = bytes[pos + 9];
+    let mut next_pos = pos + 10;
+    if (lcl_packed & 0x80) != 0 {
+        let lct_size = 3 * (1 << ((lcl_packed & 0x07) + 1));
+        next_pos += lct_size;
+    }
+    if next_pos >= bytes.len() {
+        return None;
+    }
+    next_pos += 1; // LZW min code size
+    let end_pos = skip_gif_sub_blocks(bytes, next_pos)?;
+    Some((end_pos, valid_dim))
+}
+
 pub fn decode_gif_stream(bytes: &[u8]) -> bool {
     if bytes.len() < 14 || (!bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a")) {
         return false;
@@ -212,45 +257,19 @@ pub fn decode_gif_stream(bytes: &[u8]) -> bool {
         match bytes[pos] {
             0x3B => return saw_image_descriptor,
             0x21 => {
-                // Extension block: skip function code and sub-blocks
-                pos += 2;
-                while pos < bytes.len() {
-                    let sub_len = bytes[pos] as usize;
-                    pos += 1;
-                    if sub_len == 0 {
-                        break;
-                    }
-                    pos += sub_len;
-                }
+                let Some(next_pos) = skip_gif_sub_blocks(bytes, pos + 2) else {
+                    return false;
+                };
+                pos = next_pos;
             }
             0x2C => {
-                // Image Descriptor
-                if pos + 10 > bytes.len() {
+                let Some((next_pos, valid_dim)) = process_gif_image_descriptor(bytes, pos) else {
                     return false;
-                }
-                let img_w = u16::from_le_bytes([bytes[pos + 5], bytes[pos + 6]]);
-                let img_h = u16::from_le_bytes([bytes[pos + 7], bytes[pos + 8]]);
-                if img_w > 0 && img_h > 0 {
+                };
+                if valid_dim {
                     saw_image_descriptor = true;
                 }
-                let lcl_packed = bytes[pos + 9];
-                pos += 10;
-                if (lcl_packed & 0x80) != 0 {
-                    let lct_size = 3 * (1 << ((lcl_packed & 0x07) + 1));
-                    pos += lct_size;
-                }
-                if pos >= bytes.len() {
-                    return false;
-                }
-                pos += 1; // LZW min code size
-                while pos < bytes.len() {
-                    let sub_len = bytes[pos] as usize;
-                    pos += 1;
-                    if sub_len == 0 {
-                        break;
-                    }
-                    pos += sub_len;
-                }
+                pos = next_pos;
             }
             _ => {
                 pos += 1;
@@ -308,6 +327,75 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
     }
 }
 
+fn validate_svg_content(utf8_str: &str) -> bool {
+    let lower = utf8_str.to_ascii_lowercase();
+    if lower.contains("<svg") && (lower.contains("</svg>") || lower.contains("/>")) {
+        return !lower.contains("<script")
+            && !lower.contains("<foreignobject")
+            && !lower.contains("<iframe")
+            && !lower.contains("javascript:")
+            && !has_inline_event_handler(&lower);
+    }
+    false
+}
+
+fn parse_mp4_box_length(bytes: &[u8], pos: usize, box_len: usize) -> Option<usize> {
+    if box_len == 0 {
+        Some(bytes.len() - pos)
+    } else if box_len == 1 {
+        if pos + 16 > bytes.len() {
+            return None;
+        }
+        let l64 = u64::from_be_bytes([
+            bytes[pos + 8], bytes[pos + 9], bytes[pos + 10], bytes[pos + 11],
+            bytes[pos + 12], bytes[pos + 13], bytes[pos + 14], bytes[pos + 15],
+        ]);
+        let l = usize::try_from(l64).ok()?;
+        if l < 16 {
+            return None;
+        }
+        Some(l)
+    } else if box_len < 8 {
+        None
+    } else {
+        Some(box_len)
+    }
+}
+
+fn decode_mp4_stream(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || (&bytes[4..8] != b"ftyp" && &bytes[4..8] != b"moov") {
+        return false;
+    }
+    let mut pos = 0;
+    let mut saw_ftyp = false;
+    let mut saw_moov_or_mdat = false;
+
+    while pos + 8 <= bytes.len() {
+        let box_len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+        let box_type = &bytes[pos + 4..pos + 8];
+        let Some(effective_len) = parse_mp4_box_length(bytes, pos, box_len) else {
+            return false;
+        };
+
+        let Some(next_pos) = pos.checked_add(effective_len) else {
+            return false;
+        };
+        if next_pos > bytes.len() || next_pos <= pos {
+            return false;
+        }
+
+        if box_type == b"ftyp" {
+            saw_ftyp = true;
+        } else if box_type == b"moov" || box_type == b"mdat" {
+            saw_moov_or_mdat = true;
+        }
+
+        pos = next_pos;
+    }
+
+    (saw_ftyp || &bytes[4..8] == b"moov") && (saw_moov_or_mdat || saw_ftyp)
+}
+
 pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
     if !is_valid_visual_asset_format(bytes) {
         return false;
@@ -319,75 +407,19 @@ pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
     if bytes.starts_with(b"\x89PNG") {
         return decode_png_stream(bytes);
     }
-
     if bytes.starts_with(&[0xFF, 0xD8]) {
         return decode_jpeg_stream(bytes);
     }
-
     if bytes.starts_with(b"GIF8") {
         return decode_gif_stream(bytes);
     }
-
     if bytes.starts_with(b"RIFF") {
         return decode_webp_stream(bytes);
     }
-
     if let Ok(utf8_str) = std::str::from_utf8(bytes) {
-        let lower = utf8_str.to_ascii_lowercase();
-        if lower.contains("<svg") && (lower.contains("</svg>") || lower.contains("/>")) {
-            return !lower.contains("<script")
-                && !lower.contains("<foreignobject")
-                && !lower.contains("<iframe")
-                && !lower.contains("javascript:")
-                && !has_inline_event_handler(&lower);
+        if validate_svg_content(utf8_str) {
+            return true;
         }
     }
-
-    if bytes.len() >= 16 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
-        let mut pos = 0;
-        let mut saw_ftyp = false;
-        let mut saw_moov_or_mdat = false;
-
-        while pos + 8 <= bytes.len() {
-            let box_len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
-            let box_type = &bytes[pos + 4..pos + 8];
-
-            let effective_len = if box_len == 0 {
-                bytes.len() - pos
-            } else if box_len == 1 {
-                if pos + 16 > bytes.len() {
-                    return false;
-                }
-                let l = u64::from_be_bytes([
-                    bytes[pos + 8], bytes[pos + 9], bytes[pos + 10], bytes[pos + 11],
-                    bytes[pos + 12], bytes[pos + 13], bytes[pos + 14], bytes[pos + 15],
-                ]) as usize;
-                if l < 16 {
-                    return false;
-                }
-                l
-            } else {
-                if box_len < 8 {
-                    return false;
-                }
-                box_len
-            };
-
-            if pos + effective_len > bytes.len() {
-                return false;
-            }
-
-            if box_type == b"ftyp" {
-                saw_ftyp = true;
-            } else if box_type == b"moov" || box_type == b"mdat" {
-                saw_moov_or_mdat = true;
-            }
-
-            pos += effective_len;
-        }
-
-        return (saw_ftyp || &bytes[4..8] == b"moov") && (saw_moov_or_mdat || saw_ftyp);
-    }
-
-    false
+    decode_mp4_stream(bytes)
 }

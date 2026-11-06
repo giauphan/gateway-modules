@@ -421,12 +421,7 @@ pub fn is_audit_source_verified(audit_text: &str, rec: &VerificationRecord) -> b
     is_audit_source_verified_with_resolver(audit_text, rec, None)
 }
 
-pub fn is_audit_source_verified_with_resolver(
-    audit_text: &str,
-    rec: &VerificationRecord,
-    secondary_resolver: super::types::SecondaryResolver,
-) -> bool {
-    let lower = audit_text.trim().to_lowercase();
+fn has_untrusted_audit_markers(lower: &str) -> bool {
     const UNTRUSTED_AUDIT_MARKERS: &[&str] = &[
         "not an official report",
         "self-certified",
@@ -451,67 +446,59 @@ pub fn is_audit_source_verified_with_resolver(
         "mock verification",
         "draft evaluation",
     ];
-    if UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m)) {
+    UNTRUSTED_AUDIT_MARKERS.iter().any(|m| lower.contains(m))
+}
+
+fn check_authoritative_domain_match(
+    sec_ref: &str,
+    accred: &str,
+    domains: &[&str],
+    rec: &VerificationRecord,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
+    let sec_tr = sec_ref.trim().to_lowercase();
+    let matches_domain = domains.iter().any(|d| {
+        sec_tr.starts_with(&format!("https://{d}/"))
+            || sec_tr.starts_with(&format!("https://www.{d}/"))
+    });
+    if !matches_domain {
         return false;
     }
 
-    let org_lower = rec.organization.trim().to_lowercase();
-    if is_mock_organization(&org_lower) || is_mock_reviewer_or_org(&rec.reviewer_id) {
-        return false;
-    }
-
-    let Some(accred) = find_accredited_issuer(&org_lower) else {
+    let Some(res) = secondary_resolver else {
         return false;
     };
-    if !lower.contains(accred) {
+    let resolved_doc = res(sec_ref).or_else(|| {
+        let hash = crate::url::compute_sha256(sec_ref);
+        res(&hash)
+    });
+    let Some(doc) = resolved_doc else {
         return false;
-    }
+    };
 
-    if !has_auditor_attribution(&lower, accred) {
-        return false;
-    }
+    let res_lower = doc.to_lowercase();
+    let matches_record = rec
+        .audit_trail_ref
+        .as_deref()
+        .is_some_and(|r| res_lower.contains(&r.to_lowercase()))
+        || res_lower.contains(&rec.record_id.to_lowercase())
+        || res_lower.contains(&rec.reviewer_id.to_lowercase())
+        || (rec.secondary_source_ref.as_deref().is_some_and(|s| {
+            let report_slug = s.split('/').next_back().unwrap_or("").to_lowercase();
+            !report_slug.is_empty() && res_lower.contains(&report_slug)
+        }));
 
-    // Authentic Issuer Provenance Gate:
-    // Mere wording/text claiming an accredited issuer is only AUDIT_CONTENT_MATCHED.
-    // ISSUER_AUTHENTICATED requires cryptographic digital signature OR verified
-    // authoritative domain document resolved via secondary_source_ref.
-    let domains = get_accredited_domains(accred);
+    res_lower.contains(accred) && matches_record && !res_lower.is_empty()
+}
 
-    // 1. Authoritative Domain Document Resolution via secondary_source_ref
-    let mut resolved_domain_provenance = false;
-    if let Some(ref sec_ref) = rec.secondary_source_ref {
-        let sec_tr = sec_ref.trim().to_lowercase();
-        let matches_domain = domains.iter().any(|d| {
-            sec_tr.starts_with(&format!("https://{d}/"))
-                || sec_tr.starts_with(&format!("https://www.{d}/"))
-        });
-        if matches_domain {
-            if let Some(res) = secondary_resolver {
-                if let Some(resolved_doc) = res(sec_ref).or_else(|| {
-                    let hash = crate::url::compute_sha256(sec_ref);
-                    res(&hash)
-                }) {
-                    let res_lower = resolved_doc.to_lowercase();
-                    let matches_record = rec
-                        .audit_trail_ref
-                        .as_deref()
-                        .is_some_and(|r| res_lower.contains(&r.to_lowercase()))
-                        || res_lower.contains(&rec.record_id.to_lowercase())
-                        || res_lower.contains(&rec.reviewer_id.to_lowercase())
-                        || (rec.secondary_source_ref.as_deref().is_some_and(|s| {
-                            let report_slug = s.split('/').next_back().unwrap_or("").to_lowercase();
-                            !report_slug.is_empty() && res_lower.contains(&report_slug)
-                        }));
-                    if res_lower.contains(accred) && matches_record && !res_lower.is_empty() {
-                        resolved_domain_provenance = true;
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Cryptographic Digital Signature Envelope with Verifiable Signature Hash
-    let mut has_cryptographic_provenance = false;
+fn verify_cryptographic_provenance(
+    audit_text: &str,
+    lower: &str,
+    accred: &str,
+    domains: &[&str],
+    rec: &VerificationRecord,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
     let has_crypto_envelope = (lower.contains("-----begin pgp signature-----")
         || lower.contains("-----begin pgp signed message-----"))
         && lower.contains("-----end pgp");
@@ -523,43 +510,72 @@ pub fn is_audit_source_verified_with_resolver(
     let has_supported_algo =
         lower.contains("ed25519") || lower.contains("secp256k1") || lower.contains("rsa");
 
-    if has_crypto_envelope || (has_digital_sig_header && has_supported_algo) {
-        let has_valid_sig_token = audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| {
-            if w.len() >= 64 && w.chars().all(|c| c.is_ascii_hexdigit()) {
-                let first_ch = w.chars().next().unwrap_or(' ');
-                !w.chars().all(|c| c == first_ch)
-            } else {
-                false
-            }
-        });
-
-        let has_audit_hash_integrity = rec.audit_trail_ref.as_deref().is_some_and(|r| {
-            let tr = r.trim().to_ascii_lowercase();
-            tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
-        });
-
-        if has_valid_sig_token && has_audit_hash_integrity {
-            if let Some(res) = secondary_resolver {
-                if let Some(ref sec_ref) = rec.secondary_source_ref {
-                    if let Some(doc) = res(sec_ref).or_else(|| {
-                        let hash = crate::url::compute_sha256(sec_ref);
-                        res(&hash)
-                    }) {
-                        if !doc.trim().is_empty() {
-                            has_cryptographic_provenance = true;
-                        }
-                    }
-                }
-            } else if has_crypto_envelope
-                && !lower.contains("mock")
-                && !lower.contains("dummy")
-            {
-                has_cryptographic_provenance = true;
-            }
-        }
+    if !has_crypto_envelope && (!has_digital_sig_header || !has_supported_algo) {
+        return false;
     }
 
-    resolved_domain_provenance || has_cryptographic_provenance
+    let has_valid_sig_token = audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        if w.len() >= 64 && w.chars().all(|c| c.is_ascii_hexdigit()) {
+            let first_ch = w.chars().next().unwrap_or(' ');
+            !w.chars().all(|c| c == first_ch)
+        } else {
+            false
+        }
+    });
+
+    let has_audit_hash_integrity = rec.audit_trail_ref.as_deref().is_some_and(|r| {
+        let tr = r.trim().to_ascii_lowercase();
+        tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
+    });
+
+    if !has_valid_sig_token || !has_audit_hash_integrity {
+        return false;
+    }
+
+    rec.secondary_source_ref.as_deref().is_some_and(|sec_ref| {
+        check_authoritative_domain_match(sec_ref, accred, domains, rec, secondary_resolver)
+    })
+}
+
+pub fn is_audit_source_verified_with_resolver(
+    audit_text: &str,
+    rec: &VerificationRecord,
+    secondary_resolver: super::types::SecondaryResolver,
+) -> bool {
+    let lower = audit_text.trim().to_lowercase();
+    if has_untrusted_audit_markers(&lower) {
+        return false;
+    }
+
+    let org_lower = rec.organization.trim().to_lowercase();
+    if is_mock_organization(&org_lower) || is_mock_reviewer_or_org(&rec.reviewer_id) {
+        return false;
+    }
+
+    let Some(accred) = find_accredited_issuer(&org_lower) else {
+        return false;
+    };
+    if !lower.contains(accred) || !has_auditor_attribution(&lower, accred) {
+        return false;
+    }
+
+    let domains = get_accredited_domains(accred);
+    let resolved_domain = rec
+        .secondary_source_ref
+        .as_deref()
+        .is_some_and(|sec_ref| {
+            check_authoritative_domain_match(sec_ref, accred, &domains, rec, secondary_resolver)
+        });
+
+    resolved_domain
+        || verify_cryptographic_provenance(
+            audit_text,
+            &lower,
+            accred,
+            &domains,
+            rec,
+            secondary_resolver,
+        )
 }
 
 pub fn is_audit_artifact_corroborated(

@@ -445,19 +445,21 @@ pub fn is_visual_rights_verified(
         || lower.contains("apache software foundation")
         || lower.contains("free software foundation");
 
-    let has_institutional_entity = lower.contains("foundation")
-        || lower.contains("corp")
-        || lower.contains("inc")
-        || lower.contains("ltd")
-        || lower.contains("gmbh")
-        || lower.contains("llc")
-        || lower.contains("university")
-        || lower.contains("institute")
-        || lower.contains("consortium");
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    const ENTITY_TOKENS: &[&str] = &[
+        "foundation", "corp", "corporation", "inc", "ltd", "gmbh", "llc",
+        "university", "institute", "consortium",
+    ];
+    let has_institutional_entity = tokens.iter().any(|t| ENTITY_TOKENS.contains(t));
+    let has_attribution = tokens.iter().any(|t| matches!(*t, "copyright" | "author" | "authors"))
+        || lower.contains("licensed by");
 
     has_domain_linkage
         || has_accredited_registry
-        || (has_institutional_entity && (lower.contains("copyright") || lower.contains("licensed by") || lower.contains("author")))
+        || (has_institutional_entity && has_attribution)
 }
 
 fn verify_single_visual_asset(v: &VisualEvidence, asset_resolver: AssetResolver) -> bool {

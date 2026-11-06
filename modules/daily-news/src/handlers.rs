@@ -633,7 +633,7 @@ fn dispatch_pipeline_and_admin(
             if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
             }
-            let mut b = body.clone();
+            let mut b = if body.is_object() { body.clone() } else { json!({}) };
             b["action"] = json!("release");
             Some(handle_handoff(service, &b))
         }
@@ -641,7 +641,7 @@ fn dispatch_pipeline_and_admin(
             if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
             }
-            let mut b = body.clone();
+            let mut b = if body.is_object() { body.clone() } else { json!({}) };
             b["action"] = json!("commit");
             Some(handle_handoff(service, &b))
         }
