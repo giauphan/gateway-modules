@@ -204,8 +204,8 @@ fn test_audit_provenance_rejects_unauthenticated_mock_resolver_for_video_ready()
     let readiness_mock = evaluate_readiness_full(
         Some(&primary),
         Some(primary_text),
-        &[claim.clone()],
-        &[visual.clone()],
+        std::slice::from_ref(&claim),
+        std::slice::from_ref(&visual),
         ContentOrigin::Article,
         Some(&mock_resolver),
         Some(&audit_resolver),
@@ -261,11 +261,21 @@ fn test_audit_provenance_rejects_unauthenticated_mock_resolver_for_video_ready()
     );
 
     // Case 2b: Cryptographically signed authentic gateway fetch attestation
+    daily_news::research_readiness::global_trust_store().register_key(
+        "gateway-internal-hmac-1",
+        daily_news::research_readiness::TrustedKey::HmacSha256(
+            b"gateway-production-attestation-secret-2026".to_vec(),
+        ),
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let attestation_block = daily_news::research_readiness::create_signed_gateway_attestation(
         "https://certik.com/reports/certik_audit_2026_99",
         "https://certik.com/reports/certik_audit_2026_99",
         &audit_sha,
-        1793618000,
+        now,
         "CertiK",
         "gateway-internal-hmac-1",
         b"gateway-production-attestation-secret-2026",
@@ -400,12 +410,12 @@ fn test_license_tasl_and_asset_sha256_binding_required() {
         if sha == asset_sha_clone { Some(valid_png_bytes.to_vec()) } else { None }
     };
     assert!(are_visuals_provenance_verified_full(
-        &[visual.clone()],
+        std::slice::from_ref(&visual),
         Some(&asset_resolver),
         Some(&res_valid_tasl)
     ));
     assert!(!are_visuals_provenance_verified_full(
-        &[visual.clone()],
+        std::slice::from_ref(&visual),
         Some(&asset_resolver),
         Some(&res_floating)
     ));

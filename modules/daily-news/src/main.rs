@@ -31,12 +31,21 @@ fn main() {
                 cur
             }
         });
-    let storage: Arc<dyn StoragePort> = if std::env::var("DAILY_NEWS_STORAGE_ENGINE").as_deref() == Ok("sqlite") {
+    let use_sqlite = match std::env::var("DAILY_NEWS_STORAGE_ENGINE") {
+        Ok(engine) => engine.eq_ignore_ascii_case("sqlite"),
+        Err(_) => {
+            std::env::var("DAILY_NEWS_ENV").as_deref() == Ok("production")
+                || std::env::var("GATEWAY_ENV").as_deref() == Ok("production")
+        }
+    };
+
+    let storage: Arc<dyn StoragePort> = if use_sqlite {
         match SqliteStorageAdapter::new(&base_dir) {
             Ok(sqlite) => Arc::new(sqlite),
             Err(e) => {
-                eprintln!("[daily-news] Warning: Failed to open SQLite storage ({e}), falling back to FileStorageAdapter");
-                Arc::new(FileStorageAdapter::new(&base_dir))
+                eprintln!("[daily-news] FATAL: SQLite storage engine configured, but initialization failed: {e}");
+                eprintln!("[daily-news] Failing closed to prevent split-brain state or duplicate publish claims.");
+                std::process::exit(1);
             }
         }
     } else {

@@ -262,12 +262,16 @@ Khi trình biên dịch báo lỗi mượn vùng nhớ (borrow checker), **tuy�
          cow
      }
      ```
-  3. **Struct cấu hình / DTO kết hợp dữ liệu tĩnh và động**:
+  3. **Struct cấu hình / DTO kết hợp dữ liệu tĩnh và động (và Zero-Copy Serde)**:
+     - **Lưu ý quan trọng với Serde**: Mặc định `#[derive(Deserialize)]` trên `Cow<'a, str>` vẫn cấp phát `Cow::Owned(String)`. Khi sinh code Rust cho DTO/Config cần zero-copy deserialization, **bắt buộc** thêm `#[serde(borrow)]`:
      ```rust
      use std::borrow::Cow;
+     use serde::Deserialize;
 
+     #[derive(Deserialize)]
      pub struct EndpointConfig<'a> {
-         pub host: Cow<'a, str>, // Có thể nhận &'static str ("localhost") hoặc String động
+         #[serde(borrow)] // Bắt buộc để Serde mượn trực tiếp từ input buffer (Cow::Borrowed)
+         pub host: Cow<'a, str>, // Có thể nhận &'a str (0 alloc) hoặc tự unescape sang String khi JSON có ký tự escape (\n, \")
          pub port: u16,
      }
      ```
@@ -367,5 +371,70 @@ Từ khóa `unsafe` tắt các kiểm tra an toàn bộ nhớ của Rust. Chỉ 
 ---
 
 > **Mẹo kiểm tra tự động:** Bạn có thể chạy lệnh `cargo clippy` trong dự án Rust. Công cụ này sẽ tự động phát hiện các đoạn code dùng `unwrap()` không an toàn và các anti-pattern kể trên, đồng thời gợi ý cách sửa trực tiếp trên terminal.
+
+---
+
+### Advanced AI Rust Code Generation Rules: Clean Architecture, Type-Driven Design & Performance Optimization
+
+Khi AI sinh code (generate) hoặc refactor dự án Rust, bắt buộc áp dụng các nguyên tắc kiến trúc và tối ưu hóa nâng cao sau:
+
+#### 1. Clean / Hexagonal Architecture trong Rust (Ports & Adapters)
+- **Tách biệt tầng bằng Cargo Workspace hoặc Module Visibility (`pub(crate)`)**:
+  - `domain`: Chứa Entities, Value Objects, Domain Events và Domain Errors. **0 phụ thuộc ngoại vi** (không `tokio`, `sqlx`, `axum`, `reqwest`).
+  - `application` (Use Cases): Chứa logic điều phối nghiệp vụ và định nghĩa **Inbound / Outbound Ports (Traits)**. Chỉ phụ thuộc vào `domain`.
+  - `adapters` / `infrastructure`: Chứa HTTP handlers (Axum/Actix/std::net), Database repositories (SQLx/Postgres/Redis), CLI và `main.rs` (Composition Root). Triển khai các `trait` của tầng `application`.
+- **Tránh Anemic Domain Model & DTO Duplication Hell**:
+  - Đóng gói hành vi và quy tắc bất biến (invariants) ngay trong Entity / Value Object thay vì đẩy hết ra hàm thủ tục bên ngoài.
+  - Chỉ tạo DTO riêng ở biên (HTTP/DB Adapter) khi schema thực sự khác biệt với Domain Model.
+
+#### 2. Type-Driven Design & Triết lý "Parse, Don't Validate"
+- **Chống Primitive Obsession bằng Newtype Pattern**:
+  - Không truyền trực tiếp `String`, `u64`, `i32` trần qua các tầng nghiệp vụ cho các giá trị có ngữ nghĩa (như `UserId`, `OrgId`, `Email`, `Money`).
+  - Bọc trong tuple struct với trường `private` và chỉ cho phép khởi tạo qua hàm `parse` / `TryFrom` trả về `Result` (**Correct-by-Construction**):
+    ```rust
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct EmailAddress(String); // Trường bên trong là private
+
+    impl EmailAddress {
+        pub fn parse(raw: impl Into<String>) -> Result<Self, DomainError> {
+            let s = raw.into();
+            if s.contains('@') && s.contains('.') {
+                Ok(Self(s))
+            } else {
+                Err(DomainError::InvalidEmail)
+            }
+        }
+        pub fn as_str(&self) -> &str { &self.0 }
+    }
+    ```
+- **Typestate Pattern (Biến trạng thái bất hợp lệ thành lỗi biên dịch)**:
+  - Mã hóa trạng thái vòng đời đối tượng vào hệ thống kiểu (`struct Connection<State>`) thay vì dùng cờ `bool` (`is_connected: bool`) kiểm tra lúc runtime.
+
+#### 3. Kiến trúc Xử lý Lỗi Phân Tầng (`thiserror` vs `anyhow`)
+- **Tầng `domain` & `application` (Library Crates)**: Bắt buộc dùng **`thiserror`** để định nghĩa `enum` lỗi tường minh, có thể `match` để xử lý nhánh lỗi nghiệp vụ. Không bao giờ để lọt lỗi hạ tầng (`sqlx::Error`, `io::Error`) vào chữ ký hàm của `domain`.
+- **Tầng `adapters` / `bin` (`main.rs`, CLI, Top-level Handlers)**: Dùng **`anyhow::Result`** kết hợp `.context("ngữ cảnh lỗi rõ ràng")?` để gom vết lỗi khi ghi log hoặc trả về điểm cuối.
+
+#### 4. Tối ưu hóa Hiệu năng, Bộ nhớ & Đa luồng (Zero-Cost & Concurrency)
+1. **Cấp phát trước vùng nhớ (`with_capacity`) & Tái sử dụng Buffer**:
+   - Khi biết trước kích thước ước lượng, bắt buộc dùng `Vec::with_capacity(n)`, `String::with_capacity(n)`, `HashMap::with_capacity(n)`.
+   - Trong vòng lặp tần suất cao (hot loop), truyền `&mut Vec<u8>` / `&mut String` từ ngoài vào và gọi `.clear()` thay vì khởi tạo mới ở mỗi vòng lặp.
+2. **Static Dispatch vs Dynamic Dispatch**:
+   - Ưu tiên Generics (`fn execute<R: UserRepository>(repo: &R)`) trên đường truyền nóng (hot path) để trình biên dịch monomorphize và inline hàm (Zero-cost).
+   - Dùng `Arc<dyn UserRepository + Send + Sync>` ở tầng khởi tạo ứng dụng (App State / Router) khi cần giảm thời gian biên dịch và linh hoạt cấu hình.
+3. **Quy tắc An toàn Async & Lock (Chống Deadlock)**:
+   - **Tuyệt đối không giữ khóa đồng bộ (`std::sync::MutexGuard`, `RwLockReadGuard`) băng qua điểm `.await`**. Hãy khóa, trích xuất dữ liệu hoặc thả khóa (`drop(guard)`) trong một block `{ ... }` trước khi gọi `.await`.
+4. **Cấu hình Lints Nghiêm ngặt (`Cargo.toml`)**:
+   Khuyến nghị cấu hình trong `Cargo.toml` để trình biên dịch tự động chặn lỗi:
+   ```toml
+   [lints.clippy]
+   all = { level = "deny", priority = -1 }
+   pedantic = { level = "warn", priority = -1 }
+   perf = { level = "deny", priority = -1 }
+   unwrap_used = "deny"
+   expect_used = "warn"
+   panic = "deny"
+   todo = "warn"
+   dbg_macro = "deny"
+   ```
 
 

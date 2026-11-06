@@ -571,24 +571,46 @@ pub fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {
 }
 
 fn matches_declared_license_type(declared: &str, doc_lower: &str) -> bool {
-    match declared {
+    let dec = declared.trim().to_ascii_lowercase();
+    match dec.as_str() {
         "cc-by" | "cc-by-4.0" | "cc-by-3.0" | "cc-by-2.0" => {
-            (doc_lower.contains("creative commons")
+            let has_cc_grant = doc_lower.contains("creative commons")
                 || doc_lower.contains("cc-by")
-                || doc_lower.contains("cc by"))
-                && !doc_lower.contains("mit license")
-                && !doc_lower.contains("apache license")
-        }
-        "cc-by-sa" | "cc-by-sa-4.0" => {
-            doc_lower.contains("creative commons")
-                || doc_lower.contains("sharealike")
+                || doc_lower.contains("cc by");
+            let has_sharealike = doc_lower.contains("sharealike")
                 || doc_lower.contains("share-alike")
                 || doc_lower.contains("cc-by-sa")
+                || doc_lower.contains("cc by-sa");
+            let has_restrictions = doc_lower.contains("noncommercial")
+                || doc_lower.contains("non-commercial")
+                || doc_lower.contains("cc-by-nc")
+                || doc_lower.contains("noderivatives")
+                || doc_lower.contains("no-derivatives")
+                || doc_lower.contains("cc-by-nd");
+            let is_other_license = doc_lower.contains("mit license")
+                || doc_lower.contains("apache license")
+                || doc_lower.contains("bsd license");
+
+            has_cc_grant && !has_sharealike && !has_restrictions && !is_other_license
+        }
+        "cc-by-sa" | "cc-by-sa-4.0" => {
+            let has_cc = doc_lower.contains("creative commons")
+                || doc_lower.contains("cc-by");
+            let has_sharealike = doc_lower.contains("sharealike")
+                || doc_lower.contains("share-alike")
+                || doc_lower.contains("cc-by-sa")
+                || doc_lower.contains("cc by-sa");
+            let has_nc_or_nd = doc_lower.contains("noncommercial")
+                || doc_lower.contains("non-commercial")
+                || doc_lower.contains("noderivatives")
+                || doc_lower.contains("no-derivatives");
+            has_cc && has_sharealike && !has_nc_or_nd
         }
         "cc0" | "public-domain" => {
             doc_lower.contains("public domain")
                 || doc_lower.contains("cc0")
                 || doc_lower.contains("no rights reserved")
+                || doc_lower.contains("dedicated to the public domain")
         }
         "mit" => {
             (doc_lower.contains("mit license")

@@ -325,7 +325,7 @@ fn test_cached_readiness_downgrade_persists_across_restarts() {
     };
 
     // Save as VideoReady initially
-    storage.save_candidates(&[cand.clone()]).unwrap();
+    storage.save_candidates(std::slice::from_ref(&cand)).unwrap();
 
     // Now corrupt the primary snapshot text on disk (simulating evidence alteration or corruption)
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), "CORRUPTED CONTENT").unwrap();

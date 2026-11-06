@@ -30,17 +30,26 @@ impl SqliteStorageAdapter {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open SQLite database at {db_path:?}: {e}"))?;
 
-        // Initialize pragmas for high concurrency and crash durability
-        conn.execute_batch(
+        // Initialize pragmas for high concurrency and crash durability.
+        // synchronous = FULL guarantees WAL checkpoint and transaction durability across power loss.
+        let sync_pragma = match std::env::var("DAILY_NEWS_SQLITE_SYNCHRONOUS").as_deref() {
+            Ok("NORMAL" | "normal") => "PRAGMA synchronous = NORMAL;",
+            _ => "PRAGMA synchronous = FULL;",
+        };
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
+             {sync_pragma}
              PRAGMA busy_timeout = 10000;
              PRAGMA foreign_keys = ON;"
-        ).map_err(|e| format!("Failed to configure SQLite pragmas: {e}"))?;
+        )).map_err(|e| format!("Failed to configure SQLite pragmas: {e}"))?;
 
         // Initialize schema
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS config (
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                migrated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 json_val TEXT NOT NULL
             );
@@ -87,109 +96,196 @@ impl SqliteStorageAdapter {
     }
 
     fn migrate_legacy_json_files(&self) -> Result<(), String> {
+        // Fast-path: Check if legacy migration has already been executed.
+        // Idempotent migration marker prevents re-reading legacy JSON on restart
+        // and guarantees that active SQLite PUBLISHED states are never downgraded.
+        {
+            let conn = self.conn.lock().map_err(|_| "Poisoned SQLite lock")?;
+            let already_migrated: bool = conn
+                .query_row(
+                    "SELECT count(*) FROM schema_migrations WHERE version = 1",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if already_migrated {
+                return Ok(());
+            }
+        }
+
         let mut conn = self.conn.lock().map_err(|_| "Poisoned SQLite lock")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("Failed to start migration transaction: {e}"))?;
 
+        // Re-check schema_migrations inside the immediate write transaction
+        // to handle concurrent process startup race conditions.
+        let already_done: bool = tx
+            .query_row(
+                "SELECT count(*) FROM schema_migrations WHERE version = 1",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if already_done {
+            return Ok(());
+        }
+
         // 1. Migrate config.json
         let config_path = self.state_dir.join("config.json");
         if config_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                let count: i64 = tx.query_row("SELECT count(*) FROM config WHERE key = 'active'", [], |r| r.get(0)).unwrap_or(0);
-                if count == 0 {
-                    let _ = tx.execute("INSERT OR REPLACE INTO config (key, json_val) VALUES ('active', ?)", params![content]);
-                }
+            let content = fs::read_to_string(&config_path)
+                .map_err(|e| format!("Failed to read legacy config.json: {e}"))?;
+            let count: i64 = tx.query_row("SELECT count(*) FROM config WHERE key = 'active'", [], |r| r.get(0)).unwrap_or(0);
+            if count == 0 {
+                tx.execute("INSERT OR REPLACE INTO config (key, json_val) VALUES ('active', ?)", params![content])
+                    .map_err(|e| format!("Failed to migrate config: {e}"))?;
             }
         }
 
         // 2. Migrate candidates.json
+        // Supports legacy JSON array format (from FileStorageAdapter) and legacy map format
         let candidates_path = self.state_dir.join("candidates.json");
         if candidates_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&candidates_path) {
-                if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, NormalizedCandidate>>(&content) {
-                    for (cid, cand) in map {
-                        if let Ok(json) = serde_json::to_string(&cand) {
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs() as i64;
-                            let _ = tx.execute(
-                                "INSERT OR IGNORE INTO candidates (candidate_id, json_val, updated_at) VALUES (?, ?, ?)",
-                                params![cid, json, now],
-                            );
-                        }
-                    }
+            let content = fs::read_to_string(&candidates_path)
+                .map_err(|e| format!("Failed to read legacy candidates.json: {e}"))?;
+            let candidate_list: Vec<NormalizedCandidate> = serde_json::from_str::<Vec<NormalizedCandidate>>(&content)
+                .or_else(|_| {
+                    serde_json::from_str::<std::collections::HashMap<String, NormalizedCandidate>>(&content)
+                        .map(|m| m.into_values().collect())
+                })
+                .map_err(|e| format!("Failed to parse legacy candidates.json: {e}"))?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            for cand in candidate_list {
+                if let Ok(json) = serde_json::to_string(&cand) {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO candidates (candidate_id, json_val, updated_at) VALUES (?, ?, ?)",
+                        params![cand.candidate_id, json, now],
+                    ).map_err(|e| format!("Failed to migrate candidate {}: {e}", cand.candidate_id))?;
                 }
             }
         }
 
         // 3. Migrate consumed.json
+        // Supports JSON array of strings and JSON set of strings
         let consumed_path = self.state_dir.join("consumed.json");
         if consumed_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&consumed_path) {
-                if let Ok(set) = serde_json::from_str::<HashSet<String>>(&content) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
-                    for cid in set {
-                        let _ = tx.execute(
-                            "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
-                            params![cid, now],
-                        );
-                    }
-                }
+            let content = fs::read_to_string(&consumed_path)
+                .map_err(|e| format!("Failed to read legacy consumed.json: {e}"))?;
+            let ids: Vec<String> = serde_json::from_str::<Vec<String>>(&content)
+                .or_else(|_| serde_json::from_str::<HashSet<String>>(&content).map(|s| s.into_iter().collect()))
+                .map_err(|e| format!("Failed to parse legacy consumed.json: {e}"))?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            for cid in ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
+                    params![cid, now],
+                ).map_err(|e| format!("Failed to migrate consumed ID {cid}: {e}"))?;
             }
         }
 
         // 4. Migrate reservations.json
+        // Supports map or array formats, and strictly enforces the invariant:
+        // A candidate marked PUBLISHED can NEVER be downgraded to RESERVED.
         let reservations_path = self.state_dir.join("reservations.json");
         if reservations_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&reservations_path) {
-                if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, HandoffReservation>>(&content) {
-                    for (cid, res) in map {
-                        let status_str = match res.status {
-                            ReservationStatus::Reserved => "RESERVED",
-                            ReservationStatus::Published => "PUBLISHED",
-                        };
-                        let _ = tx.execute(
-                            "INSERT OR REPLACE INTO reservations (candidate_id, reservation_id, token_hash, worker_id, status, created_at, expires_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            params![
-                                cid,
-                                res.reservation_id,
-                                res.token_hash,
-                                res.worker_id,
-                                status_str,
-                                res.created_at,
-                                res.expires_at as i64,
-                            ],
-                        );
-                    }
-                }
+            let content = fs::read_to_string(&reservations_path)
+                .map_err(|e| format!("Failed to read legacy reservations.json: {e}"))?;
+            let res_map: std::collections::HashMap<String, HandoffReservation> = serde_json::from_str::<std::collections::HashMap<String, HandoffReservation>>(&content)
+                .or_else(|_| {
+                    serde_json::from_str::<Vec<HandoffReservation>>(&content)
+                        .map(|v| v.into_iter().map(|r| (r.candidate_id.clone(), r)).collect())
+                })
+                .map_err(|e| format!("Failed to parse legacy reservations.json: {e}"))?;
+
+            for (cid, res) in res_map {
+                let status_str = match res.status {
+                    ReservationStatus::Reserved => "RESERVED",
+                    ReservationStatus::Published => "PUBLISHED",
+                };
+                tx.execute(
+                    "INSERT INTO reservations (candidate_id, reservation_id, token_hash, worker_id, status, created_at, expires_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(candidate_id) DO UPDATE SET
+                         reservation_id = excluded.reservation_id,
+                         token_hash = excluded.token_hash,
+                         worker_id = excluded.worker_id,
+                         status = excluded.status,
+                         created_at = excluded.created_at,
+                         expires_at = excluded.expires_at
+                     WHERE reservations.status != 'PUBLISHED' OR excluded.status = 'PUBLISHED'",
+                    params![
+                        cid,
+                        res.reservation_id,
+                        res.token_hash,
+                        res.worker_id,
+                        status_str,
+                        res.created_at,
+                        res.expires_at as i64,
+                    ],
+                ).map_err(|e| format!("Failed to migrate reservation {cid}: {e}"))?;
             }
         }
 
         // 5. Reconcile commit_tx.journal if present
         let journal_path = self.state_dir.join("commit_tx.journal");
+        let mut has_journal_to_clean = false;
         if journal_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&journal_path) {
-                if let Ok(entry) = serde_json::from_str::<super::file::CommitJournalEntry>(&content) {
-                    let now = entry.timestamp as i64;
-                    let _ = tx.execute(
-                        "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
-                        params![entry.candidate_id, now],
-                    );
-                    let _ = tx.execute(
-                        "UPDATE reservations SET status = 'PUBLISHED' WHERE candidate_id = ?",
-                        params![entry.candidate_id],
-                    );
-                }
-            }
-            let _ = fs::remove_file(&journal_path);
+            let content = fs::read_to_string(&journal_path)
+                .map_err(|e| format!("Failed to read legacy commit_tx.journal: {e}"))?;
+            let entry = serde_json::from_str::<super::file::CommitJournalEntry>(&content)
+                .map_err(|e| format!("Failed to parse legacy commit_tx.journal: {e}"))?;
+            has_journal_to_clean = true;
+            let now = entry.timestamp as i64;
+            tx.execute(
+                "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
+                params![entry.candidate_id, now],
+            ).map_err(|e| format!("Failed to reconcile journal consumed {}: {e}", entry.candidate_id))?;
+            tx.execute(
+                "INSERT INTO reservations (candidate_id, reservation_id, token_hash, worker_id, status, created_at, expires_at)
+                 VALUES (?, ?, ?, ?, 'PUBLISHED', '', ?)
+                 ON CONFLICT(candidate_id) DO UPDATE SET status = 'PUBLISHED'",
+                params![
+                    entry.candidate_id,
+                    entry.published_reservation.reservation_id,
+                    entry.published_reservation.token_hash,
+                    entry.published_reservation.worker_id,
+                    entry.published_reservation.expires_at as i64,
+                ],
+            ).map_err(|e| format!("Failed to reconcile journal published reservation {}: {e}", entry.candidate_id))?;
         }
 
-        tx.commit().map_err(|e| format!("Failed to commit migration: {e}"))?;
+        // 6. Record schema migration version 1
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        tx.execute(
+            "INSERT OR REPLACE INTO schema_migrations (version, migrated_at) VALUES (1, ?)",
+            params![now],
+        ).map_err(|e| format!("Failed to record schema migration marker: {e}"))?;
+
+        // Durability: commit transaction before removing journal
+        tx.commit().map_err(|e| format!("Failed to commit migration transaction: {e}"))?;
+
+        // Only remove journal AFTER commit succeeds
+        if has_journal_to_clean {
+            if let Err(e) = fs::remove_file(&journal_path) {
+                eprintln!("[daily-news] Warning: Failed to clean up reconciled journal {:?}: {e}", journal_path);
+            }
+        }
+
         Ok(())
     }
 }

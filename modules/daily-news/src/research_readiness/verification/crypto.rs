@@ -41,6 +41,12 @@ pub fn global_trust_store() -> &'static TrustStore {
     })
 }
 
+impl Default for TrustStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrustStore {
     pub fn new() -> Self {
         Self {
@@ -54,26 +60,43 @@ impl TrustStore {
         // Gateway root fetcher Ed25519 public key (32 bytes)
         let gw_pub = hex_decode("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155")
             .unwrap_or_default();
-        self.register_key("gateway-fetcher-root-1", TrustedKey::Ed25519(gw_pub));
+        if gw_pub.len() == 32 {
+            self.register_key("gateway-fetcher-root-1", TrustedKey::Ed25519(gw_pub));
+        }
 
-        // Shared HMAC secret for authenticated gateway-internal fetch pipelines
-        let hmac_secret = b"gateway-production-attestation-secret-2026";
-        self.register_key("gateway-internal-hmac-1", TrustedKey::HmacSha256(hmac_secret.to_vec()));
-
-        // MITRE accredited notary key
+        // Accredited third-party notary Ed25519 public keys (32 bytes)
         let mitre_pub = hex_decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
             .unwrap_or_default();
-        self.register_key("mitre-notary-key-1", TrustedKey::Ed25519(mitre_pub));
+        if mitre_pub.len() == 32 {
+            self.register_key("mitre-notary-key-1", TrustedKey::Ed25519(mitre_pub));
+        }
 
-        // Trail of Bits accredited notary key
         let tob_pub = hex_decode("3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
             .unwrap_or_default();
-        self.register_key("trailofbits-notary-1", TrustedKey::Ed25519(tob_pub));
+        if tob_pub.len() == 32 {
+            self.register_key("trailofbits-notary-1", TrustedKey::Ed25519(tob_pub));
+        }
 
-        // CertiK accredited notary key
         let certik_pub = hex_decode("2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae")
             .unwrap_or_default();
-        self.register_key("certik-notary-1", TrustedKey::Ed25519(certik_pub));
+        if certik_pub.len() == 32 {
+            self.register_key("certik-notary-1", TrustedKey::Ed25519(certik_pub));
+        }
+
+        // Shared HMAC secret for authenticated gateway-internal fetch pipelines.
+        // Production security: NEVER hardcode HMAC secrets in source or binary!
+        // Keys must be loaded from secure configuration or environment variables.
+        if let Ok(sec) = std::env::var("GATEWAY_ATTESTATION_SECRET")
+            .or_else(|_| std::env::var("DAILY_NEWS_HMAC_SECRET"))
+        {
+            let trimmed = sec.trim();
+            if !trimmed.is_empty() {
+                self.register_key(
+                    "gateway-internal-hmac-1",
+                    TrustedKey::HmacSha256(trimmed.as_bytes().to_vec()),
+                );
+            }
+        }
     }
 
     pub fn register_key(&self, key_id: &str, key: TrustedKey) {
@@ -89,7 +112,7 @@ impl TrustStore {
 
 pub fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if clean.len() % 2 != 0 {
+    if !clean.is_ascii() || !clean.len().is_multiple_of(2) {
         return None;
     }
     (0..clean.len())
@@ -207,17 +230,50 @@ pub fn verify_parsed_attestation(
         return false;
     }
 
-    // 2. Verify redirect domain integrity: final_url must be on authoritative domain
-    let final_lower = attestation.final_url.to_lowercase();
-    if final_lower.starts_with("http://127.0.0.1")
-        || final_lower.starts_with("http://localhost")
-        || final_lower.starts_with("http://10.")
-        || final_lower.starts_with("http://192.168.")
+    // 2. Verify redirect domain integrity: final_url must be on authoritative domain and not SSRF
+    let orig_domain = crate::url::extract_domain(&attestation.url);
+    let final_domain = crate::url::extract_domain(&attestation.final_url);
+    if final_domain.is_empty() {
+        return false;
+    }
+
+    // SSRF boundary protection: block loopback and private/reserved IPv4
+    if let Ok(ip) = final_domain.parse::<std::net::Ipv4Addr>() {
+        if crate::url::is_restricted_ipv4(ip, false).is_err() {
+            return false;
+        }
+    }
+    if final_domain == "localhost" || final_domain == "127.0.0.1" {
+        return false;
+    }
+
+    // Redirect domain binding: final_domain must match or be a subdomain of orig_domain, or vice versa
+    if !orig_domain.is_empty()
+        && final_domain != orig_domain
+        && !final_domain.ends_with(&format!(".{orig_domain}"))
+        && !orig_domain.ends_with(&format!(".{final_domain}"))
     {
         return false;
     }
 
-    // 3. Verify content hash binding if expected_hash provided
+    // 3. Timestamp & Freshness verification:
+    // fetched_at must be positive, not in future (> 3600s clock skew), and not expired (180 days TTL)
+    if attestation.fetched_at == 0 {
+        return false;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1793618000);
+    if attestation.fetched_at > now + 3600 {
+        return false;
+    }
+    const MAX_ATTESTATION_TTL_SECS: u64 = 180 * 86400;
+    if now > attestation.fetched_at + MAX_ATTESTATION_TTL_SECS {
+        return false;
+    }
+
+    // 4. Verify content hash binding if expected_hash provided
     if let Some(exp_h) = expected_hash {
         let exp_clean = exp_h.trim().to_ascii_lowercase();
         let matches_content = attestation.content_sha256.eq_ignore_ascii_case(&exp_clean);
@@ -227,12 +283,12 @@ pub fn verify_parsed_attestation(
         }
     }
 
-    // 4. Retrieve trusted public key
+    // 5. Retrieve trusted key from trust store
     let Some(trusted_key) = store.get_key(&attestation.key_id) else {
         return false;
     };
 
-    // 5. Compute canonical payload
+    // 6. Compute canonical payload
     let canonical = compute_canonical_attestation_payload(
         &attestation.url,
         &attestation.final_url,
@@ -241,13 +297,19 @@ pub fn verify_parsed_attestation(
         &attestation.issuer,
     );
 
-    // 6. Cryptographically verify signature
+    // 7. Cryptographically verify signature
     match trusted_key {
         TrustedKey::Ed25519(pub_bytes) => {
+            if pub_bytes.len() != 32 {
+                return false;
+            }
             let peer = UnparsedPublicKey::new(&ED25519, &pub_bytes);
             peer.verify(&canonical, &attestation.signature_bytes).is_ok()
         }
         TrustedKey::HmacSha256(secret) => {
+            if secret.is_empty() {
+                return false;
+            }
             let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
             hmac::verify(&key, &canonical, &attestation.signature_bytes).is_ok()
         }
@@ -284,13 +346,23 @@ pub fn create_signed_gateway_attestation(
 }
 
 pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
+    let test_secret = b"ephemeral-test-certik-attestation-secret-only";
+    let key_id = "test-certik-notary-hmac";
+    // Ephemeral registration for unit and integration test fixtures
+    global_trust_store().register_key(key_id, TrustedKey::HmacSha256(test_secret.to_vec()));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1793618000);
+
     create_signed_gateway_attestation(
         url,
         url,
         content_sha256,
-        1793618000,
+        now,
         "CertiK",
-        "gateway-internal-hmac-1",
-        b"gateway-production-attestation-secret-2026",
+        key_id,
+        test_secret,
     )
 }

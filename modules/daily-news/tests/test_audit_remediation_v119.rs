@@ -374,13 +374,14 @@ fn test_issue4_cache_revision_merging_and_unified_try_cache_tier() {
     let scorer = CandidateScorer::default();
 
     let cand_id = format!("cand_{}", &compute_sha256("https://example.com/rev_test")[..16]);
+    let now_utc = daily_news::date::current_utc_timestamp();
     // Initial candidate cached with older content
     let candidate_v1 = NormalizedCandidate {
         candidate_id: cand_id.clone(),
         canonical_url: "https://example.com/rev_test".to_string(),
         title: "Initial Title".to_string(),
         publisher: "example.com".to_string(),
-        published_at_utc: "2026-11-04T00:00:00+00:00".to_string(),
+        published_at_utc: now_utc.clone(),
         content_hash: compute_sha256("content v1"),
         title_hash: compute_sha256("initial title"),
         content_origin: ContentOrigin::Article,
@@ -393,7 +394,7 @@ fn test_issue4_cache_revision_merging_and_unified_try_cache_tier() {
         id: "https://example.com/rev_test".to_string(),
         url: "https://example.com/rev_test".to_string(),
         title: "Updated Title Across Revision".to_string(),
-        published_at: "2026-11-04T12:00:00+00:00".to_string(),
+        published_at: now_utc,
         publisher: Some("example.com".to_string()),
         author: None,
         description: Some("New content revision".to_string()),
@@ -538,7 +539,7 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
         ..Default::default()
     };
 
-    storage.save_candidates(&[valid_candidate.clone()]).unwrap();
+    storage.save_candidates(std::slice::from_ref(&valid_candidate)).unwrap();
 
     // First handoff succeeds and claims candidate atomically
     let handoff_1 = service.verify_production_handoff("cand_handoff_01");

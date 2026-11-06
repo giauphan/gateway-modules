@@ -511,7 +511,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
     assert_eq!(r_verified_asset.status, ReadinessStatus::VideoReady);
 
     // Case 4: verify_visual_asset_record produces VerifiedAssetRecord
-    let record_res = verify_visual_asset_record(&visual, Some(real_image_bytes), Some(&license_text));
+    let record_res = verify_visual_asset_record(&visual, Some(real_image_bytes), Some(license_text));
     assert!(record_res.is_ok());
     let verified_record = record_res.unwrap();
     assert_eq!(verified_record.checksum_sha256, real_image_sha);

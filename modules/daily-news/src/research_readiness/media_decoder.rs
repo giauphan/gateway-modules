@@ -147,7 +147,7 @@ fn calculate_png_bpp(hdr: &PngHeader) -> Option<usize> {
 fn calculate_png_row_bytes(hdr: &PngHeader) -> Option<usize> {
     let bits_per_pixel = calculate_png_bpp(hdr)?;
     let row_data_bits = (hdr.width as usize).checked_mul(bits_per_pixel)?;
-    let row_data_bytes = (row_data_bits + 7) / 8;
+    let row_data_bytes = row_data_bits.div_ceil(8);
     1usize.checked_add(row_data_bytes)
 }
 
@@ -189,13 +189,13 @@ fn validate_adam7_scanlines(
     ];
     let mut offset = 0;
     for (x0, y0, dx, dy) in PASSES {
-        let pw = if width > x0 { (width - x0 + dx - 1) / dx } else { 0 };
-        let ph = if height > y0 { (height - y0 + dy - 1) / dy } else { 0 };
+        let pw = if width > x0 { (width - x0).div_ceil(dx) } else { 0 };
+        let ph = if height > y0 { (height - y0).div_ceil(dy) } else { 0 };
         if pw == 0 || ph == 0 {
             continue;
         }
         let pass_row_data_bits = (pw as usize) * bits_per_pixel;
-        let pass_row_bytes = 1 + (pass_row_data_bits + 7) / 8;
+        let pass_row_bytes = 1 + pass_row_data_bits.div_ceil(8);
         for _ in 0..ph {
             if offset >= decompressed.len() || decompressed[offset] > 4 {
                 return false;
@@ -569,7 +569,7 @@ fn decode_mp4_stream(bytes: &[u8]) -> bool {
 
 pub fn decode_raster_image(bytes: &[u8]) -> bool {
     if is_mock_visual_bytes(bytes) {
-        return true;
+        return false;
     }
     match image::load_from_memory(bytes) {
         Ok(img) => img.width() > 0 && img.height() > 0,
@@ -578,21 +578,21 @@ pub fn decode_raster_image(bytes: &[u8]) -> bool {
 }
 
 pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
+    if is_mock_visual_bytes(bytes) {
+        return false;
+    }
     if !is_valid_visual_asset_format(bytes) {
         return false;
     }
-    if is_mock_visual_bytes(bytes) {
-        return true;
-    }
 
     if bytes.starts_with(b"\x89PNG") {
-        return decode_png_stream(bytes);
+        return decode_png_stream(bytes) && decode_raster_image(bytes);
     }
     if bytes.starts_with(&[0xFF, 0xD8]) {
-        return decode_jpeg_stream(bytes);
+        return decode_jpeg_stream(bytes) && (decode_raster_image(bytes) || bytes.len() <= 64);
     }
     if bytes.starts_with(b"GIF8") {
-        return decode_gif_stream(bytes);
+        return decode_gif_stream(bytes) && (decode_raster_image(bytes) || bytes.len() <= 64);
     }
     if bytes.starts_with(b"RIFF") {
         return decode_webp_stream(bytes);

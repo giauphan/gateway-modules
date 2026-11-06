@@ -279,14 +279,14 @@ pub fn is_audit_source_verified_with_resolver(
         audit_text,
         &lower,
         accred,
-        &domains,
+        domains,
         rec,
         secondary_resolver,
     ) || verify_trusted_fetch_attestation(
         audit_text,
         &lower,
         accred,
-        &domains,
+        domains,
         rec,
         secondary_resolver,
     )
