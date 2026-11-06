@@ -492,30 +492,72 @@ pub fn is_audit_source_verified_with_resolver(
                     res(&hash)
                 }) {
                     let res_lower = resolved_doc.to_lowercase();
-                    if res_lower.contains(accred) && !res_lower.is_empty() {
+                    let matches_record = rec
+                        .audit_trail_ref
+                        .as_deref()
+                        .is_some_and(|r| res_lower.contains(&r.to_lowercase()))
+                        || res_lower.contains(&rec.record_id.to_lowercase())
+                        || res_lower.contains(&rec.reviewer_id.to_lowercase())
+                        || (rec.secondary_source_ref.as_deref().is_some_and(|s| {
+                            let report_slug = s.split('/').next_back().unwrap_or("").to_lowercase();
+                            !report_slug.is_empty() && res_lower.contains(&report_slug)
+                        }));
+                    if res_lower.contains(accred) && matches_record && !res_lower.is_empty() {
                         resolved_domain_provenance = true;
                     }
-                } else {
-                    resolved_domain_provenance = true;
                 }
-            } else {
-                resolved_domain_provenance = true;
             }
         }
     }
 
     // 2. Cryptographic Digital Signature Envelope with Verifiable Signature Hash
+    let mut has_cryptographic_provenance = false;
     let has_crypto_envelope = (lower.contains("-----begin pgp signature-----")
         || lower.contains("-----begin pgp signed message-----"))
         && lower.contains("-----end pgp");
 
-    let has_digital_signature_hash = (lower.contains("signature:")
+    let has_digital_sig_header = lower.contains("signature:")
         || lower.contains("signed-by:")
-        || lower.contains("cryptographic signature"))
-        && (lower.contains("ed25519") || lower.contains("secp256k1") || lower.contains("rsa"))
-        && audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| w.len() >= 64);
+        || lower.contains("cryptographic signature");
 
-    let has_cryptographic_provenance = has_crypto_envelope || has_digital_signature_hash;
+    let has_supported_algo =
+        lower.contains("ed25519") || lower.contains("secp256k1") || lower.contains("rsa");
+
+    if has_crypto_envelope || (has_digital_sig_header && has_supported_algo) {
+        let has_valid_sig_token = audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| {
+            if w.len() >= 64 && w.chars().all(|c| c.is_ascii_hexdigit()) {
+                let first_ch = w.chars().next().unwrap_or(' ');
+                !w.chars().all(|c| c == first_ch)
+            } else {
+                false
+            }
+        });
+
+        let has_audit_hash_integrity = rec.audit_trail_ref.as_deref().is_some_and(|r| {
+            let tr = r.trim().to_ascii_lowercase();
+            tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
+        });
+
+        if has_valid_sig_token && has_audit_hash_integrity {
+            if let Some(res) = secondary_resolver {
+                if let Some(ref sec_ref) = rec.secondary_source_ref {
+                    if let Some(doc) = res(sec_ref).or_else(|| {
+                        let hash = crate::url::compute_sha256(sec_ref);
+                        res(&hash)
+                    }) {
+                        if !doc.trim().is_empty() {
+                            has_cryptographic_provenance = true;
+                        }
+                    }
+                }
+            } else if has_crypto_envelope
+                && !lower.contains("mock")
+                && !lower.contains("dummy")
+            {
+                has_cryptographic_provenance = true;
+            }
+        }
+    }
 
     resolved_domain_provenance || has_cryptographic_provenance
 }

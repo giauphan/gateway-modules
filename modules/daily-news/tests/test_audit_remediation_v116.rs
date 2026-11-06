@@ -156,6 +156,8 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
     let prod_sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
+        } else if r == "https://certik.com/reports/2026-P1" || r == compute_sha256("https://certik.com/reports/2026-P1") {
+            Some(prod_audit_text.to_string())
         } else {
             None
         }

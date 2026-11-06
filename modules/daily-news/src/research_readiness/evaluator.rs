@@ -381,9 +381,14 @@ fn are_all_claims_grounded(
 }
 
 fn has_valid_independent_check(claims: &[ClaimEvidence], audit_resolver: AuditResolver) -> bool {
-    claims
+    let has_any = claims
         .iter()
-        .any(|c| is_claim_independently_verified_with_audit_resolver(c, audit_resolver))
+        .any(|c| c.verification_status == "INDEPENDENTLY_VERIFIED");
+    has_any
+        && claims
+            .iter()
+            .filter(|c| c.verification_status == "INDEPENDENTLY_VERIFIED")
+            .all(|c| is_claim_independently_verified_with_audit_resolver(c, audit_resolver))
 }
 
 pub fn evaluate_readiness(
@@ -479,28 +484,35 @@ fn check_strict_video_ready_gates(
     audit_resolver: AuditResolver,
     asset_resolver: AssetResolver,
 ) -> Option<ResearchReadiness> {
-    let source_verified = claims.iter().any(|c| {
-        c.verification_status == "INDEPENDENTLY_VERIFIED"
-            && c.verification_record.as_ref().is_some_and(|vr| {
-                if let Some(audit_res) = audit_resolver {
-                    if let Some(ref audit_ref) = vr.audit_trail_ref {
-                        if let Some(audit_text) = audit_res(audit_ref) {
-                            return super::verification::is_audit_source_verified_with_resolver(
-                                &audit_text,
-                                vr,
-                                secondary_resolver,
-                            ) && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
+    let has_independent = claims
+        .iter()
+        .any(|c| c.verification_status == "INDEPENDENTLY_VERIFIED");
+
+    let source_verified = has_independent
+        && claims
+            .iter()
+            .filter(|c| c.verification_status == "INDEPENDENTLY_VERIFIED")
+            .all(|c| {
+                c.verification_record.as_ref().is_some_and(|vr| {
+                    if let Some(audit_res) = audit_resolver {
+                        if let Some(ref audit_ref) = vr.audit_trail_ref {
+                            if let Some(audit_text) = audit_res(audit_ref) {
+                                return super::verification::is_audit_source_verified_with_resolver(
+                                    &audit_text,
+                                    vr,
+                                    secondary_resolver,
+                                ) && super::verification::is_audit_artifact_corroborated(&audit_text, vr, c);
+                            }
                         }
                     }
-                }
-                false
-            })
-    });
+                    false
+                })
+            });
 
     if !source_verified {
         return Some(build_readiness(
             ReadinessStatus::NeedsVerification,
-            "Independent verification lacks verified accredited source provenance or contains self-declared markers".to_string(),
+            "Independent verification lacks verified accredited source provenance or contains self-declared markers across one or more claims".to_string(),
             "source_verified",
         ));
     }

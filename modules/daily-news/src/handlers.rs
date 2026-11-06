@@ -326,6 +326,7 @@ pub fn handle_evidence(base_dir: &Path, body: &Value) -> Value {
 }
 
 pub fn handle_handoff(service: &DailyNewsService, body: &Value) -> Value {
+    let action = body["action"].as_str().unwrap_or("reserve");
     let cid = body["candidate_id"]
         .as_str()
         .or_else(|| body["id"].as_str())
@@ -337,14 +338,54 @@ pub fn handle_handoff(service: &DailyNewsService, body: &Value) -> Value {
             json!({ "error": "Missing required parameter: 'candidate_id'" }),
         );
     }
+
+    if action == "release" {
+        let token = body["token"]
+            .as_str()
+            .or_else(|| body["reservation_token"].as_str())
+            .unwrap_or("");
+        if token.is_empty() {
+            return make_json_resp(
+                400,
+                json!({ "error": "Missing required parameter: 'token'" }),
+            );
+        }
+        return match service.release_handoff(cid, token) {
+            Ok(true) => make_json_resp(200, json!({ "status": "RELEASED", "candidate_id": cid })),
+            Ok(false) => make_json_resp(404, json!({ "status": "NOT_FOUND", "candidate_id": cid })),
+            Err(e) => make_json_resp(422, json!({ "status": "REJECTED", "error": e })),
+        };
+    }
+
+    if action == "commit" {
+        let token = body["token"]
+            .as_str()
+            .or_else(|| body["reservation_token"].as_str())
+            .unwrap_or("");
+        if token.is_empty() {
+            return make_json_resp(
+                400,
+                json!({ "error": "Missing required parameter: 'token'" }),
+            );
+        }
+        return match service.commit_handoff(cid, token) {
+            Ok(true) => make_json_resp(200, json!({ "status": "PUBLISHED", "candidate_id": cid })),
+            Ok(false) => make_json_resp(404, json!({ "status": "NOT_FOUND", "candidate_id": cid })),
+            Err(e) => make_json_resp(422, json!({ "status": "REJECTED", "error": e })),
+        };
+    }
+
     match service.verify_production_handoff(cid) {
-        Ok(candidate) => make_json_resp(
+        Ok(handoff) => make_json_resp(
             200,
             json!({
                 "status": "APPROVED",
                 "candidate_id": cid,
-                "readiness": candidate.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
-                "candidate": candidate
+                "readiness": handoff.candidate.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
+                "candidate": handoff.candidate,
+                "reservation_token": handoff.reservation_token,
+                "lease_seconds": handoff.lease_seconds,
+                "expires_at": handoff.expires_at,
             }),
         ),
         Err((code, msg)) => make_json_resp(
@@ -587,6 +628,22 @@ fn dispatch_pipeline_and_admin(
                 return Some(err);
             }
             Some(handle_handoff(service, body))
+        }
+        "/api/v1/handoff/release" | "/handoff/release" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            let mut b = body.clone();
+            b["action"] = json!("release");
+            Some(handle_handoff(service, &b))
+        }
+        "/api/v1/handoff/commit" | "/handoff/commit" => {
+            if let Err(err) = enforce_method(method, &["POST"]) {
+                return Some(err);
+            }
+            let mut b = body.clone();
+            b["action"] = json!("commit");
+            Some(handle_handoff(service, &b))
         }
         "/api/v1/config" | "/config" => {
             if let Err(err) = enforce_method(method, &["GET", "POST"]) {

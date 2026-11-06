@@ -215,6 +215,8 @@ fn test_all_criteria_met_yields_video_ready() {
     let sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
+        } else if r == "https://certik.com/reports/2026-01" || r == compute_sha256("https://certik.com/reports/2026-01") {
+            Some(audit_doc.to_string())
         } else {
             None
         }
@@ -688,6 +690,8 @@ fn test_verification_record_structured_evidence() {
     let sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
+        } else if r == "https://certik.com/reports/2026-001" || r == compute_sha256("https://certik.com/reports/2026-001") {
+            Some(audit_doc.to_string())
         } else {
             None
         }

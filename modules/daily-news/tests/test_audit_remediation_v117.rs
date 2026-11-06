@@ -232,12 +232,12 @@ fn test_issue3_consumed_candidate_must_not_reappear_in_candidates_or_cache() {
     let tmp = make_temp_dir("consumed_reappear");
     let (service, storage) = build_test_service(&tmp);
 
-    // 1. Ingest a candidate
+    let now_ts = daily_news::date::current_utc_timestamp();
     let mut raw = RawNewsItem::new(
         "raw_c1",
         "https://example.com/article_c1",
         "Deterministic Storage Release",
-        "2026-11-04T06:00:00Z",
+        &now_ts,
     );
     raw.publisher = Some("TechPost".to_string());
     raw.body = Some("Deterministic storage engine released.".to_string());

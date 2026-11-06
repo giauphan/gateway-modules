@@ -195,6 +195,8 @@ fn test_issue1_false_positive_video_ready_prevention() {
     let sec_resolver = move |ref_str: &str| -> Option<String> {
         if ref_str == "https://example.com/license" || ref_str == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
+        } else if ref_str == "https://certik.com/reports/2026-CERT-01" || ref_str == compute_sha256("https://certik.com/reports/2026-CERT-01") {
+            Some(official_audit.to_string())
         } else {
             None
         }
@@ -248,6 +250,9 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.";
     let audit_sha = compute_sha256(audit_text);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
+    let sec_url_sha = compute_sha256("https://certik.com/reports/2026-H1");
+    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), audit_text).unwrap();
+    std::fs::write(evidence_dir.join("2026-H1.txt"), audit_text).unwrap();
 
     let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
     let lic_url_sha = compute_sha256("https://example.com/license");
@@ -257,12 +262,13 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     let png_sha = compute_sha256_bytes(png_bytes);
     std::fs::write(assets_dir.join(format!("{png_sha}.bin")), png_bytes).unwrap();
 
+    let now_ts = daily_news::date::current_utc_timestamp();
     let mut candidate = NormalizedCandidate {
         candidate_id: "cand_video_ready_01".to_string(),
         canonical_url: "https://example.com/item1".to_string(),
         title: "Item 1".to_string(),
         publisher: "example.com".to_string(),
-        published_at_utc: "2026-11-04T00:00:00+00:00".to_string(),
+        published_at_utc: now_ts.clone(),
         content_hash: compute_sha256("primary content"),
         title_hash: compute_sha256("item 1"),
         content_origin: ContentOrigin::Article,
@@ -271,7 +277,7 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     candidate.research.primary_source = Some(PrimarySourceEvidence {
         url: "https://example.com/item1".to_string(),
         fetch_status: "SUCCESS".to_string(),
-        published_at: Some("2026-11-04T00:00:00Z".to_string()),
+        published_at: Some(now_ts),
         snapshot_ref: Some(format!("{primary_sha}.txt")),
         snapshot_sha256: Some(primary_sha.clone()),
         ..Default::default()

@@ -434,6 +434,8 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
     let secondary_resolver = move |ref_str: &str| -> Option<String> {
         if ref_str == "https://example.com/terms" || ref_str == compute_sha256("https://example.com/terms") {
             Some(license_text.to_string())
+        } else if ref_str == "https://certik.com/reports/2026-CERT-01" || ref_str == compute_sha256("https://certik.com/reports/2026-CERT-01") {
+            Some(audit_text.to_string())
         } else {
             None
         }

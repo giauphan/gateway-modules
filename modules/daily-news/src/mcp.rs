@@ -246,16 +246,77 @@ fn handle_verify_production_handoff(service: &DailyNewsService, args: &Value) ->
     };
 
     match service.verify_production_handoff(candidate_id) {
-        Ok(c) => McpToolResponse::success(
+        Ok(handoff) => McpToolResponse::success(
             json!({
                 "status": "APPROVED",
                 "candidate_id": candidate_id,
-                "readiness": c.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
-                "candidate": c
+                "readiness": handoff.candidate.research.research_readiness.as_ref().map(|r| r.status.as_str()).unwrap_or("UNKNOWN"),
+                "candidate": handoff.candidate,
+                "reservation_token": handoff.reservation_token,
+                "lease_seconds": handoff.lease_seconds,
+                "expires_at": handoff.expires_at,
             })
             .to_string(),
         ),
         Err((code, msg)) => McpToolResponse::error(format!("{code}: {msg}")),
+    }
+}
+
+fn handle_release_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let candidate_id = match args["candidate_id"]
+        .as_str()
+        .or_else(|| args["id"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(cid) => cid,
+        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
+    };
+    let token = match args["token"]
+        .as_str()
+        .or_else(|| args["reservation_token"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(t) => t,
+        None => return McpToolResponse::error("Missing required parameter: 'token'"),
+    };
+
+    match service.release_handoff(candidate_id, token) {
+        Ok(true) => McpToolResponse::success(
+            json!({ "status": "RELEASED", "candidate_id": candidate_id }).to_string(),
+        ),
+        Ok(false) => McpToolResponse::error(format!("No reservation found for candidate '{candidate_id}'")),
+        Err(e) => McpToolResponse::error(e),
+    }
+}
+
+fn handle_commit_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let candidate_id = match args["candidate_id"]
+        .as_str()
+        .or_else(|| args["id"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(cid) => cid,
+        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
+    };
+    let token = match args["token"]
+        .as_str()
+        .or_else(|| args["reservation_token"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(t) => t,
+        None => return McpToolResponse::error("Missing required parameter: 'token'"),
+    };
+
+    match service.commit_handoff(candidate_id, token) {
+        Ok(true) => McpToolResponse::success(
+            json!({ "status": "PUBLISHED", "candidate_id": candidate_id }).to_string(),
+        ),
+        Ok(false) => McpToolResponse::error(format!("No reservation found for candidate '{candidate_id}'")),
+        Err(e) => McpToolResponse::error(e),
     }
 }
 
@@ -314,6 +375,12 @@ pub fn dispatch_mcp_tool(
         }
         "verify_production_handoff" | "handoff" => {
             handle_verify_production_handoff(service, arguments)
+        }
+        "release_production_handoff" | "release_handoff" => {
+            handle_release_production_handoff(service, arguments)
+        }
+        "commit_production_handoff" | "commit_handoff" => {
+            handle_commit_production_handoff(service, arguments)
         }
         "get_evidence_snapshot" | "evidence" => handle_get_evidence_snapshot(base_dir, arguments),
         "get_discussion" | "discussion" => handle_get_discussion(service, arguments),

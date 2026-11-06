@@ -74,26 +74,67 @@ pub fn decode_png_stream(bytes: &[u8]) -> bool {
         return false;
     }
 
-    // Real decompression using miniz_oxide to verify actual pixel raster data
-    let Ok(decompressed) = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed_idat) else {
-        return false;
-    };
-
-    if decompressed.is_empty() {
+    if width == 0 || height == 0 || width > 10000 || height > 10000 {
         return false;
     }
 
     let bpp = match color_type {
-        0 => 1,
-        2 => 3,
-        3 => 1,
-        4 => 2,
-        6 => 4,
-        _ => 1,
+        0 => 1usize,
+        2 => 3usize,
+        3 => 1usize,
+        4 => 2usize,
+        6 => 4usize,
+        _ => return false,
     };
-    let row_bytes = 1 + (width as usize * bpp * (bit_depth as usize).max(8) / 8);
-    let min_expected = (height as usize) * row_bytes;
-    decompressed.len() >= min_expected.min(decompressed.len())
+    let bits_per_pixel = match bpp.checked_mul(bit_depth as usize) {
+        Some(b) => b,
+        None => return false,
+    };
+    let row_data_bits = match (width as usize).checked_mul(bits_per_pixel) {
+        Some(b) => b,
+        None => return false,
+    };
+    let row_data_bytes = (row_data_bits + 7) / 8;
+    let row_bytes = match 1usize.checked_add(row_data_bytes) {
+        Some(b) => b,
+        None => return false,
+    };
+    let min_expected = match (height as usize).checked_mul(row_bytes) {
+        Some(m) => m,
+        None => return false,
+    };
+
+    // Zip bomb & RAM limit protection: max 32 MB decompressed output
+    const MAX_DECOMPRESSED_PNG_BYTES: usize = 32 * 1024 * 1024;
+    if min_expected > MAX_DECOMPRESSED_PNG_BYTES {
+        return false;
+    }
+
+    // Real decompression using miniz_oxide with bounded memory limit
+    let Ok(decompressed) = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &compressed_idat,
+        MAX_DECOMPRESSED_PNG_BYTES,
+    ) else {
+        return false;
+    };
+
+    if decompressed.len() < min_expected {
+        return false;
+    }
+
+    // Scanline structure validation: each scanline starts with a filter byte (0..=4)
+    for r in 0..(height as usize) {
+        let offset = r * row_bytes;
+        if offset >= decompressed.len() {
+            return false;
+        }
+        let filter_type = decompressed[offset];
+        if filter_type > 4 {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
@@ -102,7 +143,6 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
     }
     let mut pos = 2;
     let mut saw_sof = false;
-    let mut saw_sos = false;
     let mut saw_eoi = false;
 
     while pos < bytes.len() {
@@ -120,13 +160,9 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
         pos += 1;
 
         if marker == 0xD9 {
-            // EOI
+            // EOI (End of Image)
             saw_eoi = true;
             break;
-        }
-        if marker == 0xDA {
-            // SOS (Start of Scan)
-            saw_sos = true;
         }
         if marker == 0x00 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
             continue;
@@ -151,7 +187,8 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
         pos += seg_len;
     }
 
-    saw_sof && (saw_sos || saw_eoi)
+    // Must be a complete JPEG stream containing SOF dimensions AND terminating EOI
+    saw_sof && saw_eoi
 }
 
 pub fn decode_gif_stream(bytes: &[u8]) -> bool {
@@ -227,10 +264,18 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
     if bytes.len() < 20 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
         return false;
     }
+    let riff_size = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    if riff_size < 12 || bytes.len() + 1 < riff_size + 8 {
+        return false;
+    }
     let chunk_tag = &bytes[12..16];
+    let chunk_size = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    if 20 + chunk_size > bytes.len() {
+        return false;
+    }
     match chunk_tag {
         b"VP8 " => {
-            if bytes.len() < 30 {
+            if bytes.len() < 30 || chunk_size < 10 {
                 return false;
             }
             // VP8 keyframe start code 0x9D 0x01 0x2A
@@ -240,7 +285,7 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
             has_keyframe_code && width > 0 && height > 0
         }
         b"VP8L" => {
-            if bytes.len() < 25 || bytes[20] != 0x2F {
+            if bytes.len() < 25 || bytes[20] != 0x2F || chunk_size < 5 {
                 return false;
             }
             let b1 = bytes[21] as u32;
@@ -252,7 +297,7 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
             width > 0 && height > 0
         }
         b"VP8X" => {
-            if bytes.len() < 30 {
+            if bytes.len() < 30 || chunk_size < 10 {
                 return false;
             }
             let width = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
@@ -299,8 +344,49 @@ pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
     }
 
     if bytes.len() >= 16 && (&bytes[4..8] == b"ftyp" || &bytes[4..8] == b"moov") {
-        let box_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        return box_len >= 8 && box_len <= bytes.len();
+        let mut pos = 0;
+        let mut saw_ftyp = false;
+        let mut saw_moov_or_mdat = false;
+
+        while pos + 8 <= bytes.len() {
+            let box_len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+            let box_type = &bytes[pos + 4..pos + 8];
+
+            let effective_len = if box_len == 0 {
+                bytes.len() - pos
+            } else if box_len == 1 {
+                if pos + 16 > bytes.len() {
+                    return false;
+                }
+                let l = u64::from_be_bytes([
+                    bytes[pos + 8], bytes[pos + 9], bytes[pos + 10], bytes[pos + 11],
+                    bytes[pos + 12], bytes[pos + 13], bytes[pos + 14], bytes[pos + 15],
+                ]) as usize;
+                if l < 16 {
+                    return false;
+                }
+                l
+            } else {
+                if box_len < 8 {
+                    return false;
+                }
+                box_len
+            };
+
+            if pos + effective_len > bytes.len() {
+                return false;
+            }
+
+            if box_type == b"ftyp" {
+                saw_ftyp = true;
+            } else if box_type == b"moov" || box_type == b"mdat" {
+                saw_moov_or_mdat = true;
+            }
+
+            pos += effective_len;
+        }
+
+        return (saw_ftyp || &bytes[4..8] == b"moov") && (saw_moov_or_mdat || saw_ftyp);
     }
 
     false

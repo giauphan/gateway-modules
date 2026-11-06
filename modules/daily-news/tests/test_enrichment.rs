@@ -113,6 +113,9 @@ fn test_enrich_candidate_workflow_state_transitions() {
     let _ = std::fs::write(evidence_dir.join(format!("{chart_sha}.txt")), chart_bytes);
     let _ = std::fs::write(assets_dir.join(format!("{chart_sha}.bin")), chart_bytes);
     let _ = std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_content.as_bytes());
+    let sec_url_sha = daily_news::url::compute_sha256("https://certik.com/reports/benchmark");
+    let _ = std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), audit_content.as_bytes());
+    let _ = std::fs::write(evidence_dir.join("benchmark.txt"), audit_content.as_bytes());
 
     let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_compiler_benchmark.";
     let lic_sha = daily_news::url::compute_sha256("https://example.com/license");

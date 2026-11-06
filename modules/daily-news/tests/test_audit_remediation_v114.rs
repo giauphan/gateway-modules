@@ -182,6 +182,9 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let trusted_audit_doc = "Official CertiK Audit Report from CertiK (https://certik.com/reports/2026-V114 ref #: 2026-V114): CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
     let trusted_audit_sha = compute_sha256(trusted_audit_doc);
     std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
+    let sec_url_sha = compute_sha256("https://certik.com/reports/2026-V114");
+    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
+    std::fs::write(evidence_dir.join("2026-V114.txt"), trusted_audit_doc.as_bytes()).unwrap();
 
     let license_doc = "Copyright 2026 Vendor Corp (example.com). CC-BY Creative Commons license for commercial use of vis_v114_chart_prod.";
     let lic_url_sha = compute_sha256("https://example.com/license");

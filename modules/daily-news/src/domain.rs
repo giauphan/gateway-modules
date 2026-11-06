@@ -558,3 +558,36 @@ pub struct DiscussionThread {
     pub num_comments: i64,
     pub comments: Vec<DiscussionComment>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReservationStatus {
+    Reserved,
+    Published,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HandoffReservation {
+    pub reservation_id: String,
+    pub candidate_id: String,
+    pub token_hash: String,
+    pub worker_id: String,
+    pub created_at: String,
+    pub expires_at: u64,
+    pub status: ReservationStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductionHandoff {
+    pub candidate: NormalizedCandidate,
+    pub reservation_token: String,
+    pub lease_seconds: u64,
+    pub expires_at: u64,
+}
+
+impl std::ops::Deref for ProductionHandoff {
+    type Target = NormalizedCandidate;
+    fn deref(&self) -> &Self::Target {
+        &self.candidate
+    }
+}

@@ -495,7 +495,7 @@ impl DailyNewsService {
     pub fn verify_production_handoff(
         &self,
         candidate_id: &str,
-    ) -> Result<NormalizedCandidate, (String, String)> {
+    ) -> Result<crate::domain::ProductionHandoff, (String, String)> {
         // 1. Check if already consumed / claimed
         if self.storage.is_consumed(candidate_id) {
             return Err((
@@ -612,12 +612,23 @@ impl DailyNewsService {
         }
 
         // 5. Atomic reservation / claim with lease token
-        let _token = self
+        let lease_seconds = 3600u64;
+        let token = self
             .storage
-            .reserve_handoff(candidate_id, 3600, "production_worker")
+            .reserve_handoff(candidate_id, lease_seconds, "production_worker")
             .map_err(|e| ("ALREADY_CONSUMED".to_string(), e))?;
 
-        Ok(cand)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1793618000);
+
+        Ok(crate::domain::ProductionHandoff {
+            candidate: cand,
+            reservation_token: token,
+            lease_seconds,
+            expires_at: now + lease_seconds,
+        })
     }
 
     pub fn release_handoff(&self, candidate_id: &str, token: &str) -> Result<bool, String> {

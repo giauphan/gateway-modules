@@ -171,14 +171,36 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         AuditProvenanceStatus::AuditContentMatched
     );
 
-    // Case 1E: With secondary_source_ref on accredited domain -> IssuerAuthenticated
+    // Case 1E: With secondary_source_ref resolved via secondary_resolver -> IssuerAuthenticated
+    assert_eq!(
+        daily_news::research_readiness::check_audit_provenance_level_with_resolver(
+            authentic_text,
+            &authentic_rec,
+            &auth_claim,
+            Some(&sec_res_authenticated)
+        ),
+        AuditProvenanceStatus::IssuerAuthenticated
+    );
+
+    // Case 1F: Resolver returning None MUST fail closed to AuditContentMatched
+    assert_eq!(
+        daily_news::research_readiness::check_audit_provenance_level_with_resolver(
+            authentic_text,
+            &authentic_rec,
+            &auth_claim,
+            Some(&_sec_res_unresolved)
+        ),
+        AuditProvenanceStatus::AuditContentMatched
+    );
+
+    // Case 1G: Without secondary_resolver (None), domain doc cannot be resolved -> AuditContentMatched
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level(
             authentic_text,
             &authentic_rec,
             &auth_claim
         ),
-        AuditProvenanceStatus::IssuerAuthenticated
+        AuditProvenanceStatus::AuditContentMatched
     );
 
     // Valid PNG asset & license resolver
@@ -437,12 +459,13 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let png_sha = compute_sha256_bytes(png_bytes);
     std::fs::write(assets_dir.join(format!("{png_sha}.bin")), png_bytes).unwrap();
 
+    let now_ts = daily_news::date::current_utc_timestamp();
     let valid_candidate = NormalizedCandidate {
         candidate_id: "cand_handoff_01".to_string(),
         canonical_url: "https://example.com/hnd_01".to_string(),
         title: "Speedup".to_string(),
         publisher: "example.com".to_string(),
-        published_at_utc: "2026-11-04T00:00:00+00:00".to_string(),
+        published_at_utc: now_ts.clone(),
         content_hash: compute_sha256("content 01"),
         title_hash: compute_sha256("speedup"),
         content_origin: ContentOrigin::Article,
@@ -450,7 +473,7 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
             primary_source: Some(PrimarySourceEvidence {
                 url: "https://example.com/hnd_01".to_string(),
                 fetch_status: "SUCCESS".to_string(),
-                published_at: Some("2026-11-04T00:00:00Z".to_string()),
+                published_at: Some(now_ts),
                 snapshot_ref: Some(format!("{primary_sha}.txt")),
                 snapshot_sha256: Some(primary_sha.clone()),
                 ..Default::default()
@@ -505,6 +528,8 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
         panic!("HANDOFF 1 ERR: {:?}", e);
     }
     assert!(handoff_1.is_ok());
+    let handoff_obj = handoff_1.unwrap();
+    let reservation_token = handoff_obj.reservation_token.clone();
 
     // Storage confirms candidate is now marked consumed
     assert!(storage.is_consumed("cand_handoff_01"));
@@ -514,7 +539,7 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     assert!(handoff_duplicate.is_err());
     let (code, msg) = handoff_duplicate.err().unwrap();
     assert_eq!(code, "ALREADY_CONSUMED");
-    assert!(msg.contains("already been consumed"));
+    assert!(msg.contains("already been consumed") || msg.contains("actively reserved"));
 
     // Stale candidate (> max_age_days) fails with STALE_CANDIDATE
     let mut stale_candidate = valid_candidate.clone();
@@ -537,9 +562,25 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let resp_get = handle_request(req_get, &service, &tmp);
     assert_eq!(resp_get["status"], 405);
 
-    // Reservation release lifecycle
-    assert!(service.release_handoff("cand_handoff_01", "token").is_ok());
+    // Reservation release lifecycle:
+    // 1. Release with wrong token fails
+    assert!(service.release_handoff("cand_handoff_01", "wrong_token").is_err());
+    assert!(storage.is_consumed("cand_handoff_01"));
+
+    // 2. Release with valid reservation token succeeds and returns candidate to available
+    assert!(service.release_handoff("cand_handoff_01", &reservation_token).is_ok());
     assert!(!storage.is_consumed("cand_handoff_01"));
+
+    // 3. Re-reserve and commit handoff lifecycle
+    let handoff_re = service.verify_production_handoff("cand_handoff_01").expect("Must re-reserve");
+    let re_token = handoff_re.reservation_token.clone();
+
+    // Commit handoff moves to PUBLISHED
+    assert!(service.commit_handoff("cand_handoff_01", &re_token).is_ok());
+    assert!(storage.is_consumed("cand_handoff_01"));
+
+    // Once PUBLISHED, release is rejected
+    assert!(service.release_handoff("cand_handoff_01", &re_token).is_err());
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

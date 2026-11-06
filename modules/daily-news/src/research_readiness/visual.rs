@@ -387,8 +387,7 @@ pub fn is_visual_rights_verified(
     let matches_asset = (!ref_lower.is_empty() && lower.contains(&ref_lower))
         || v.checksum_sha256.as_deref().is_some_and(|h| lower.contains(&h.trim().to_lowercase()))
         || (!url_filename.is_empty() && lower.contains(&url_filename))
-        || lower.contains(&v.source_url.to_lowercase())
-        || (lower.contains("software") || lower.contains("repository") || lower.contains("project") || lower.contains("dataset"));
+        || lower.contains(&v.source_url.to_lowercase());
     if !matches_asset {
         return false;
     }
@@ -396,6 +395,7 @@ pub fn is_visual_rights_verified(
     // 4. Prohibit untrusted / mock / self-declared licensors
     const UNTRUSTED_LICENSORS: &[&str] = &[
         "self-licensed",
+        "self-declared",
         "mock licensor",
         "mock author",
         "unverified licensor",
@@ -426,8 +426,8 @@ pub fn is_visual_rights_verified(
     }
 
     // 6. Licensor Authority Verification: Document must identify an authentic granting licensor
-    // either via explicit copyright entity, organization name, standard license registry,
-    // or domain host matching the source URL.
+    // either via domain host matching the source URL, accredited standard license registry,
+    // or established copyright entity (corp/inc/llc/ltd/gmbh/foundation/university/institute).
     let host = v
         .source_url
         .split("://")
@@ -439,19 +439,25 @@ pub fn is_visual_rights_verified(
         .to_lowercase();
     let host_domain = host.split(':').next().unwrap_or("").trim_start_matches("www.");
     let has_domain_linkage = !host_domain.is_empty() && lower.contains(host_domain);
-    lower.contains("creative commons")
-        || lower.contains("foundation")
+
+    let has_accredited_registry = lower.contains("creative commons")
+        || lower.contains("wikimedia")
+        || lower.contains("apache software foundation")
+        || lower.contains("free software foundation");
+
+    let has_institutional_entity = lower.contains("foundation")
         || lower.contains("corp")
         || lower.contains("inc")
         || lower.contains("ltd")
         || lower.contains("gmbh")
+        || lower.contains("llc")
         || lower.contains("university")
         || lower.contains("institute")
-        || lower.contains("consortium")
-        || lower.contains("project")
-        || lower.contains("contributors")
-        || lower.contains("authors")
-        || has_domain_linkage
+        || lower.contains("consortium");
+
+    has_domain_linkage
+        || has_accredited_registry
+        || (has_institutional_entity && (lower.contains("copyright") || lower.contains("licensed by") || lower.contains("author")))
 }
 
 fn verify_single_visual_asset(v: &VisualEvidence, asset_resolver: AssetResolver) -> bool {

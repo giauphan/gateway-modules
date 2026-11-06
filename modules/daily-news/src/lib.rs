@@ -31,6 +31,7 @@ pub mod rpc;
 pub mod scoring;
 pub mod service;
 pub mod source_capture;
+#[path = "storage/mod.rs"]
 pub mod storage;
 pub mod ui;
 pub mod url;

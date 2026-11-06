@@ -79,30 +79,19 @@ pub trait StoragePort: Send + Sync {
             .find(|c| c.candidate_id == candidate_id)
     }
 
-    /// Reserve candidate for production handoff with lease duration in seconds.
+    /// Reserve candidate for production handoff with lease duration in seconds and worker identifier.
     fn reserve_handoff(
         &self,
         candidate_id: &str,
-        _lease_seconds: u64,
-        _worker_id: &str,
-    ) -> Result<String, String> {
-        let claimed = self.mark_consumed(&[candidate_id.to_string()])?;
-        if claimed > 0 {
-            Ok(format!("lease_{}_{}", uuid::Uuid::new_v4(), candidate_id))
-        } else {
-            Err(format!("Candidate '{candidate_id}' already consumed or reserved"))
-        }
-    }
+        lease_seconds: u64,
+        worker_id: &str,
+    ) -> Result<String, String>;
 
-    /// Commit consumption of a reserved candidate using the reservation token.
-    fn commit_consumed(&self, candidate_id: &str, _token: &str) -> Result<bool, String> {
-        self.mark_consumed(&[candidate_id.to_string()]).map(|n| n > 0)
-    }
+    /// Commit consumption of a reserved candidate using the reservation token, transitioning to PUBLISHED.
+    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String>;
 
-    /// Release a reservation if rendering or downstream handoff fails.
-    fn release_reservation(&self, _candidate_id: &str, _token: &str) -> Result<bool, String> {
-        Ok(true)
-    }
+    /// Release a reservation if rendering or downstream handoff fails, restoring candidate to AVAILABLE.
+    fn release_reservation(&self, candidate_id: &str, token: &str) -> Result<bool, String>;
 }
 
 pub trait SourceCapturePort: Send + Sync {
