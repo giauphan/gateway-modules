@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fs;
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Zero-copy struct with Lifetime `'a` (0 heap allocation)
 #[derive(Debug, PartialEq, Eq)]
@@ -96,7 +96,7 @@ impl Connection<Connected> {
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(|p| p.parent())
+        .and_then(Path::parent)
         .expect("Failed to resolve gateway-modules repository root")
         .to_path_buf()
 }

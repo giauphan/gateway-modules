@@ -206,6 +206,66 @@ fn validate_adam7_scanlines(
     offset <= decompressed.len()
 }
 
+fn is_jpeg_sof_marker(marker: u8) -> bool {
+    matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF)
+}
+
+fn parse_jpeg_sof_header(bytes: &[u8], pos: usize, seg_len: usize) -> bool {
+    if seg_len < 8 || pos + 8 > bytes.len() {
+        return false;
+    }
+    let height = u16::from_be_bytes([bytes[pos + 3], bytes[pos + 4]]);
+    let width = u16::from_be_bytes([bytes[pos + 5], bytes[pos + 6]]);
+    let components = bytes[pos + 7];
+    width > 0 && height > 0 && (1..=4).contains(&components)
+}
+
+fn scan_jpeg_sos_entropy(bytes: &[u8], mut pos: usize) -> Option<(usize, bool)> {
+    let mut entropy_bytes = 0;
+    let mut saw_eoi = false;
+
+    while pos < bytes.len() {
+        if bytes[pos] != 0xFF {
+            entropy_bytes += 1;
+            pos += 1;
+            continue;
+        }
+
+        if pos + 1 >= bytes.len() {
+            return None;
+        }
+
+        let next = bytes[pos + 1];
+        if next == 0x00 || (0xD0..=0xD7).contains(&next) {
+            entropy_bytes += 1;
+            pos += 2;
+            continue;
+        }
+
+        if next == 0xD9 {
+            saw_eoi = true;
+            break;
+        }
+
+        return None;
+    }
+
+    Some((entropy_bytes, saw_eoi))
+}
+
+fn next_jpeg_marker(bytes: &[u8], mut pos: usize) -> (usize, Option<u8>) {
+    while pos < bytes.len() && bytes[pos] != 0xFF {
+        pos += 1;
+    }
+    while pos < bytes.len() && bytes[pos] == 0xFF {
+        pos += 1;
+    }
+    if pos >= bytes.len() {
+        return (pos, None);
+    }
+    (pos + 1, Some(bytes[pos]))
+}
+
 pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return false;
@@ -217,18 +277,11 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
     let mut entropy_bytes = 0;
 
     while pos < bytes.len() {
-        if bytes[pos] != 0xFF {
-            pos += 1;
-            continue;
-        }
-        while pos < bytes.len() && bytes[pos] == 0xFF {
-            pos += 1;
-        }
-        if pos >= bytes.len() {
+        let (marker_pos, marker_opt) = next_jpeg_marker(bytes, pos);
+        pos = marker_pos;
+        let Some(marker) = marker_opt else {
             break;
-        }
-        let marker = bytes[pos];
-        pos += 1;
+        };
 
         if marker == 0xD9 {
             saw_eoi = true;
@@ -245,38 +298,17 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
             return false;
         }
 
-        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && seg_len >= 8 {
-            let height = u16::from_be_bytes([bytes[pos + 3], bytes[pos + 4]]);
-            let width = u16::from_be_bytes([bytes[pos + 5], bytes[pos + 6]]);
-            let components = bytes[pos + 7];
-            if width > 0 && height > 0 && (1..=4).contains(&components) {
+        if is_jpeg_sof_marker(marker) {
+            if parse_jpeg_sof_header(bytes, pos, seg_len) {
                 saw_sof = true;
             }
         } else if marker == 0xDA {
             saw_sos = true;
-            pos += seg_len;
-            while pos < bytes.len() {
-                if bytes[pos] == 0xFF {
-                    if pos + 1 < bytes.len() {
-                        let next = bytes[pos + 1];
-                        if next == 0x00 || (0xD0..=0xD7).contains(&next) {
-                            entropy_bytes += 1;
-                            pos += 2;
-                            continue;
-                        } else if next == 0xD9 {
-                            saw_eoi = true;
-                            break;
-                        } else {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                } else {
-                    entropy_bytes += 1;
-                    pos += 1;
-                }
-            }
+            let Some((scanned_entropy, scanned_eoi)) = scan_jpeg_sos_entropy(bytes, pos + seg_len) else {
+                return false;
+            };
+            entropy_bytes = scanned_entropy;
+            saw_eoi = scanned_eoi;
             break;
         }
         pos += seg_len;
@@ -302,14 +334,14 @@ fn skip_gif_sub_blocks(bytes: &[u8], mut pos: usize) -> Option<usize> {
     None
 }
 
-fn validate_gif_lzw_stream(bytes: &[u8], mut pos: usize) -> bool {
+fn collect_gif_lzw_data(bytes: &[u8], mut pos: usize) -> Option<(usize, Vec<u8>)> {
     if pos >= bytes.len() {
-        return false;
+        return None;
     }
     let min_code_size = bytes[pos] as usize;
     pos += 1;
     if !(2..=11).contains(&min_code_size) {
-        return false;
+        return None;
     }
 
     let mut lzw_data = Vec::new();
@@ -320,15 +352,18 @@ fn validate_gif_lzw_stream(bytes: &[u8], mut pos: usize) -> bool {
             break;
         }
         if pos + sub_len > bytes.len() {
-            return false;
+            return None;
         }
         lzw_data.extend_from_slice(&bytes[pos..pos + sub_len]);
         pos += sub_len;
     }
     if lzw_data.is_empty() {
-        return false;
+        return None;
     }
+    Some((min_code_size, lzw_data))
+}
 
+fn validate_lzw_codes(min_code_size: usize, lzw_data: &[u8]) -> bool {
     let clear_code = 1usize << min_code_size;
     let eoi_code = clear_code + 1;
     let mut code_size = min_code_size + 1;
@@ -384,6 +419,13 @@ fn validate_gif_lzw_stream(bytes: &[u8], mut pos: usize) -> bool {
     }
 
     saw_clear && saw_eoi
+}
+
+fn validate_gif_lzw_stream(bytes: &[u8], pos: usize) -> bool {
+    let Some((min_code_size, lzw_data)) = collect_gif_lzw_data(bytes, pos) else {
+        return false;
+    };
+    validate_lzw_codes(min_code_size, &lzw_data)
 }
 
 fn process_gif_image_descriptor(bytes: &[u8], pos: usize) -> Option<(usize, bool)> {
