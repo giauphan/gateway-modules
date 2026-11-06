@@ -162,7 +162,9 @@ fn test_audit_provenance_distinguishes_resolved_doc_from_authenticated_issuer() 
         Some(&res_generic)
     ));
 
-    // Case 2: Secondary resolver returns an official published audit report with formal verification structure.
+    // Case 2: Secondary resolver returns an official published audit report, but lacks
+    // cryptographic signature or trusted gateway fetch attestation.
+    // MUST remain ResolvedDocument, NOT elevated to IssuerAuthenticated!
     let official_report = "Official CertiK Benchmark Audit Report 2026-101. Security assessment and formal verification for certik_2026_101 passed.";
     let res_official = move |_r: &str| -> Option<String> { Some(official_report.to_string()) };
     let status_official = check_audit_provenance_level_with_resolver(
@@ -171,10 +173,27 @@ fn test_audit_provenance_distinguishes_resolved_doc_from_authenticated_issuer() 
         &claim,
         Some(&res_official),
     );
-    // Must be IssuerAuthenticated!
-    assert_eq!(status_official, AuditProvenanceStatus::IssuerAuthenticated);
-    assert!(is_audit_source_verified_with_resolver(
+    assert_eq!(status_official, AuditProvenanceStatus::ResolvedDocument);
+    assert!(!is_audit_source_verified_with_resolver(
         audit_text,
+        &rec,
+        Some(&res_official)
+    ));
+
+    // Case 3: Document accompanied by authentic trusted fetch attestation from accredited domain.
+    // MUST achieve IssuerAuthenticated!
+    let attested_audit_text = format!(
+        "{audit_text}\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\n-----END GATEWAY FETCH ATTESTATION-----"
+    );
+    let status_attested = check_audit_provenance_level_with_resolver(
+        &attested_audit_text,
+        &rec,
+        &claim,
+        Some(&res_official),
+    );
+    assert_eq!(status_attested, AuditProvenanceStatus::IssuerAuthenticated);
+    assert!(is_audit_source_verified_with_resolver(
+        &attested_audit_text,
         &rec,
         Some(&res_official)
     ));

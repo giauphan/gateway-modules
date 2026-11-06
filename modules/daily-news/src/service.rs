@@ -328,7 +328,7 @@ impl DailyNewsService {
         items
     }
 
-    pub fn get_candidates(&self, limit: usize) -> Vec<NormalizedCandidate> {
+    pub fn try_get_candidates(&self, limit: usize) -> Result<Vec<NormalizedCandidate>, String> {
         let cfg = self.storage.load_config();
         let policy = crate::discovery::CandidateEligibilityPolicy::from_config(&cfg, None, None, None);
         let mut all_candidates = self.storage.get_cached_candidates();
@@ -369,9 +369,19 @@ impl DailyNewsService {
 
         let ranked = self.scorer.rank_candidates(eligible, limit);
         if updated {
-            let _ = self.storage.save_candidates(&all_candidates);
+            self.storage.save_candidates(&all_candidates)?;
         }
-        ranked
+        Ok(ranked)
+    }
+
+    pub fn get_candidates(&self, limit: usize) -> Vec<NormalizedCandidate> {
+        match self.try_get_candidates(limit) {
+            Ok(ranked) => ranked,
+            Err(e) => {
+                eprintln!("[daily-news] CRITICAL: Persistence error in get_candidates: {e}");
+                Vec::new()
+            }
+        }
     }
 
     pub fn reverify_cached_readiness_if_needed(&self, cand: &mut NormalizedCandidate) -> bool {

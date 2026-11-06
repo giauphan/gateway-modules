@@ -399,7 +399,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         extraction_method: None,
     };
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): audit findings independently confirmed for compiler performance benchmarking.";
+    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): audit findings independently confirmed for compiler performance benchmarking.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let audit_sha = compute_sha256(audit_text);
     let claim = ClaimEvidence {
         claim_id: "c_valid".to_string(),
@@ -507,7 +507,7 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
     assert_eq!(r_verified_asset.status, ReadinessStatus::VideoReady);
 
     // Case 4: verify_visual_asset_record produces VerifiedAssetRecord
-    let record_res = verify_visual_asset_record(&visual, Some(real_image_bytes), Some("Full CC-BY license agreement"));
+    let record_res = verify_visual_asset_record(&visual, Some(real_image_bytes), Some(&license_text));
     assert!(record_res.is_ok());
     let verified_record = record_res.unwrap();
     assert_eq!(verified_record.checksum_sha256, real_image_sha);

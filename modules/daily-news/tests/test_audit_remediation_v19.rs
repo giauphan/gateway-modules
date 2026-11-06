@@ -77,7 +77,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
         let primary_sha = enriched_1.candidate.primary_source.as_ref().unwrap().snapshot_sha256.clone().unwrap();
 
         // Enrich Candidate 2 -> with accredited reviewer and visual evidence -> VIDEO_READY
-        let audit_content = "Official Cryptographic Audit Trail Report #2026-01 from CertiK (https://certik.com/reports/benchmark ref #: 2026-01): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.";
+        let audit_content = "Official Cryptographic Audit Trail Report #2026-01 from CertiK (https://certik.com/reports/benchmark ref #: 2026-01): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
         let audit_sha = compute_sha256(audit_content);
         let verified_claims = vec![ClaimEvidence {
             claim_id: "claim_verified_02".to_string(),

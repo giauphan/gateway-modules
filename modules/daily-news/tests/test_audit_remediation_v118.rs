@@ -162,7 +162,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
         verified_rights: Some(true),
     }];
 
-    let official_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.";
+    let official_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let official_audit_sha = compute_sha256(official_audit);
     let official_claims = vec![ClaimEvidence {
         claim_id: "c_official_1".to_string(),
@@ -247,7 +247,7 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.";
+    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let audit_sha = compute_sha256(audit_text);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
     let sec_url_sha = compute_sha256("https://certik.com/reports/2026-H1");

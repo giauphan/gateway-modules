@@ -179,7 +179,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     assert!(!res_valid.production_scoring.is_video_production_ready);
 
     // 3. Trusted accredited issuer + real PNG bytes reaches production VideoReady
-    let trusted_audit_doc = "Official CertiK Audit Report from CertiK (https://certik.com/reports/2026-V114 ref #: 2026-V114): CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
+    let trusted_audit_doc = "Official CertiK Audit Report from CertiK (https://certik.com/reports/2026-V114 ref #: 2026-V114): CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let trusted_audit_sha = compute_sha256(trusted_audit_doc);
     std::fs::write(evidence_dir.join(format!("{trusted_audit_sha}.txt")), trusted_audit_doc.as_bytes()).unwrap();
     let sec_url_sha = compute_sha256("https://certik.com/reports/2026-V114");

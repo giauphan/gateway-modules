@@ -193,7 +193,7 @@ fn test_all_criteria_met_yields_video_ready() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // With accredited issuer and valid media asset resolvers, evaluate_readiness_full yields VideoReady
-    let audit_doc = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.";
+    let audit_doc = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let audit_sha = compute_sha256(audit_doc);
     let mut accredited_claims = claims;
     accredited_claims[0].verification_record = Some(VerificationRecord {
@@ -675,7 +675,7 @@ fn test_verification_record_structured_evidence() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // When resolvers are provided for accredited CertiK audit + valid visual bytes, evaluates to VideoReady
-    let audit_doc = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
+    let audit_doc = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let audit_sha = compute_sha256(audit_doc);
     let mut resolved_claims = claims;
     resolved_claims[0].verification_record.as_mut().unwrap().audit_trail_ref = Some(audit_sha.clone());

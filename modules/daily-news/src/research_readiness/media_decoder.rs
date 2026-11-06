@@ -8,6 +8,9 @@ pub fn decode_png_stream(bytes: &[u8]) -> bool {
     let Some((hdr, compressed_idat)) = parse_png_chunks(bytes) else {
         return false;
     };
+    let Some(bits_per_pixel) = calculate_png_bpp(&hdr) else {
+        return false;
+    };
     let Some(row_bytes) = calculate_png_row_bytes(&hdr) else {
         return false;
     };
@@ -32,7 +35,14 @@ pub fn decode_png_stream(bytes: &[u8]) -> bool {
         return false;
     }
 
-    validate_png_scanlines(&decompressed, hdr.height, row_bytes, hdr.interlace)
+    validate_png_scanlines(
+        &decompressed,
+        hdr.width,
+        hdr.height,
+        bits_per_pixel,
+        row_bytes,
+        hdr.interlace,
+    )
 }
 
 struct PngHeader {
@@ -123,7 +133,7 @@ fn parse_png_chunks(bytes: &[u8]) -> Option<(PngHeader, Vec<u8>)> {
     None
 }
 
-fn calculate_png_row_bytes(hdr: &PngHeader) -> Option<usize> {
+fn calculate_png_bpp(hdr: &PngHeader) -> Option<usize> {
     let bpp = match hdr.color_type {
         0 | 3 => 1usize,
         2 => 3usize,
@@ -131,13 +141,24 @@ fn calculate_png_row_bytes(hdr: &PngHeader) -> Option<usize> {
         6 => 4usize,
         _ => return None,
     };
-    let bits_per_pixel = bpp.checked_mul(hdr.bit_depth as usize)?;
+    bpp.checked_mul(hdr.bit_depth as usize)
+}
+
+fn calculate_png_row_bytes(hdr: &PngHeader) -> Option<usize> {
+    let bits_per_pixel = calculate_png_bpp(hdr)?;
     let row_data_bits = (hdr.width as usize).checked_mul(bits_per_pixel)?;
     let row_data_bytes = (row_data_bits + 7) / 8;
     1usize.checked_add(row_data_bytes)
 }
 
-fn validate_png_scanlines(decompressed: &[u8], height: u32, row_bytes: usize, interlace: u8) -> bool {
+fn validate_png_scanlines(
+    decompressed: &[u8],
+    width: u32,
+    height: u32,
+    bits_per_pixel: usize,
+    row_bytes: usize,
+    interlace: u8,
+) -> bool {
     if interlace == 0 {
         for r in 0..(height as usize) {
             let offset = r * row_bytes;
@@ -145,8 +166,44 @@ fn validate_png_scanlines(decompressed: &[u8], height: u32, row_bytes: usize, in
                 return false;
             }
         }
+        true
+    } else {
+        validate_adam7_scanlines(decompressed, width, height, bits_per_pixel)
     }
-    true
+}
+
+fn validate_adam7_scanlines(
+    decompressed: &[u8],
+    width: u32,
+    height: u32,
+    bits_per_pixel: usize,
+) -> bool {
+    const PASSES: [(u32, u32, u32, u32); 7] = [
+        (0, 0, 8, 8),
+        (4, 0, 8, 8),
+        (0, 4, 4, 8),
+        (2, 0, 4, 4),
+        (0, 2, 2, 4),
+        (1, 0, 2, 2),
+        (0, 1, 1, 2),
+    ];
+    let mut offset = 0;
+    for (x0, y0, dx, dy) in PASSES {
+        let pw = if width > x0 { (width - x0 + dx - 1) / dx } else { 0 };
+        let ph = if height > y0 { (height - y0 + dy - 1) / dy } else { 0 };
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        let pass_row_data_bits = (pw as usize) * bits_per_pixel;
+        let pass_row_bytes = 1 + (pass_row_data_bits + 7) / 8;
+        for _ in 0..ph {
+            if offset >= decompressed.len() || decompressed[offset] > 4 {
+                return false;
+            }
+            offset += pass_row_bytes;
+        }
+    }
+    offset <= decompressed.len()
 }
 
 pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
@@ -155,7 +212,9 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
     }
     let mut pos = 2;
     let mut saw_sof = false;
+    let mut saw_sos = false;
     let mut saw_eoi = false;
+    let mut entropy_bytes = 0;
 
     while pos < bytes.len() {
         if bytes[pos] != 0xFF {
@@ -172,7 +231,6 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
         pos += 1;
 
         if marker == 0xD9 {
-            // EOI (End of Image)
             saw_eoi = true;
             break;
         }
@@ -187,20 +245,49 @@ pub fn decode_jpeg_stream(bytes: &[u8]) -> bool {
             return false;
         }
 
-        // SOF markers: SOF0..SOF3, SOF5..SOF7, SOF9..SOF11, SOF13..SOF15
         if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && seg_len >= 8 {
             let height = u16::from_be_bytes([bytes[pos + 3], bytes[pos + 4]]);
             let width = u16::from_be_bytes([bytes[pos + 5], bytes[pos + 6]]);
             let components = bytes[pos + 7];
-            if width > 0 && height > 0 && components >= 1 {
+            if width > 0 && height > 0 && (1..=4).contains(&components) {
                 saw_sof = true;
             }
+        } else if marker == 0xDA {
+            saw_sos = true;
+            pos += seg_len;
+            while pos < bytes.len() {
+                if bytes[pos] == 0xFF {
+                    if pos + 1 < bytes.len() {
+                        let next = bytes[pos + 1];
+                        if next == 0x00 || (0xD0..=0xD7).contains(&next) {
+                            entropy_bytes += 1;
+                            pos += 2;
+                            continue;
+                        } else if next == 0xD9 {
+                            saw_eoi = true;
+                            break;
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                } else {
+                    entropy_bytes += 1;
+                    pos += 1;
+                }
+            }
+            break;
         }
         pos += seg_len;
     }
 
-    // Must be a complete JPEG stream containing SOF dimensions AND terminating EOI
-    saw_sof && saw_eoi
+    let valid_sos_scan = if saw_sos {
+        entropy_bytes > 0 && saw_eoi
+    } else {
+        saw_eoi
+    };
+    saw_sof && valid_sos_scan
 }
 
 fn skip_gif_sub_blocks(bytes: &[u8], mut pos: usize) -> Option<usize> {
@@ -213,6 +300,90 @@ fn skip_gif_sub_blocks(bytes: &[u8], mut pos: usize) -> Option<usize> {
         pos += sub_len;
     }
     None
+}
+
+fn validate_gif_lzw_stream(bytes: &[u8], mut pos: usize) -> bool {
+    if pos >= bytes.len() {
+        return false;
+    }
+    let min_code_size = bytes[pos] as usize;
+    pos += 1;
+    if !(2..=11).contains(&min_code_size) {
+        return false;
+    }
+
+    let mut lzw_data = Vec::new();
+    while pos < bytes.len() {
+        let sub_len = bytes[pos] as usize;
+        pos += 1;
+        if sub_len == 0 {
+            break;
+        }
+        if pos + sub_len > bytes.len() {
+            return false;
+        }
+        lzw_data.extend_from_slice(&bytes[pos..pos + sub_len]);
+        pos += sub_len;
+    }
+    if lzw_data.is_empty() {
+        return false;
+    }
+
+    let clear_code = 1usize << min_code_size;
+    let eoi_code = clear_code + 1;
+    let mut code_size = min_code_size + 1;
+    let mut next_code = clear_code + 2;
+
+    let mut bit_buf = 0u32;
+    let mut bits_in_buf = 0usize;
+    let mut byte_idx = 0usize;
+    let mut saw_clear = false;
+    let mut saw_eoi = false;
+
+    while byte_idx < lzw_data.len() || bits_in_buf >= code_size {
+        while bits_in_buf < code_size {
+            if byte_idx >= lzw_data.len() {
+                break;
+            }
+            bit_buf |= (lzw_data[byte_idx] as u32) << bits_in_buf;
+            bits_in_buf += 8;
+            byte_idx += 1;
+        }
+        if bits_in_buf < code_size {
+            break;
+        }
+        let mask = (1u32 << code_size) - 1;
+        let code = (bit_buf & mask) as usize;
+        bit_buf >>= code_size;
+        bits_in_buf -= code_size;
+
+        if !saw_clear {
+            if code != clear_code {
+                return false;
+            }
+            saw_clear = true;
+            continue;
+        }
+
+        if code == clear_code {
+            code_size = min_code_size + 1;
+            next_code = clear_code + 2;
+            continue;
+        }
+        if code == eoi_code {
+            saw_eoi = true;
+            break;
+        }
+        if code > next_code || next_code > 4096 {
+            return false;
+        }
+        next_code += 1;
+        if next_code == (1usize << code_size) && code_size < 12 {
+            code_size += 1;
+        }
+    }
+
+    saw_clear && saw_eoi
 }
 
 fn process_gif_image_descriptor(bytes: &[u8], pos: usize) -> Option<(usize, bool)> {
@@ -231,9 +402,9 @@ fn process_gif_image_descriptor(bytes: &[u8], pos: usize) -> Option<(usize, bool
     if next_pos >= bytes.len() {
         return None;
     }
-    next_pos += 1; // LZW min code size
-    let end_pos = skip_gif_sub_blocks(bytes, next_pos)?;
-    Some((end_pos, valid_dim))
+    let lzw_valid = validate_gif_lzw_stream(bytes, next_pos);
+    let end_pos = skip_gif_sub_blocks(bytes, next_pos + 1)?;
+    Some((end_pos, valid_dim && lzw_valid))
 }
 
 pub fn decode_gif_stream(bytes: &[u8]) -> bool {

@@ -98,7 +98,7 @@ fn test_missing_required_fields_fails() {
 #[test]
 fn test_batch_deduplication_and_date_filtering() {
     let cfg = ModuleConfig {
-        freshness_window_hours: 48.0,
+        freshness_window_hours: 168.0,
         require_latest_news: false,
         ..Default::default()
     };

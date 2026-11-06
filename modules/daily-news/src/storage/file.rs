@@ -5,6 +5,7 @@ use super::lock::ProcessFileLock;
 use super::merge::{merge_candidate_entry, trim_candidate_cache};
 use crate::domain::{HandoffReservation, ModuleConfig, NormalizedCandidate, ReservationStatus};
 use crate::ports::StoragePort;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,10 +43,70 @@ pub fn resolve_state_dir(base_dir: &Path) -> PathBuf {
         })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitJournalEntry {
+    pub candidate_id: String,
+    pub published_reservation: HandoffReservation,
+    pub timestamp: u64,
+}
+
+fn reconcile_transaction_journal(state_dir: &Path) {
+    let journal_path = state_dir.join("commit_tx.journal");
+    if !journal_path.is_file() {
+        return;
+    }
+
+    if let Ok(content) = fs::read_to_string(&journal_path) {
+        if let Ok(entry) = serde_json::from_str::<CommitJournalEntry>(&content) {
+            let reservations_path = state_dir.join("reservations.json");
+            let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
+                fs::read_to_string(&reservations_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+
+            let cid = entry.candidate_id.clone();
+            reservations.insert(cid.clone(), entry.published_reservation);
+
+            let unique_id = uuid::Uuid::new_v4();
+            let tmp_res = state_dir.join(format!("reservations.{unique_id}.tmp"));
+            if let Ok(json) = serde_json::to_string_pretty(&reservations) {
+                if fs::write(&tmp_res, json).is_ok() {
+                    let _ = fs::rename(&tmp_res, &reservations_path);
+                }
+            }
+
+            let consumed_path = state_dir.join("consumed.json");
+            let mut consumed_set: HashSet<String> = if consumed_path.is_file() {
+                fs::read_to_string(&consumed_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
+            consumed_set.insert(cid);
+
+            let tmp_c = state_dir.join(format!("consumed.{unique_id}.tmp"));
+            if let Ok(cj) = serde_json::to_string_pretty(&consumed_set) {
+                if fs::write(&tmp_c, cj).is_ok() {
+                    let _ = fs::rename(&tmp_c, &consumed_path);
+                }
+            }
+        }
+    }
+
+    let _ = fs::remove_file(&journal_path);
+}
+
 impl FileStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
         let state_dir = resolve_state_dir(base);
+        reconcile_transaction_journal(&state_dir);
         let config_path = state_dir.join("config.json");
         let legacy_config_path = base.join("config.json");
 
@@ -124,6 +185,7 @@ impl FileStorageAdapter {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = fs::create_dir_all(&self.state_dir);
         let _process_lock = ProcessFileLock::acquire(&self.state_dir.join(".state.lock"))?;
+        reconcile_transaction_journal(&self.state_dir);
         f()
     }
 }
@@ -442,7 +504,27 @@ impl StoragePort for FileStorageAdapter {
 
             res.status = ReservationStatus::Published;
 
+            // Step 1: Write journal entry atomically (Point of Commit)
+            let journal_entry = CommitJournalEntry {
+                candidate_id: candidate_id.to_string(),
+                published_reservation: res.clone(),
+                timestamp: now,
+            };
             let unique_id = uuid::Uuid::new_v4();
+            let journal_path = self.state_dir.join("commit_tx.journal");
+            let tmp_journal = self.state_dir.join(format!("commit.{unique_id}.tmp"));
+            let journal_json = serde_json::to_string_pretty(&journal_entry)
+                .map_err(|e| format!("Failed to serialize commit journal: {e}"))?;
+            fs::write(&tmp_journal, journal_json).map_err(|e| {
+                let _ = fs::remove_file(&tmp_journal);
+                format!("Failed to write commit journal: {e}")
+            })?;
+            fs::rename(&tmp_journal, &journal_path).map_err(|e| {
+                let _ = fs::remove_file(&tmp_journal);
+                format!("Failed to finalize commit journal: {e}")
+            })?;
+
+            // Step 2: Write reservations.json
             let tmp_path = self.state_dir.join(format!("reservations.{unique_id}.tmp"));
             let json = serde_json::to_string_pretty(&reservations)
                 .map_err(|e| format!("Failed to serialize reservations: {e}"))?;
@@ -455,6 +537,7 @@ impl StoragePort for FileStorageAdapter {
                 format!("Failed to finalize reservations to {reservations_path:?}: {e}")
             })?;
 
+            // Step 3: Write consumed.json
             let consumed_path = self.state_dir.join("consumed.json");
             let mut consumed_set: HashSet<String> = if consumed_path.is_file() {
                 fs::read_to_string(&consumed_path)
@@ -477,6 +560,9 @@ impl StoragePort for FileStorageAdapter {
                 let _ = fs::remove_file(&tmp_c);
                 format!("Failed to finalize consumed set to {consumed_path:?}: {e}")
             })?;
+
+            // Step 4: Transaction completed; remove journal
+            let _ = fs::remove_file(&journal_path);
 
             if let Ok(mut guard) = self.inner.reservations.write() {
                 *guard = reservations;

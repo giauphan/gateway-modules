@@ -135,7 +135,15 @@ pub fn handle_candidates(
         return make_json_resp(200, json!({ "count": count, "candidates": ranked }));
     }
 
-    let ranked = service.get_candidates(limit);
+    let ranked = match service.try_get_candidates(limit) {
+        Ok(r) => r,
+        Err(e) => {
+            return make_json_resp(
+                500,
+                json!({ "error": format!("Persistence error during candidate discovery: {e}") }),
+            );
+        }
+    };
     let count = ranked.len();
     make_json_resp(200, json!({ "count": count, "candidates": ranked }))
 }

@@ -120,7 +120,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     assert!(!is_audit_source_verified(spoofed_text, &spoofed_rec));
 
     // Case 1C: Genuine CertiK audit anchored with authoritative domain and report id
-    let authentic_text = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).";
+    let authentic_text = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let auth_sha = compute_sha256(authentic_text);
     let authentic_rec = VerificationRecord {
         record_id: "rec_auth_01".to_string(),
@@ -171,7 +171,19 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
         AuditProvenanceStatus::AuditContentMatched
     );
 
-    // Case 1E: With secondary_source_ref resolved via secondary_resolver -> IssuerAuthenticated
+    // Case 1E: With secondary_source_ref resolved via secondary_resolver without attestation -> ResolvedDocument
+    let plain_authentic_text = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).";
+    assert_eq!(
+        daily_news::research_readiness::check_audit_provenance_level_with_resolver(
+            plain_authentic_text,
+            &authentic_rec,
+            &auth_claim,
+            Some(&sec_res_authenticated)
+        ),
+        AuditProvenanceStatus::ResolvedDocument
+    );
+
+    // Case 1E2: Accompanied by authentic trusted fetch attestation envelope -> IssuerAuthenticated
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level_with_resolver(
             authentic_text,
@@ -443,7 +455,7 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Audit Report from CertiK: verified findings confirmed for 4x speedup on neural compiler benchmarks (https://certik.com/reports/2026-HND ref #: 2026-HND).";
+    let audit_text = "Official Audit Report from CertiK: verified findings confirmed for 4x speedup on neural compiler benchmarks (https://certik.com/reports/2026-HND ref #: 2026-HND).\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let audit_sha = compute_sha256(audit_text);
     std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
 

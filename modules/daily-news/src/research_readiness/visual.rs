@@ -274,6 +274,10 @@ pub fn verify_visual_asset_record(
             if tr.is_empty() {
                 return Err("License evidence document is empty".to_string());
             }
+            let res = move |_r: &str| -> Option<String> { Some(tr.to_string()) };
+            if !is_visual_rights_verified(v, Some(&res)) {
+                return Err("License evidence document failed rights and TASL verification".to_string());
+            }
             true
         }
         None => v.verified_rights.unwrap_or(false),

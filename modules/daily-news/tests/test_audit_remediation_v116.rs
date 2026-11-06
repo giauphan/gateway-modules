@@ -114,7 +114,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
     assert_ne!(readiness_mock.status, ReadinessStatus::VideoReady);
 
     // 2. Trusted Accredited Issuer ("CertiK") + Real PNG Media Bytes -> VIDEO_READY
-    let prod_audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-P1 ref #: 2026-P1): CertiK independently verified the performance benchmarks and confirmed findings for 4x latency reduction across all test runs.";
+    let prod_audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-P1 ref #: 2026-P1): CertiK independently verified the performance benchmarks and confirmed findings for 4x latency reduction across all test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
     let prod_audit_sha = compute_sha256(prod_audit_text);
     let prod_png_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let prod_png_sha = compute_sha256_bytes(prod_png_bytes);
