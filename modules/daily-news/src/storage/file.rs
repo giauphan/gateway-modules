@@ -56,49 +56,65 @@ fn reconcile_transaction_journal(state_dir: &Path) {
         return;
     }
 
-    if let Ok(content) = fs::read_to_string(&journal_path) {
-        if let Ok(entry) = serde_json::from_str::<CommitJournalEntry>(&content) {
-            let reservations_path = state_dir.join("reservations.json");
-            let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
-                fs::read_to_string(&reservations_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
+    let Ok(content) = fs::read_to_string(&journal_path) else {
+        return;
+    };
+    let Ok(entry) = serde_json::from_str::<CommitJournalEntry>(&content) else {
+        return;
+    };
 
-            let cid = entry.candidate_id.clone();
-            reservations.insert(cid.clone(), entry.published_reservation);
+    let reservations_path = state_dir.join("reservations.json");
+    let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
+        fs::read_to_string(&reservations_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
 
-            let unique_id = uuid::Uuid::new_v4();
-            let tmp_res = state_dir.join(format!("reservations.{unique_id}.tmp"));
-            if let Ok(json) = serde_json::to_string_pretty(&reservations) {
-                if fs::write(&tmp_res, json).is_ok() {
-                    let _ = fs::rename(&tmp_res, &reservations_path);
-                }
-            }
+    let cid = entry.candidate_id.clone();
+    reservations.insert(cid.clone(), entry.published_reservation);
 
-            let consumed_path = state_dir.join("consumed.json");
-            let mut consumed_set: HashSet<String> = if consumed_path.is_file() {
-                fs::read_to_string(&consumed_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
-            } else {
-                HashSet::new()
-            };
-            consumed_set.insert(cid);
-
-            let tmp_c = state_dir.join(format!("consumed.{unique_id}.tmp"));
-            if let Ok(cj) = serde_json::to_string_pretty(&consumed_set) {
-                if fs::write(&tmp_c, cj).is_ok() {
-                    let _ = fs::rename(&tmp_c, &consumed_path);
-                }
-            }
-        }
+    let unique_id = uuid::Uuid::new_v4();
+    let tmp_res = state_dir.join(format!("reservations.{unique_id}.tmp"));
+    let Ok(json) = serde_json::to_string_pretty(&reservations) else {
+        return;
+    };
+    if fs::write(&tmp_res, json).is_err() {
+        let _ = fs::remove_file(&tmp_res);
+        return;
+    }
+    if fs::rename(&tmp_res, &reservations_path).is_err() {
+        let _ = fs::remove_file(&tmp_res);
+        return;
     }
 
+    let consumed_path = state_dir.join("consumed.json");
+    let mut consumed_set: HashSet<String> = if consumed_path.is_file() {
+        fs::read_to_string(&consumed_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+    consumed_set.insert(cid);
+
+    let tmp_c = state_dir.join(format!("consumed.{unique_id}.tmp"));
+    let Ok(cj) = serde_json::to_string_pretty(&consumed_set) else {
+        return;
+    };
+    if fs::write(&tmp_c, cj).is_err() {
+        let _ = fs::remove_file(&tmp_c);
+        return;
+    }
+    if fs::rename(&tmp_c, &consumed_path).is_err() {
+        let _ = fs::remove_file(&tmp_c);
+        return;
+    }
+
+    // Both files updated atomically; only now remove journal
     let _ = fs::remove_file(&journal_path);
 }
 
@@ -106,6 +122,8 @@ impl FileStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
         let state_dir = resolve_state_dir(base);
+        let _ = fs::create_dir_all(&state_dir);
+        let _process_lock = ProcessFileLock::acquire(&state_dir.join(".state.lock"));
         reconcile_transaction_journal(&state_dir);
         let config_path = state_dir.join("config.json");
         let legacy_config_path = base.join("config.json");

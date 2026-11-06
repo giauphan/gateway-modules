@@ -165,8 +165,9 @@ pub(crate) fn verify_cryptographic_provenance(
     secondary_resolver: SecondaryResolver,
 ) -> bool {
     let has_crypto_envelope = (lower.contains("-----begin pgp signature-----")
-        || lower.contains("-----begin pgp signed message-----"))
-        && lower.contains("-----end pgp");
+        || lower.contains("-----begin pgp signed message-----")
+        || lower.contains("-----begin digital signature-----"))
+        && (lower.contains("-----end pgp") || lower.contains("-----end digital signature-----"));
 
     let has_digital_sig_header = lower.contains("signature:")
         || lower.contains("signed-by:")
@@ -179,27 +180,31 @@ pub(crate) fn verify_cryptographic_provenance(
         return false;
     }
 
-    let has_valid_sig_token = audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| {
-        if w.len() >= 64 && w.chars().all(|c| c.is_ascii_hexdigit()) {
-            let first_ch = w.chars().next().unwrap_or(' ');
-            !w.chars().all(|c| c == first_ch)
-        } else {
-            false
-        }
-    });
-
-    let has_audit_hash_integrity = rec.audit_trail_ref.as_deref().is_some_and(|r| {
-        let tr = r.trim().to_ascii_lowercase();
-        tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
-    });
-
-    if !has_valid_sig_token || !has_audit_hash_integrity {
+    let Some(sec_ref) = rec.secondary_source_ref.as_deref() else {
+        return false;
+    };
+    if !check_authoritative_domain_match(sec_ref, accred, domains, rec, secondary_resolver) {
         return false;
     }
 
-    rec.secondary_source_ref.as_deref().is_some_and(|sec_ref| {
-        check_authoritative_domain_match(sec_ref, accred, domains, rec, secondary_resolver)
-    })
+    // Attempt cryptographic attestation verification
+    if let Some(parsed) = super::crypto::parse_attestation_envelope(audit_text) {
+        let audit_text_sha = crate::url::compute_sha256(audit_text);
+        if parsed.issuer.to_lowercase().contains(accred)
+            && super::crypto::verify_parsed_attestation(
+                &parsed,
+                sec_ref,
+                rec.audit_trail_ref.as_deref(),
+                Some(&audit_text_sha),
+                super::crypto::global_trust_store(),
+            )
+        {
+            return true;
+        }
+    }
+
+    // In absence of verified cryptographic envelope with known key in trust store, fail closed
+    false
 }
 
 pub(crate) fn verify_trusted_fetch_attestation(
@@ -217,7 +222,7 @@ pub(crate) fn verify_trusted_fetch_attestation(
         return false;
     }
 
-    let has_attestation = (lower.contains("-----begin gateway fetch attestation-----")
+    let has_attestation_markers = (lower.contains("-----begin gateway fetch attestation-----")
         || lower.contains("-----begin trusted attestation-----")
         || lower.contains("gateway-attestation:")
         || lower.contains("trusted-fetch-attestation:"))
@@ -225,21 +230,26 @@ pub(crate) fn verify_trusted_fetch_attestation(
             || lower.contains("tls-verified: true")
             || lower.contains("attested_issuer:"));
 
-    let has_valid_sig_token = audit_text.split(|c: char| !c.is_alphanumeric()).any(|w| {
-        if w.len() >= 64 && w.chars().all(|c| c.is_ascii_hexdigit()) {
-            let first_ch = w.chars().next().unwrap_or(' ');
-            !w.chars().all(|c| c == first_ch)
-        } else {
-            false
-        }
-    });
+    if !has_attestation_markers {
+        return false;
+    }
 
-    let has_audit_hash_integrity = rec.audit_trail_ref.as_deref().is_some_and(|r| {
-        let tr = r.trim().to_ascii_lowercase();
-        tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit())
-    });
+    let Some(parsed) = super::crypto::parse_attestation_envelope(audit_text) else {
+        return false;
+    };
 
-    has_attestation && has_valid_sig_token && has_audit_hash_integrity
+    if !parsed.issuer.to_lowercase().contains(accred) {
+        return false;
+    }
+
+    let audit_text_sha = crate::url::compute_sha256(audit_text);
+    super::crypto::verify_parsed_attestation(
+        &parsed,
+        sec_ref,
+        rec.audit_trail_ref.as_deref(),
+        Some(&audit_text_sha),
+        super::crypto::global_trust_store(),
+    )
 }
 
 pub fn is_audit_source_verified_with_resolver(

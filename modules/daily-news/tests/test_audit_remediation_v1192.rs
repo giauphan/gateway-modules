@@ -125,9 +125,8 @@ fn test_audit_provenance_fail_open_eliminated() {
     );
 
     // D. Document accompanied by authentic trusted fetch attestation envelope -> SUCCEEDS (IssuerAuthenticated)
-    let attested_text = format!(
-        "{audit_text}\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----"
-    );
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-101", &auth_sha);
+    let attested_text = format!("{audit_text}\n{att}");
     assert!(is_audit_source_verified_with_resolver(
         &attested_text,
         &rec,
@@ -185,12 +184,15 @@ fn test_handoff_lifecycle_token_security_and_published_state() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-HND ref #: 2026-HND): CertiK independently verified findings confirmed for 4x performance gain.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_text);
-    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-HND ref #: 2026-HND): CertiK independently verified findings confirmed for 4x performance gain.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-HND", &base_sha);
+    let audit_text = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_text);
+    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), &audit_text).unwrap();
     let sec_url_sha = compute_sha256("https://certik.com/reports/2026-HND");
-    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), audit_text).unwrap();
-    std::fs::write(evidence_dir.join("2026-HND.txt"), audit_text).unwrap();
+    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), &audit_text).unwrap();
+    std::fs::write(evidence_dir.join("2026-HND.txt"), &audit_text).unwrap();
 
     let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
     let lic_url_sha = compute_sha256("https://example.com/license");
@@ -342,8 +344,11 @@ fn test_per_claim_verification_blocks_partial_fake_claims() {
         ..Default::default()
     };
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-OK ref #: 2026-OK): CertiK independently verified findings confirmed for 4x throughput across test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_text);
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-OK ref #: 2026-OK): CertiK independently verified findings confirmed for 4x throughput across test runs.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-OK", &base_sha);
+    let audit_text = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_text);
     let authentic_rec = VerificationRecord {
         record_id: "rec_auth".to_string(),
         verified_at: "2026-11-06T00:00:00Z".to_string(),

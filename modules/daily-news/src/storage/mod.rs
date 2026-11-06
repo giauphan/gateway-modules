@@ -6,11 +6,13 @@ pub mod file;
 pub mod in_memory;
 pub mod lock;
 pub mod merge;
+pub mod sqlite;
 
 pub use file::{resolve_state_dir, FileStorageAdapter};
 pub use in_memory::InMemoryStorageAdapter;
 pub use lock::ProcessFileLock;
 pub use merge::merge_candidate_entry;
+pub use sqlite::SqliteStorageAdapter;
 
 #[cfg(test)]
 mod tests;

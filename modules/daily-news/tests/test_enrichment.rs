@@ -102,8 +102,11 @@ fn test_enrich_candidate_workflow_state_transitions() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // 2. Second stage enrichment: provide verified claims with accredited reviewer + CC-BY visual asset
-    let audit_content = "Official Cryptographic Audit Trail Report #2026-02 from CertiK (https://certik.com/reports/benchmark ref #: 2026-02): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = daily_news::url::compute_sha256(audit_content);
+    let base_audit = "Official Cryptographic Audit Trail Report #2026-02 from CertiK (https://certik.com/reports/benchmark ref #: 2026-02): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.";
+    let base_sha = daily_news::url::compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/benchmark", &base_sha);
+    let audit_content = format!("{base_audit}\n{att}");
+    let audit_sha = daily_news::url::compute_sha256(&audit_content);
     let chart_bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     let chart_sha = daily_news::url::compute_sha256_bytes(chart_bytes);
     let evidence_dir = tmp_dir.join(".state").join("evidence");

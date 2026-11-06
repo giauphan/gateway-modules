@@ -399,8 +399,11 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         extraction_method: None,
     };
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): audit findings independently confirmed for compiler performance benchmarking.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_text);
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): audit findings independently confirmed for compiler performance benchmarking.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-CERT-01", &base_sha);
+    let audit_text = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_text);
     let claim = ClaimEvidence {
         claim_id: "c_valid".to_string(),
         statement: "Compiler performance".to_string(),
@@ -422,9 +425,10 @@ fn test_visual_provenance_rejects_nonexistent_or_checksum_mismatch() {
         }),
     };
 
+    let audit_text_for_res = audit_text.clone();
     let audit_resolver = move |h: &str| -> Option<String> {
         if h == audit_sha {
-            Some(audit_text.to_string())
+            Some(audit_text_for_res.to_string())
         } else {
             None
         }

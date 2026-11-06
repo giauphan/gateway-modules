@@ -106,11 +106,13 @@ fn test_license_restriction_clauses_fail_closed() {
     );
 
     // E. Standard MIT License text with 'NONINFRINGEMENT' and 'permission is hereby granted':
-    // SUCCEEDS!
+    // SUCCEEDS when asset declared license matches MIT!
+    let mut mit_asset = visual_asset.clone();
+    mit_asset.license_status = Some("mit".to_string());
     let mit_doc = "MIT License for chart.png. Copyright (c) 2026 Example Corp. Permission is hereby granted, free of charge, to any person obtaining a copy. THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.";
     let res_mit = move |_r: &str| -> Option<String> { Some(mit_doc.to_string()) };
     assert!(
-        is_visual_rights_verified(&visual_asset, Some(&res_mit)),
+        is_visual_rights_verified(&mit_asset, Some(&res_mit)),
         "Must accept standard MIT license text containing 'NONINFRINGEMENT' without false rejection"
     );
 }
@@ -182,9 +184,11 @@ fn test_audit_provenance_distinguishes_resolved_doc_from_authenticated_issuer() 
 
     // Case 3: Document accompanied by authentic trusted fetch attestation from accredited domain.
     // MUST achieve IssuerAuthenticated!
-    let attested_audit_text = format!(
-        "{audit_text}\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\n-----END GATEWAY FETCH ATTESTATION-----"
+    let att = daily_news::research_readiness::make_test_certik_attestation(
+        "https://certik.com/reports/certik_2026_101",
+        rec.audit_trail_ref.as_deref().unwrap(),
     );
+    let attested_audit_text = format!("{audit_text}\n{att}");
     let status_attested = check_audit_provenance_level_with_resolver(
         &attested_audit_text,
         &rec,

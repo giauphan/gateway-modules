@@ -120,8 +120,11 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     assert!(!is_audit_source_verified(spoofed_text, &spoofed_rec));
 
     // Case 1C: Genuine CertiK audit anchored with authoritative domain and report id
-    let authentic_text = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let auth_sha = compute_sha256(authentic_text);
+    let base_audit = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-CERT-01", &base_sha);
+    let authentic_text = format!("{base_audit}\n{att}");
+    let auth_sha = compute_sha256(&authentic_text);
     let authentic_rec = VerificationRecord {
         record_id: "rec_auth_01".to_string(),
         verified_at: "2026-11-04T05:00:00Z".to_string(),
@@ -164,7 +167,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     };
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level(
-            authentic_text,
+            &authentic_text,
             &unanchored_rec,
             &auth_claim
         ),
@@ -186,7 +189,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     // Case 1E2: Accompanied by authentic trusted fetch attestation envelope -> IssuerAuthenticated
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level_with_resolver(
-            authentic_text,
+            &authentic_text,
             &authentic_rec,
             &auth_claim,
             Some(&sec_res_authenticated)
@@ -197,7 +200,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     // Case 1F: Resolver returning None MUST fail closed to AuditContentMatched
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level_with_resolver(
-            authentic_text,
+            &authentic_text,
             &authentic_rec,
             &auth_claim,
             Some(&_sec_res_unresolved)
@@ -208,7 +211,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     // Case 1G: Without secondary_resolver (None), domain doc cannot be resolved -> AuditContentMatched
     assert_eq!(
         daily_news::research_readiness::check_audit_provenance_level(
-            authentic_text,
+            &authentic_text,
             &authentic_rec,
             &auth_claim
         ),
@@ -455,9 +458,12 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Audit Report from CertiK: verified findings confirmed for 4x speedup on neural compiler benchmarks (https://certik.com/reports/2026-HND ref #: 2026-HND).\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_text);
-    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
+    let base_audit = "Official Audit Report from CertiK: verified findings confirmed for 4x speedup on neural compiler benchmarks (https://certik.com/reports/2026-HND ref #: 2026-HND).";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-HND", &base_sha);
+    let audit_text = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_text);
+    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), &audit_text).unwrap();
 
     let certik_report = "Official CertiK Benchmark Audit Report 2026-HND. Verified 4x speedup on neural compiler benchmarks.";
     let certik_url_sha = compute_sha256("https://certik.com/reports/2026-HND");

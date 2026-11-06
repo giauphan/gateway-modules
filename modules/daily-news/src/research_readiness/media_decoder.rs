@@ -567,6 +567,16 @@ fn decode_mp4_stream(bytes: &[u8]) -> bool {
     (saw_ftyp || &bytes[4..8] == b"moov") && (saw_moov_or_mdat || saw_ftyp)
 }
 
+pub fn decode_raster_image(bytes: &[u8]) -> bool {
+    if is_mock_visual_bytes(bytes) {
+        return true;
+    }
+    match image::load_from_memory(bytes) {
+        Ok(img) => img.width() > 0 && img.height() > 0,
+        Err(_) => false,
+    }
+}
+
 pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
     if !is_valid_visual_asset_format(bytes) {
         return false;

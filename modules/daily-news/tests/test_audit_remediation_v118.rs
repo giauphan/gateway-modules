@@ -162,8 +162,11 @@ fn test_issue1_false_positive_video_ready_prevention() {
         verified_rights: Some(true),
     }];
 
-    let official_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let official_audit_sha = compute_sha256(official_audit);
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-CERT-01", &base_sha);
+    let official_audit = format!("{base_audit}\n{att}");
+    let official_audit_sha = compute_sha256(&official_audit);
     let official_claims = vec![ClaimEvidence {
         claim_id: "c_official_1".to_string(),
         statement: "4x improvement".to_string(),
@@ -185,8 +188,9 @@ fn test_issue1_false_positive_video_ready_prevention() {
         }),
     }];
 
+    let official_audit_for_res = official_audit.clone();
     let official_audit_res = move |h: &str| -> Option<String> {
-        if h == official_audit_sha { Some(official_audit.to_string()) } else { None }
+        if h == official_audit_sha { Some(official_audit_for_res.to_string()) } else { None }
     };
     let truncated_asset_res = move |h: &str| -> Option<Vec<u8>> {
         if h == truncated_png_sha { Some(truncated_png_bytes.to_vec()) } else { None }
@@ -247,12 +251,15 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
     let primary_sha = compute_sha256(primary_text);
     std::fs::write(evidence_dir.join(format!("{primary_sha}.txt")), primary_text).unwrap();
 
-    let audit_text = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_text);
-    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), audit_text).unwrap();
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-H1", &base_sha);
+    let audit_text = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_text);
+    std::fs::write(evidence_dir.join(format!("{audit_sha}.txt")), &audit_text).unwrap();
     let sec_url_sha = compute_sha256("https://certik.com/reports/2026-H1");
-    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), audit_text).unwrap();
-    std::fs::write(evidence_dir.join("2026-H1.txt"), audit_text).unwrap();
+    std::fs::write(evidence_dir.join(format!("{sec_url_sha}.txt")), &audit_text).unwrap();
+    std::fs::write(evidence_dir.join("2026-H1.txt"), &audit_text).unwrap();
 
     let license_text = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
     let lic_url_sha = compute_sha256("https://example.com/license");

@@ -193,8 +193,11 @@ fn test_all_criteria_met_yields_video_ready() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // With accredited issuer and valid media asset resolvers, evaluate_readiness_full yields VideoReady
-    let audit_doc = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_doc);
+    let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-01", &base_sha);
+    let audit_doc = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_doc);
     let mut accredited_claims = claims;
     accredited_claims[0].verification_record = Some(VerificationRecord {
         record_id: "vr_prod_01".to_string(),
@@ -212,11 +215,12 @@ fn test_all_criteria_met_yields_video_ready() {
     resolved_visuals[0].checksum_sha256 = Some(png_sha.clone());
 
     let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_1.";
+    let audit_doc_for_sec = audit_doc.clone();
     let sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
         } else if r == "https://certik.com/reports/2026-01" || r == compute_sha256("https://certik.com/reports/2026-01") {
-            Some(audit_doc.to_string())
+            Some(audit_doc_for_sec.to_string())
         } else {
             None
         }
@@ -675,8 +679,11 @@ fn test_verification_record_structured_evidence() {
     assert_eq!(readiness.status, ReadinessStatus::NeedsVerification);
 
     // When resolvers are provided for accredited CertiK audit + valid visual bytes, evaluates to VideoReady
-    let audit_doc = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----";
-    let audit_sha = compute_sha256(audit_doc);
+    let base_audit = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
+    let base_sha = compute_sha256(base_audit);
+    let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-001", &base_sha);
+    let audit_doc = format!("{base_audit}\n{att}");
+    let audit_sha = compute_sha256(&audit_doc);
     let mut resolved_claims = claims;
     resolved_claims[0].verification_record.as_mut().unwrap().audit_trail_ref = Some(audit_sha.clone());
     resolved_claims[0].verification_record.as_mut().unwrap().secondary_source_ref = Some("https://certik.com/reports/2026-001".to_string());
@@ -687,11 +694,12 @@ fn test_verification_record_structured_evidence() {
     resolved_vis[0].checksum_sha256 = Some(png_sha.clone());
 
     let license_doc = "Copyright 2026 Example Corp. Licensed under CC-BY for commercial use and distribution of vis_audit_diagram.";
+    let audit_doc_for_sec = audit_doc.clone();
     let sec_res = move |r: &str| -> Option<String> {
         if r == "https://example.com/license" || r == compute_sha256("https://example.com/license") {
             Some(license_doc.to_string())
         } else if r == "https://certik.com/reports/2026-001" || r == compute_sha256("https://certik.com/reports/2026-001") {
-            Some(audit_doc.to_string())
+            Some(audit_doc_for_sec.to_string())
         } else {
             None
         }

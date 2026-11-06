@@ -166,8 +166,9 @@ fn test_audit_provenance_rejects_unauthenticated_mock_resolver_for_video_ready()
         verified_rights: Some(true),
     };
 
+    let audit_sha_for_res = audit_sha.clone();
     let audit_resolver = move |h: &str| -> Option<String> {
-        if h == audit_sha { Some(audit_text.to_string()) } else { None }
+        if h == audit_sha_for_res { Some(audit_text.to_string()) } else { None }
     };
     let asset_resolver = move |sha: &str| -> Option<Vec<u8>> {
         if sha == asset_sha { Some(valid_png_bytes.to_vec()) } else { None }
@@ -231,9 +232,45 @@ fn test_audit_provenance_rejects_unauthenticated_mock_resolver_for_video_ready()
         }
     };
 
-    let attested_audit_text = format!(
-        "{audit_text}\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nDomain: certik.com\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----"
+    // Case 2a: Fake / forged attestation signature: MUST FAIL CLOSED!
+    let fake_attested_audit_text = format!(
+        "{audit_text}\n-----BEGIN GATEWAY FETCH ATTESTATION-----\nVersion: 1\nURL: https://certik.com/reports/certik_audit_2026_99\nContent-SHA256: {audit_sha}\nFetched-At: 1793618000\nIssuer: CertiK\nKey-ID: gateway-internal-hmac-1\nTLS-Verified: true\nSignature: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n-----END GATEWAY FETCH ATTESTATION-----"
     );
+    let fake_attested_sha = compute_sha256(&fake_attested_audit_text);
+    let rec_fake = VerificationRecord {
+        audit_trail_ref: Some(fake_attested_sha),
+        ..rec.clone()
+    };
+    let claim_fake = ClaimEvidence {
+        verification_record: Some(rec_fake.clone()),
+        ..claim.clone()
+    };
+    assert!(
+        !is_audit_source_verified_with_resolver(&fake_attested_audit_text, &rec_fake, Some(&authentic_resolver)),
+        "Fake attestation signature MUST fail cryptographic source verification"
+    );
+    assert_ne!(
+        check_audit_provenance_level_with_resolver(
+            &fake_attested_audit_text,
+            &rec_fake,
+            &claim_fake,
+            Some(&authentic_resolver),
+        ),
+        AuditProvenanceStatus::IssuerAuthenticated,
+        "Fake attestation signature CANNOT yield IssuerAuthenticated"
+    );
+
+    // Case 2b: Cryptographically signed authentic gateway fetch attestation
+    let attestation_block = daily_news::research_readiness::create_signed_gateway_attestation(
+        "https://certik.com/reports/certik_audit_2026_99",
+        "https://certik.com/reports/certik_audit_2026_99",
+        &audit_sha,
+        1793618000,
+        "CertiK",
+        "gateway-internal-hmac-1",
+        b"gateway-production-attestation-secret-2026",
+    );
+    let attested_audit_text = format!("{audit_text}\n{attestation_block}");
     let attested_sha = compute_sha256(&attested_audit_text);
     let rec_attested = VerificationRecord {
         audit_trail_ref: Some(attested_sha.clone()),

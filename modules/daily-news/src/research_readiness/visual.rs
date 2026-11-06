@@ -420,6 +420,12 @@ pub fn is_visual_rights_verified(
         return false;
     }
 
+    // 2b. Strict License Type & Category Matching
+    // Metadata declared license must explicitly match the grant document terms
+    if !matches_declared_license_type(&lic_status, &lower) {
+        return false;
+    }
+
     // 3. Asset linkage verification: document must reference asset ref, sha256 checksum, or source filename
     let ref_lower = v.asset_ref.trim().to_lowercase();
     let url_filename = v.source_url.split('/').next_back().unwrap_or("").to_lowercase();
@@ -562,4 +568,40 @@ pub fn are_visuals_provenance_verified(
 
 pub fn are_visuals_verified(visuals: &[VisualEvidence]) -> bool {
     are_visuals_provenance_verified(visuals, None)
+}
+
+fn matches_declared_license_type(declared: &str, doc_lower: &str) -> bool {
+    match declared {
+        "cc-by" | "cc-by-4.0" | "cc-by-3.0" | "cc-by-2.0" => {
+            (doc_lower.contains("creative commons")
+                || doc_lower.contains("cc-by")
+                || doc_lower.contains("cc by"))
+                && !doc_lower.contains("mit license")
+                && !doc_lower.contains("apache license")
+        }
+        "cc-by-sa" | "cc-by-sa-4.0" => {
+            doc_lower.contains("creative commons")
+                || doc_lower.contains("sharealike")
+                || doc_lower.contains("share-alike")
+                || doc_lower.contains("cc-by-sa")
+        }
+        "cc0" | "public-domain" => {
+            doc_lower.contains("public domain")
+                || doc_lower.contains("cc0")
+                || doc_lower.contains("no rights reserved")
+        }
+        "mit" => {
+            (doc_lower.contains("mit license")
+                || doc_lower.contains("permission is hereby granted, free of charge"))
+                && !doc_lower.contains("creative commons")
+        }
+        "apache-2.0" | "apache" => {
+            doc_lower.contains("apache license") || doc_lower.contains("apache 2.0")
+        }
+        "bsd-2-clause" | "bsd-3-clause" | "bsd" => {
+            doc_lower.contains("bsd")
+                || doc_lower.contains("redistribution and use in source and binary forms")
+        }
+        _ => false,
+    }
 }
