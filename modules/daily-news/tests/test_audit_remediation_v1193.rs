@@ -104,6 +104,15 @@ fn test_license_restriction_clauses_fail_closed() {
         is_visual_rights_verified(&visual_asset, Some(&res_grant)),
         "Must accept authentic affirmative grant without restrictive clauses"
     );
+
+    // E. Standard MIT License text with 'NONINFRINGEMENT' and 'permission is hereby granted':
+    // SUCCEEDS!
+    let mit_doc = "MIT License for chart.png. Copyright (c) 2026 Example Corp. Permission is hereby granted, free of charge, to any person obtaining a copy. THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.";
+    let res_mit = move |_r: &str| -> Option<String> { Some(mit_doc.to_string()) };
+    assert!(
+        is_visual_rights_verified(&visual_asset, Some(&res_mit)),
+        "Must accept standard MIT license text containing 'NONINFRINGEMENT' without false rejection"
+    );
 }
 
 // ---------------------------------------------------------------------------

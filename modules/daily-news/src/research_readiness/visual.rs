@@ -379,7 +379,10 @@ pub fn is_visual_rights_verified(
         "not for commercial use",
         "commercial use prohibited",
     ];
-    if PROHIBITED_TERMS.iter().any(|p| lower.contains(p)) {
+    let clean_lower = lower
+        .replace("noninfringement", "")
+        .replace("non-infringement", "");
+    if PROHIBITED_TERMS.iter().any(|p| clean_lower.contains(p)) {
         return false;
     }
 
