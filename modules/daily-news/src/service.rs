@@ -44,7 +44,10 @@ impl DailyNewsService {
     }
 
     fn fetcher(&self) -> Arc<dyn FeedFetcherPort> {
-        self.fetcher.read().unwrap().clone()
+        self.fetcher
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn with_discussion_fetcher(mut self, discussion: Arc<dyn DiscussionFetcherPort>) -> Self {
@@ -169,6 +172,30 @@ impl DailyNewsService {
         self.scorer.rank_candidates(unconsumed, limit)
     }
 
+    fn persist_and_build_discovery_result(
+        &self,
+        candidates: Vec<NormalizedCandidate>,
+        tier: &str,
+        source_file: &str,
+    ) -> Result<Option<DiscoveryResult>, (String, String)> {
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        self.storage
+            .save_candidates(&candidates)
+            .map_err(|e| ("PERSISTENCE_ERROR".to_string(), format!("Failed to persist candidates: {e}")))?;
+        let count = candidates.len();
+        Ok(Some(DiscoveryResult {
+            tier: tier.to_string(),
+            status: "ELIGIBLE".to_string(),
+            count,
+            candidates,
+            source_file: Some(source_file.to_string()),
+            reason: None,
+            diagnostics: json!({ "tier": tier }),
+        }))
+    }
+
     fn try_curated_tier(
         &self,
         curated: Option<Vec<RawNewsItem>>,
@@ -185,22 +212,7 @@ impl DailyNewsService {
             return Ok(None);
         }
         let ranked = self.filter_and_score(&feed, from_epoch, to_epoch, topics, count);
-        if ranked.is_empty() {
-            return Ok(None);
-        }
-        self.storage
-            .save_candidates(&ranked)
-            .map_err(|e| ("PERSISTENCE_ERROR".to_string(), format!("Failed to persist candidates: {e}")))?;
-        let c_len = ranked.len();
-        Ok(Some(DiscoveryResult {
-            tier: "tier_1_curated".to_string(),
-            status: "ELIGIBLE".to_string(),
-            count: c_len,
-            candidates: ranked,
-            source_file: Some("curated_feed".to_string()),
-            reason: None,
-            diagnostics: json!({ "tier": "tier_1_curated" }),
-        }))
+        self.persist_and_build_discovery_result(ranked, "tier_1_curated", "curated_feed")
     }
 
     fn try_live_tier(
@@ -227,22 +239,7 @@ impl DailyNewsService {
             .fetch_sources(&effective_sources, count.max(30))
             .unwrap_or_default();
         let ranked = self.filter_and_score(&raw, from_epoch, to_epoch, topics, count);
-        if ranked.is_empty() {
-            return Ok(None);
-        }
-        self.storage
-            .save_candidates(&ranked)
-            .map_err(|e| ("PERSISTENCE_ERROR".to_string(), format!("Failed to persist candidates: {e}")))?;
-        let c_len = ranked.len();
-        Ok(Some(DiscoveryResult {
-            tier: "tier_2_automated".to_string(),
-            status: "ELIGIBLE".to_string(),
-            count: c_len,
-            candidates: ranked,
-            source_file: Some("live_feeds".to_string()),
-            reason: None,
-            diagnostics: json!({ "tier": "tier_2_automated" }),
-        }))
+        self.persist_and_build_discovery_result(ranked, "tier_2_automated", "live_feeds")
     }
 
     fn try_cache_tier(

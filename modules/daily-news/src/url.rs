@@ -181,116 +181,44 @@ pub fn compute_sha256(input: &str) -> String {
     compute_sha256_bytes(input.as_bytes())
 }
 
+pub fn normalize_whitespace_lower(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<&str>>().join(" ").to_lowercase()
+}
+
 pub fn compute_title_hash(title: &str) -> String {
-    let norm: String = title
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ")
-        .to_lowercase();
+    let norm = normalize_whitespace_lower(title);
     compute_sha256(&norm)
 }
 
 pub fn compute_content_hash(title: &str, body: Option<&str>, canonical_url: &str) -> String {
-    let clean_title: String = title
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ")
-        .to_lowercase();
+    let clean_title = normalize_whitespace_lower(title);
     let clean_url = canonical_url.trim().to_lowercase();
     let body_str = body.unwrap_or("").trim();
-    let clean_body: String = body_str
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ")
-        .to_lowercase();
+    let clean_body = normalize_whitespace_lower(body_str);
     let payload = format!("{clean_title}|{clean_url}|{clean_body}");
     compute_sha256(&payload)
 }
 
-const TOPIC_FAMILIES: &[(&str, &[&str])] = &[
+const TOPIC_FAMILIES: &[(&str, &str)] = &[
     (
         "context_memory",
-        &[
-            "prompt caching",
-            "context window",
-            "kv cache",
-            "memory",
-            "memories",
-            "caching",
-            "state loss",
-            "token limit",
-            "tokens",
-        ],
+        "prompt caching,context window,kv cache,memory,memories,caching,state loss,token limit,tokens",
     ),
     (
         "agent_tool_use",
-        &[
-            "tool call",
-            "tool calls",
-            "tool-calling",
-            "tool-call",
-            "mcp",
-            "schema",
-            "function call",
-            "tools",
-            "tooling",
-            "payload parsing",
-        ],
+        "tool call,tool calls,tool-calling,tool-call,mcp,schema,function call,tools,tooling,payload parsing",
     ),
     (
         "debugging_reliability",
-        &[
-            "debug",
-            "debugging",
-            "retry",
-            "retries",
-            "flaky",
-            "flakiness",
-            "reliability",
-            "ci",
-            "loop",
-            "loops",
-            "crash",
-            "crashes",
-            "crashing",
-            "failure",
-            "failures",
-            "failing",
-            "trace",
-            "traces",
-        ],
+        "debug,debugging,retry,retries,flaky,flakiness,reliability,ci,loop,loops,crash,crashes,crashing,failure,failures,failing,trace,traces",
     ),
     (
         "agent_evaluation",
-        &[
-            "benchmark",
-            "benchmarks",
-            "benchmarking",
-            "eval",
-            "evals",
-            "evaluation",
-            "evaluating",
-            "score",
-            "scores",
-            "metrics",
-            "metric",
-            "test suite",
-        ],
+        "benchmark,benchmarks,benchmarking,eval,evals,evaluation,evaluating,score,scores,metrics,metric,test suite",
     ),
     (
         "agent_architecture",
-        &[
-            "agent",
-            "agents",
-            "architecture",
-            "multi-agent",
-            "orchestrator",
-            "orchestration",
-            "workflow",
-            "system prompt",
-            "planning",
-            "reasoning",
-        ],
+        "agent,agents,architecture,multi-agent,orchestrator,orchestration,workflow,system prompt,planning,reasoning",
     ),
 ];
 
@@ -309,9 +237,9 @@ pub fn classify_topic_family(title: &str, text: &str) -> String {
         }
     };
 
-    for (family, keywords) in TOPIC_FAMILIES {
-        if keywords.iter().any(|&k| matches_phrase_or_word(k)) {
-            return family.to_string();
+    for (family, keyword_csv) in TOPIC_FAMILIES {
+        if keyword_csv.split(',').any(&matches_phrase_or_word) {
+            return (*family).to_string();
         }
     }
 

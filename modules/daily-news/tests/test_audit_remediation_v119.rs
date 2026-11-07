@@ -29,34 +29,8 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-fn make_temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "dn_v119_{tag}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-struct MockFeedFetcher {
-    items: Vec<daily_news::domain::RawNewsItem>,
-}
-
-impl daily_news::ports::FeedFetcherPort for MockFeedFetcher {
-    fn fetch_raw_items(&self, _limit: usize) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-    fn fetch_sources(
-        &self,
-        _sources: &[String],
-        _limit: usize,
-    ) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-}
+mod common;
+use common::{make_temp_dir, make_valid_gif, make_valid_jpeg, MockFeedFetcher};
 
 // ---------------------------------------------------------------------------
 // Issue 1: P0 - Audit Provenance Authentication (Negative & Positive Tests)
@@ -336,28 +310,17 @@ fn test_issue3_real_media_decoding_containers() {
     let corrupt_zlib_png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDAT\xFF\xFF\0\x02\0\0\x05\0\x01z^\xab?\0\0\0\0IEND\xaeB`\x82";
     assert!(!is_visual_media_decodable(corrupt_zlib_png));
 
-    // Valid JPEG: SOI (FF D8) + SOF0 segment (FF C0) with width=1, height=1, components=3 + EOI (FF D9)
-    let valid_jpeg = &[
-        0xFF, 0xD8, // SOI
-        0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // APP0
-        0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00, // SOF0: precision 8, h=1, w=1, 3 comp
-        0xFF, 0xD9, // EOI
-    ];
-    assert!(is_visual_media_decodable(valid_jpeg));
+    // Valid JPEG: complete 1x1 JFIF image decodable by raster engine
+    let valid_jpeg = make_valid_jpeg();
+    assert!(is_visual_media_decodable(&valid_jpeg));
 
     // Corrupted JPEG: Missing SOF dimensions
     let corrupt_jpeg = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xD9];
     assert!(!is_visual_media_decodable(corrupt_jpeg));
 
-    // Valid GIF89a with Logical Screen Descriptor (1x1) + Image Descriptor (1x1) + Trailer (3B)
-    let valid_gif = &[
-        b'G', b'I', b'F', b'8', b'9', b'a',
-        0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // Screen: w=1, h=1
-        0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // Image Descriptor: w=1, h=1
-        0x02, 0x02, 0x44, 0x01, 0x00, // LZW data subblock
-        0x3B, // Trailer
-    ];
-    assert!(is_visual_media_decodable(valid_gif));
+    // Valid GIF89a with GCT (1x1) + Image Descriptor (1x1) + LZW + Trailer (3B)
+    let valid_gif = make_valid_gif();
+    assert!(is_visual_media_decodable(&valid_gif));
 
     // Corrupted GIF: Contains byte 0x3B but has zero dimensions
     let corrupt_gif = &[b'G', b'I', b'F', b'8', b'9', b'a', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B];

@@ -190,12 +190,15 @@ pub(crate) fn verify_cryptographic_provenance(
     // Attempt cryptographic attestation verification
     if let Some(parsed) = super::crypto::parse_attestation_envelope(audit_text) {
         let audit_text_sha = crate::url::compute_sha256(audit_text);
+        let actual_body = extract_audit_body(audit_text);
+        let actual_body_sha = crate::url::compute_sha256(actual_body);
         if parsed.issuer.to_lowercase().contains(accred)
-            && super::crypto::verify_parsed_attestation(
+            && super::crypto::verify_parsed_attestation_with_body(
                 &parsed,
                 sec_ref,
                 rec.audit_trail_ref.as_deref(),
                 Some(&audit_text_sha),
+                Some(&actual_body_sha),
                 super::crypto::global_trust_store(),
             )
         {
@@ -205,6 +208,18 @@ pub(crate) fn verify_cryptographic_provenance(
 
     // In absence of verified cryptographic envelope with known key in trust store, fail closed
     false
+}
+
+fn extract_audit_body(audit_text: &str) -> &str {
+    let lower = audit_text.to_ascii_lowercase();
+    if let Some(pos) = lower
+        .find("-----begin gateway fetch attestation-----")
+        .or_else(|| lower.find("-----begin trusted attestation-----"))
+    {
+        audit_text[..pos].trim()
+    } else {
+        audit_text.trim()
+    }
 }
 
 pub(crate) fn verify_trusted_fetch_attestation(
@@ -243,11 +258,14 @@ pub(crate) fn verify_trusted_fetch_attestation(
     }
 
     let audit_text_sha = crate::url::compute_sha256(audit_text);
-    super::crypto::verify_parsed_attestation(
+    let actual_body = extract_audit_body(audit_text);
+    let actual_body_sha = crate::url::compute_sha256(actual_body);
+    super::crypto::verify_parsed_attestation_with_body(
         &parsed,
         sec_ref,
         rec.audit_trail_ref.as_deref(),
         Some(&audit_text_sha),
+        Some(&actual_body_sha),
         super::crypto::global_trust_store(),
     )
 }

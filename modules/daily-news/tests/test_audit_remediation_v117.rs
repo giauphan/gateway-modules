@@ -16,49 +16,11 @@ use daily_news::ports::StoragePort;
 use daily_news::research_readiness::{
     evaluate_readiness_full, is_valid_visual_asset_format,
 };
-use daily_news::scoring::CandidateScorer;
-use daily_news::service::DailyNewsService;
-use daily_news::source_capture::HttpSourceCaptureAdapter;
-use daily_news::storage::FileStorageAdapter;
 use daily_news::url::{compute_content_hash, compute_sha256, compute_sha256_bytes};
 use serde_json::json;
-use std::sync::Arc;
 
-fn make_temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "dn_v117_{tag}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-struct MockTestFetcher;
-
-impl daily_news::ports::FeedFetcherPort for MockTestFetcher {
-    fn fetch_raw_items(&self, _limit: usize) -> Result<Vec<RawNewsItem>, String> {
-        Ok(vec![])
-    }
-    fn fetch_sources(
-        &self,
-        _sources: &[String],
-        _limit: usize,
-    ) -> Result<Vec<RawNewsItem>, String> {
-        Ok(vec![])
-    }
-}
-
-fn build_test_service(base_dir: &std::path::Path) -> (DailyNewsService, Arc<FileStorageAdapter>) {
-    let storage = Arc::new(FileStorageAdapter::new(base_dir));
-    let capturer = Arc::new(HttpSourceCaptureAdapter::new(base_dir));
-    let fetcher = Arc::new(MockTestFetcher);
-    let scorer = CandidateScorer::default();
-    let service = DailyNewsService::new(fetcher, storage.clone(), scorer).with_source_capture(capturer);
-    (service, storage)
-}
+mod common;
+use common::{build_test_service, make_temp_dir};
 
 // ---------------------------------------------------------------------------
 // Issue 1: False-positive VIDEO_READY

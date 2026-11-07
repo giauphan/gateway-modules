@@ -6,6 +6,7 @@ pub mod file;
 pub mod in_memory;
 pub mod lock;
 pub mod merge;
+pub mod reservation;
 pub mod sqlite;
 
 pub use file::{resolve_state_dir, FileStorageAdapter};

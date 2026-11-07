@@ -631,10 +631,10 @@ pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
         return decode_png_stream(bytes) && decode_raster_image(bytes);
     }
     if bytes.starts_with(&[0xFF, 0xD8]) {
-        return decode_jpeg_stream(bytes) && (decode_raster_image(bytes) || bytes.len() <= 64);
+        return decode_jpeg_stream(bytes) && decode_raster_image(bytes);
     }
     if bytes.starts_with(b"GIF8") {
-        return decode_gif_stream(bytes) && (decode_raster_image(bytes) || bytes.len() <= 64);
+        return decode_gif_stream(bytes) && decode_raster_image(bytes);
     }
     if bytes.starts_with(b"RIFF") {
         return decode_webp_stream(bytes);

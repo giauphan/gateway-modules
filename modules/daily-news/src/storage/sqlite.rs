@@ -163,12 +163,12 @@ impl SqliteStorageAdapter {
                 .as_secs() as i64;
 
             for cand in candidate_list {
-                if let Ok(json) = serde_json::to_string(&cand) {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO candidates (candidate_id, json_val, updated_at) VALUES (?, ?, ?)",
-                        params![cand.candidate_id, json, now],
-                    ).map_err(|e| format!("Failed to migrate candidate {}: {e}", cand.candidate_id))?;
-                }
+                let json = serde_json::to_string(&cand)
+                    .map_err(|e| format!("Failed to serialize candidate {}: {e}", cand.candidate_id))?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO candidates (candidate_id, json_val, updated_at) VALUES (?, ?, ?)",
+                    params![cand.candidate_id, json, now],
+                ).map_err(|e| format!("Failed to migrate candidate {}: {e}", cand.candidate_id))?;
             }
         }
 
@@ -235,6 +235,18 @@ impl SqliteStorageAdapter {
                         res.expires_at as i64,
                     ],
                 ).map_err(|e| format!("Failed to migrate reservation {cid}: {e}"))?;
+
+                // Storage invariant: A candidate marked PUBLISHED must always be present in consumed table
+                if res.status == ReservationStatus::Published {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    tx.execute(
+                        "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
+                        params![cid, now],
+                    ).map_err(|e| format!("Failed to enforce consumed invariant for published reservation {cid}: {e}"))?;
+                }
             }
         }
 
@@ -296,9 +308,14 @@ impl StoragePort for SqliteStorageAdapter {
             Ok(c) => c,
             Err(_) => return false,
         };
+        // Dual check: consumed table and PUBLISHED status in reservations table
         let count: Result<i64, _> = conn.query_row(
-            "SELECT count(*) FROM consumed WHERE candidate_id = ?",
-            params![candidate_id],
+            "SELECT count(*) FROM (
+                SELECT candidate_id FROM consumed WHERE candidate_id = ?
+                UNION
+                SELECT candidate_id FROM reservations WHERE candidate_id = ? AND status = 'PUBLISHED'
+            )",
+            params![candidate_id, candidate_id],
             |r| r.get(0),
         );
         count.unwrap_or(0) > 0
@@ -315,13 +332,11 @@ impl StoragePort for SqliteStorageAdapter {
 
         let mut inserted = 0;
         for cid in candidate_ids {
-            let res = tx.execute(
+            let rows = tx.execute(
                 "INSERT OR IGNORE INTO consumed (candidate_id, consumed_at) VALUES (?, ?)",
                 params![cid, now],
-            );
-            if let Ok(rows) = res {
-                inserted += rows;
-            }
+            ).map_err(|e| format!("Failed to mark consumed for candidate '{cid}': {e}"))?;
+            inserted += rows;
         }
         tx.commit().map_err(|e| format!("Failed to commit mark_consumed: {e}"))?;
         Ok(inserted)

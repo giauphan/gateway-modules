@@ -128,44 +128,15 @@ impl StoragePort for InMemoryStorageAdapter {
             .write()
             .map_err(|e| format!("Lock error: {e}"))?;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(1793618000);
-
-        if let Some(res) = guard.get(candidate_id) {
-            if res.status == ReservationStatus::Published {
-                return Err(format!("Candidate '{candidate_id}' is already PUBLISHED"));
-            }
-            if res.status == ReservationStatus::Reserved && now < res.expires_at {
-                return Err(format!(
-                    "Candidate '{candidate_id}' is actively reserved by worker '{}' until {}",
-                    res.worker_id, res.expires_at
-                ));
-            }
-        }
-
-        if self
+        let now = super::reservation::current_epoch_seconds();
+        let is_consumed = self
             .consumed
             .read()
             .map(|g| g.contains(candidate_id))
-            .unwrap_or(false)
-        {
-            return Err(format!("Candidate '{candidate_id}' is already consumed"));
-        }
+            .unwrap_or(false);
 
-        let token = format!("claim_{}_{}", uuid::Uuid::new_v4(), candidate_id);
-        let token_hash = crate::url::compute_sha256(&token);
-        let reservation = HandoffReservation {
-            reservation_id: format!("res_{}", uuid::Uuid::new_v4()),
-            candidate_id: candidate_id.to_string(),
-            token_hash,
-            worker_id: worker_id.to_string(),
-            created_at: crate::date::current_utc_timestamp(),
-            expires_at: now + lease_seconds,
-            status: ReservationStatus::Reserved,
-        };
-
+        super::reservation::check_reservation_claimable(guard.get(candidate_id), candidate_id, is_consumed, now)?;
+        let (token, reservation) = super::reservation::create_handoff_reservation(candidate_id, worker_id, lease_seconds, now);
         guard.insert(candidate_id.to_string(), reservation);
         Ok(token)
     }
@@ -210,26 +181,9 @@ impl StoragePort for InMemoryStorageAdapter {
             .get_mut(candidate_id)
             .ok_or_else(|| format!("No reservation found for candidate '{candidate_id}'"))?;
 
-        let token_hash = crate::url::compute_sha256(token);
-        if res.token_hash != token_hash {
-            return Err(format!(
-                "Invalid reservation token for candidate '{candidate_id}'"
-            ));
-        }
-
-        if res.status == ReservationStatus::Published {
+        let now = super::reservation::current_epoch_seconds();
+        if super::reservation::validate_reservation_commit(res, candidate_id, token, now)? {
             return Ok(true);
-        }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(1793618000);
-
-        if now > res.expires_at {
-            return Err(format!(
-                "Reservation lease for candidate '{candidate_id}' has expired"
-            ));
         }
 
         res.status = ReservationStatus::Published;

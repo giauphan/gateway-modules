@@ -325,20 +325,25 @@ pub fn is_visual_rights_verified(
         return false;
     }
 
+    // License evidence reference must be an authoritative HTTPS URL or SHA-256 hash
+    let is_https = tr.starts_with("https://");
+    let is_sha256 = tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit());
+    if !is_https && !is_sha256 {
+        return false;
+    }
+
     // Secondary resolver is strictly mandatory to corroborate license rights documents
     let Some(res) = secondary_resolver else {
         return false;
     };
 
-    let doc_opt = if tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit()) {
+    let doc_opt = if is_sha256 {
         res(tr)
-    } else if tr.starts_with("https://") {
+    } else {
         res(tr).or_else(|| {
             let url_hash = crate::url::compute_sha256(tr);
             res(&url_hash)
         })
-    } else {
-        res(tr)
     };
 
     let Some(doc) = doc_opt else {
@@ -439,6 +444,7 @@ pub fn is_visual_rights_verified(
 
     // 4. Prohibit untrusted / mock / self-declared licensors
     const UNTRUSTED_LICENSORS: &[&str] = &[
+        "self-certified",
         "self-licensed",
         "self-declared",
         "mock licensor",
@@ -450,6 +456,11 @@ pub fn is_visual_rights_verified(
         "fake licensor",
         "anonymous author",
         "unattributed",
+        "user upload",
+        "uploader claim",
+        "self-reported",
+        "internal use only",
+        "author self-claim",
     ];
     if UNTRUSTED_LICENSORS.iter().any(|u| lower.contains(u)) {
         return false;

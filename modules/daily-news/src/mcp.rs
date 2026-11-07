@@ -262,24 +262,26 @@ fn handle_verify_production_handoff(service: &DailyNewsService, args: &Value) ->
     }
 }
 
-fn handle_release_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
-    let candidate_id = match args["candidate_id"]
+fn extract_candidate_and_token(args: &Value) -> Result<(&str, &str), McpToolResponse> {
+    let candidate_id = args["candidate_id"]
         .as_str()
         .or_else(|| args["id"].as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        Some(cid) => cid,
-        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
-    };
-    let token = match args["token"]
+        .ok_or_else(|| McpToolResponse::error("Missing required parameter: 'candidate_id'"))?;
+    let token = args["token"]
         .as_str()
         .or_else(|| args["reservation_token"].as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        Some(t) => t,
-        None => return McpToolResponse::error("Missing required parameter: 'token'"),
+        .ok_or_else(|| McpToolResponse::error("Missing required parameter: 'token'"))?;
+    Ok((candidate_id, token))
+}
+
+fn handle_release_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let (candidate_id, token) = match extract_candidate_and_token(args) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
     };
 
     match service.release_handoff(candidate_id, token) {
@@ -292,23 +294,9 @@ fn handle_release_production_handoff(service: &DailyNewsService, args: &Value) -
 }
 
 fn handle_commit_production_handoff(service: &DailyNewsService, args: &Value) -> McpToolResponse {
-    let candidate_id = match args["candidate_id"]
-        .as_str()
-        .or_else(|| args["id"].as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(cid) => cid,
-        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
-    };
-    let token = match args["token"]
-        .as_str()
-        .or_else(|| args["reservation_token"].as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(t) => t,
-        None => return McpToolResponse::error("Missing required parameter: 'token'"),
+    let (candidate_id, token) = match extract_candidate_and_token(args) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
     };
 
     match service.commit_handoff(candidate_id, token) {

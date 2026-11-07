@@ -22,34 +22,8 @@ use daily_news::storage::{FileStorageAdapter, ProcessFileLock};
 use daily_news::url::compute_sha256;
 use std::sync::Arc;
 
-fn make_temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "dn_v1193_{tag}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-struct MockFeedFetcher {
-    items: Vec<daily_news::domain::RawNewsItem>,
-}
-
-impl daily_news::ports::FeedFetcherPort for MockFeedFetcher {
-    fn fetch_raw_items(&self, _limit: usize) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-    fn fetch_sources(
-        &self,
-        _sources: &[String],
-        _limit: usize,
-    ) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-}
+mod common;
+use common::{make_temp_dir, MockFeedFetcher};
 
 // ---------------------------------------------------------------------------
 // 1. P0: License Restriction Clause Rejection
@@ -122,17 +96,17 @@ fn test_license_restriction_clauses_fail_closed() {
 // ---------------------------------------------------------------------------
 #[test]
 fn test_audit_provenance_distinguishes_resolved_doc_from_authenticated_issuer() {
+    let audit_text = "Independent benchmark audit performed by CertiK confirms 4x throughput improvement with formal verification across clusters.";
+    let audit_sha = compute_sha256(audit_text);
     let rec = VerificationRecord {
         record_id: "certik_2026_101".to_string(),
         verified_at: "2026-11-04T00:00:00Z".to_string(),
         reviewer_id: "certik_auditor_01".to_string(),
         organization: "CertiK".to_string(),
         method: "formal_verification".to_string(),
-        audit_trail_ref: Some(compute_sha256("certik_audit_trail")),
+        audit_trail_ref: Some(audit_sha.clone()),
         secondary_source_ref: Some("https://certik.com/reports/certik_2026_101".to_string()),
     };
-
-    let audit_text = "Independent benchmark audit performed by CertiK confirms 4x throughput improvement with formal verification across clusters.";
     let claim = ClaimEvidence {
         claim_id: "claim_01".to_string(),
         statement: "Verified 4x throughput confirmed by CertiK".to_string(),

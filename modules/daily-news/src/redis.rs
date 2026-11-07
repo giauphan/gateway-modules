@@ -64,12 +64,11 @@ impl RedisFeedProvider {
             Err(_) => return Vec::new(),
         };
 
-        let stream = match TcpStream::connect_timeout(
-            socket_addrs
-                .first()
-                .unwrap_or(&"127.0.0.1:6379".parse().unwrap()),
-            self.timeout,
-        ) {
+        let Some(target_addr) = socket_addrs.first() else {
+            return Vec::new();
+        };
+
+        let stream = match TcpStream::connect_timeout(target_addr, self.timeout) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };

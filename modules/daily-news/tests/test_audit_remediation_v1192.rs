@@ -24,34 +24,8 @@ use daily_news::storage::FileStorageAdapter;
 use daily_news::url::{compute_sha256, compute_sha256_bytes};
 use std::sync::Arc;
 
-fn make_temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "dn_v1192_{tag}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-struct MockFeedFetcher {
-    items: Vec<daily_news::domain::RawNewsItem>,
-}
-
-impl daily_news::ports::FeedFetcherPort for MockFeedFetcher {
-    fn fetch_raw_items(&self, _limit: usize) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-    fn fetch_sources(
-        &self,
-        _sources: &[String],
-        _limit: usize,
-    ) -> Result<Vec<daily_news::domain::RawNewsItem>, String> {
-        Ok(self.items.clone())
-    }
-}
+mod common;
+use common::{make_temp_dir, MockFeedFetcher};
 
 // ---------------------------------------------------------------------------
 // 1. P0: Audit Provenance Fail-Open Elimination

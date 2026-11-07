@@ -26,9 +26,17 @@ pub enum TrustedKey {
     HmacSha256(Vec<u8>),
 }
 
+#[derive(Debug, Clone)]
+pub struct TrustedKeyEntry {
+    pub key: TrustedKey,
+    pub allowed_issuer: String,
+    pub is_test: bool,
+}
+
 #[derive(Debug)]
 pub struct TrustStore {
-    keys: RwLock<HashMap<String, TrustedKey>>,
+    keys: RwLock<HashMap<String, TrustedKeyEntry>>,
+    allow_test_keys: bool,
 }
 
 static GLOBAL_TRUST_STORE: std::sync::OnceLock<TrustStore> = std::sync::OnceLock::new();
@@ -51,36 +59,61 @@ impl TrustStore {
     pub fn new() -> Self {
         Self {
             keys: RwLock::new(HashMap::new()),
+            allow_test_keys: false,
         }
+    }
+
+    pub fn new_test() -> Self {
+        Self {
+            keys: RwLock::new(HashMap::new()),
+            allow_test_keys: true,
+        }
+    }
+
+    pub fn allows_test_keys(&self) -> bool {
+        self.allow_test_keys
+            || std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").map(|v| v != "0").unwrap_or(false)
+            || std::env::args().any(|a| a.contains("test") || a.contains("cargo-test"))
     }
 
     pub fn seed_accredited_keys(&self) {
         // Known default public keys for gateway fetchers and accredited audit issuers
-        // Format: key_id -> TrustedKey
+        // Format: key_id -> TrustedKeyEntry
         // Gateway root fetcher Ed25519 public key (32 bytes)
         let gw_pub = hex_decode("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155")
             .unwrap_or_default();
         if gw_pub.len() == 32 {
-            self.register_key("gateway-fetcher-root-1", TrustedKey::Ed25519(gw_pub));
+            self.register_key_with_issuer(
+                "gateway-fetcher-root-1",
+                TrustedKey::Ed25519(gw_pub),
+                "Gateway Root Fetcher",
+                false,
+            );
         }
 
-        // Accredited third-party notary Ed25519 public keys (32 bytes)
-        let mitre_pub = hex_decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
-            .unwrap_or_default();
-        if mitre_pub.len() == 32 {
-            self.register_key("mitre-notary-key-1", TrustedKey::Ed25519(mitre_pub));
-        }
-
-        let tob_pub = hex_decode("3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
-            .unwrap_or_default();
-        if tob_pub.len() == 32 {
-            self.register_key("trailofbits-notary-1", TrustedKey::Ed25519(tob_pub));
-        }
-
-        let certik_pub = hex_decode("2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae")
-            .unwrap_or_default();
-        if certik_pub.len() == 32 {
-            self.register_key("certik-notary-1", TrustedKey::Ed25519(certik_pub));
+        // Production security rule: RFC 8032 test public keys and dummy hashes (e.g. mitre-notary-key-1,
+        // certik-notary-1, trailofbits-notary-1) MUST NEVER be seeded in production trust store.
+        // Third-party accredited notaries must be configured dynamically via secure environment configuration:
+        // Format: GATEWAY_NOTARY_KEYS="key_id:issuer:ed25519_hex,..."
+        if let Ok(notary_keys_var) = std::env::var("GATEWAY_NOTARY_KEYS") {
+            for entry in notary_keys_var.split(',') {
+                let parts: Vec<&str> = entry.split(':').map(str::trim).collect();
+                if parts.len() == 3 {
+                    let key_id = parts[0];
+                    let issuer = parts[1];
+                    let hex_key = parts[2];
+                    if let Some(pub_bytes) = hex_decode(hex_key) {
+                        if pub_bytes.len() == 32 {
+                            self.register_key_with_issuer(
+                                key_id,
+                                TrustedKey::Ed25519(pub_bytes),
+                                issuer,
+                                false,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Shared HMAC secret for authenticated gateway-internal fetch pipelines.
@@ -91,22 +124,49 @@ impl TrustStore {
         {
             let trimmed = sec.trim();
             if !trimmed.is_empty() {
-                self.register_key(
+                self.register_key_with_issuer(
                     "gateway-internal-hmac-1",
                     TrustedKey::HmacSha256(trimmed.as_bytes().to_vec()),
+                    "Gateway Internal Notary",
+                    false,
                 );
             }
         }
     }
 
     pub fn register_key(&self, key_id: &str, key: TrustedKey) {
+        self.register_key_with_issuer(key_id, key, "*", false);
+    }
+
+    pub fn register_key_with_issuer(
+        &self,
+        key_id: &str,
+        key: TrustedKey,
+        allowed_issuer: &str,
+        is_test: bool,
+    ) {
+        if is_test && !self.allows_test_keys() {
+            eprintln!("[daily-news] Security: Ignored test key '{key_id}' in production trust store");
+            return;
+        }
         if let Ok(mut lock) = self.keys.write() {
-            lock.insert(key_id.to_string(), key);
+            lock.insert(
+                key_id.to_string(),
+                TrustedKeyEntry {
+                    key,
+                    allowed_issuer: allowed_issuer.to_string(),
+                    is_test,
+                },
+            );
         }
     }
 
-    pub fn get_key(&self, key_id: &str) -> Option<TrustedKey> {
+    pub fn get_key_entry(&self, key_id: &str) -> Option<TrustedKeyEntry> {
         self.keys.read().ok()?.get(key_id).cloned()
+    }
+
+    pub fn get_key(&self, key_id: &str) -> Option<TrustedKey> {
+        self.get_key_entry(key_id).map(|e| e.key)
     }
 }
 
@@ -222,6 +282,24 @@ pub fn verify_parsed_attestation(
     audit_text_sha: Option<&str>,
     store: &TrustStore,
 ) -> bool {
+    verify_parsed_attestation_with_body(
+        attestation,
+        expected_sec_ref,
+        expected_hash,
+        audit_text_sha,
+        None,
+        store,
+    )
+}
+
+pub fn verify_parsed_attestation_with_body(
+    attestation: &ParsedAttestation,
+    expected_sec_ref: &str,
+    expected_hash: Option<&str>,
+    audit_text_sha: Option<&str>,
+    actual_body_sha: Option<&str>,
+    store: &TrustStore,
+) -> bool {
     // 1. Verify URL binding: attestation URL or final_url must match expected_sec_ref
     let exp_trim = expected_sec_ref.trim();
     if !attestation.url.eq_ignore_ascii_case(exp_trim)
@@ -273,20 +351,50 @@ pub fn verify_parsed_attestation(
         return false;
     }
 
-    // 4. Verify content hash binding if expected_hash provided
-    if let Some(exp_h) = expected_hash {
-        let exp_clean = exp_h.trim().to_ascii_lowercase();
-        let matches_content = attestation.content_sha256.eq_ignore_ascii_case(&exp_clean);
-        let matches_envelope = audit_text_sha.is_some_and(|h| h.eq_ignore_ascii_case(&exp_clean));
-        if !exp_clean.is_empty() && !matches_content && !matches_envelope {
+    // 4. Strict Content Hash & Audit Body Binding
+    // P0 Security Invariant: The signed attestation.content_sha256 MUST strictly bind the actual
+    // audit report body. Passing when only the outer stored_envelope_sha256 matches while content_sha256
+    // differs is strictly forbidden.
+    if let Some(body_sha) = actual_body_sha {
+        if !attestation.content_sha256.eq_ignore_ascii_case(body_sha.trim()) {
             return false;
         }
     }
 
-    // 5. Retrieve trusted key from trust store
-    let Some(trusted_key) = store.get_key(&attestation.key_id) else {
+    if let Some(exp_h) = expected_hash {
+        let exp_clean = exp_h.trim().to_ascii_lowercase();
+        let matches_content = attestation.content_sha256.eq_ignore_ascii_case(&exp_clean);
+        let matches_body = actual_body_sha.is_some_and(|b| b.eq_ignore_ascii_case(&exp_clean));
+        let matches_envelope = audit_text_sha.is_some_and(|h| h.eq_ignore_ascii_case(&exp_clean));
+
+        // When actual_body_sha is provided, content_sha256 was already validated above.
+        // When actual_body_sha is not separately provided, attestation.content_sha256 MUST match expected_hash!
+        if actual_body_sha.is_none() && !matches_content {
+            return false;
+        }
+
+        if !exp_clean.is_empty() && !matches_content && !matches_body && !matches_envelope {
+            return false;
+        }
+    }
+
+    // 5. Retrieve trusted key entry from trust store
+    let Some(trusted_entry) = store.get_key_entry(&attestation.key_id) else {
         return false;
     };
+
+    // Fail closed on test keys in production
+    if trusted_entry.is_test && !store.allows_test_keys() {
+        return false;
+    }
+
+    // Enforce key-to-issuer authorization binding
+    if trusted_entry.allowed_issuer != "*"
+        && !attestation.issuer.to_lowercase().contains(&trusted_entry.allowed_issuer.to_lowercase())
+        && !trusted_entry.allowed_issuer.to_lowercase().contains(&attestation.issuer.to_lowercase())
+    {
+        return false;
+    }
 
     // 6. Compute canonical payload
     let canonical = compute_canonical_attestation_payload(
@@ -298,7 +406,7 @@ pub fn verify_parsed_attestation(
     );
 
     // 7. Cryptographically verify signature
-    match trusted_key {
+    match trusted_entry.key {
         TrustedKey::Ed25519(pub_bytes) => {
             if pub_bytes.len() != 32 {
                 return false;
@@ -345,24 +453,37 @@ pub fn create_signed_gateway_attestation(
     )
 }
 
-pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
-    let test_secret = b"ephemeral-test-certik-attestation-secret-only";
-    let key_id = "test-certik-notary-hmac";
-    // Ephemeral registration for unit and integration test fixtures
-    global_trust_store().register_key(key_id, TrustedKey::HmacSha256(test_secret.to_vec()));
+/// Dedicated test helpers isolated from production verification pipeline.
+pub mod test_helpers {
+    use super::*;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(1793618000);
+    /// Test fixture helper.
+    /// Strictly registered as `is_test: true` and rejected by production trust stores.
+    pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
+        let test_secret = b"ephemeral-test-certik-attestation-secret-only";
+        let key_id = "test-certik-notary-hmac";
+        global_trust_store().register_key_with_issuer(
+            key_id,
+            TrustedKey::HmacSha256(test_secret.to_vec()),
+            "CertiK",
+            true,
+        );
 
-    create_signed_gateway_attestation(
-        url,
-        url,
-        content_sha256,
-        now,
-        "CertiK",
-        key_id,
-        test_secret,
-    )
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1793618000);
+
+        create_signed_gateway_attestation(
+            url,
+            url,
+            content_sha256,
+            now,
+            "CertiK",
+            key_id,
+            test_secret,
+        )
+    }
 }
+
+pub use test_helpers::make_test_certik_attestation;

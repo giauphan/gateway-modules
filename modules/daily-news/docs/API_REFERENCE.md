@@ -1,6 +1,6 @@
 # Daily News Module — Complete API & Protocol Reference
 
-This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.19.5).
+This document provides exhaustive documentation for all HTTP endpoints, JSON-RPC stdio-stream envelopes, request parameters, response schemas, and error codes supported by `daily-news` (v1.19.6).
 
 ---
 
@@ -69,7 +69,7 @@ curl -s http://127.0.0.1:28130/custom/daily-news/health
 {
   "status": "healthy",
   "module": "daily-news",
-  "version": "1.19.5",
+  "version": "1.19.6",
   "engine": "rust-native",
   "consumed_count": 0,
   "cached_candidates": 5,

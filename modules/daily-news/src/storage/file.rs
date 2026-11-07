@@ -206,6 +206,18 @@ impl FileStorageAdapter {
         reconcile_transaction_journal(&self.state_dir);
         f()
     }
+
+    fn load_reservations_map(&self) -> HashMap<String, HandoffReservation> {
+        let reservations_path = self.state_dir.join("reservations.json");
+        if reservations_path.is_file() {
+            fs::read_to_string(&reservations_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            self.inner.reservations.read().map(|g| g.clone()).unwrap_or_default()
+        }
+    }
 }
 
 fn is_consumed_in_file(path: &Path, candidate_id: &str) -> bool {
@@ -381,65 +393,15 @@ impl StoragePort for FileStorageAdapter {
                 self.inner.consumed.read().map(|g| g.clone()).unwrap_or_default()
             };
 
-            let reservations_path = self.state_dir.join("reservations.json");
-            let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
-                fs::read_to_string(&reservations_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
-            } else {
-                self.inner.reservations.read().map(|g| g.clone()).unwrap_or_default()
-            };
+            let mut reservations = self.load_reservations_map();
+            let now = super::reservation::current_epoch_seconds();
+            let is_consumed = consumed_set.contains(candidate_id);
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(1793618000);
-
-            if let Some(res) = reservations.get(candidate_id) {
-                if res.status == ReservationStatus::Published {
-                    return Err(format!("Candidate '{candidate_id}' is already PUBLISHED"));
-                }
-                if res.status == ReservationStatus::Reserved && now < res.expires_at {
-                    return Err(format!(
-                        "Candidate '{candidate_id}' is actively reserved by worker '{}' until {}",
-                        res.worker_id, res.expires_at
-                    ));
-                }
-            }
-
-            if consumed_set.contains(candidate_id) {
-                return Err(format!("Candidate '{candidate_id}' is already consumed"));
-            }
-
-            let token = format!("claim_{}_{}", uuid::Uuid::new_v4(), candidate_id);
-            let token_hash = crate::url::compute_sha256(&token);
-            let reservation = HandoffReservation {
-                reservation_id: format!("res_{}", uuid::Uuid::new_v4()),
-                candidate_id: candidate_id.to_string(),
-                token_hash,
-                worker_id: worker_id.to_string(),
-                created_at: crate::date::current_utc_timestamp(),
-                expires_at: now + lease_seconds,
-                status: ReservationStatus::Reserved,
-            };
-
+            super::reservation::check_reservation_claimable(reservations.get(candidate_id), candidate_id, is_consumed, now)?;
+            let (token, reservation) = super::reservation::create_handoff_reservation(candidate_id, worker_id, lease_seconds, now);
             reservations.insert(candidate_id.to_string(), reservation);
 
-            let unique_id = uuid::Uuid::new_v4();
-            let tmp_path = self.state_dir.join(format!("reservations.{unique_id}.tmp"));
-            let json = serde_json::to_string_pretty(&reservations)
-                .map_err(|e| format!("Failed to serialize reservations: {e}"))?;
-
-            fs::write(&tmp_path, json).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to write reservations to {tmp_path:?}: {e}")
-            })?;
-
-            fs::rename(&tmp_path, &reservations_path).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to finalize reservations to {reservations_path:?}: {e}")
-            })?;
+            write_reservations_file(&self.state_dir, &reservations)?;
 
             if let Ok(mut guard) = self.inner.reservations.write() {
                 *guard = reservations;
@@ -451,16 +413,7 @@ impl StoragePort for FileStorageAdapter {
 
     fn release_reservation(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
         self.with_lock(|| {
-            let reservations_path = self.state_dir.join("reservations.json");
-            let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
-                fs::read_to_string(&reservations_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
-            } else {
-                self.inner.reservations.read().map(|g| g.clone()).unwrap_or_default()
-            };
-
+            let mut reservations = self.load_reservations_map();
             let res = reservations
                 .get(candidate_id)
                 .ok_or_else(|| format!("No reservation found for candidate '{candidate_id}'"))?;
@@ -484,40 +437,14 @@ impl StoragePort for FileStorageAdapter {
 
     fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
         self.with_lock(|| {
-            let reservations_path = self.state_dir.join("reservations.json");
-            let mut reservations: HashMap<String, HandoffReservation> = if reservations_path.is_file() {
-                fs::read_to_string(&reservations_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
-            } else {
-                self.inner.reservations.read().map(|g| g.clone()).unwrap_or_default()
-            };
-
+            let mut reservations = self.load_reservations_map();
             let res = reservations
                 .get_mut(candidate_id)
                 .ok_or_else(|| format!("No reservation found for candidate '{candidate_id}'"))?;
 
-            let token_hash = crate::url::compute_sha256(token);
-            if res.token_hash != token_hash {
-                return Err(format!(
-                    "Invalid reservation token for candidate '{candidate_id}'"
-                ));
-            }
-
-            if res.status == ReservationStatus::Published {
+            let now = super::reservation::current_epoch_seconds();
+            if super::reservation::validate_reservation_commit(res, candidate_id, token, now)? {
                 return Ok(true);
-            }
-
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(1793618000);
-
-            if now > res.expires_at {
-                return Err(format!(
-                    "Reservation lease for candidate '{candidate_id}' has expired"
-                ));
             }
 
             res.status = ReservationStatus::Published;
@@ -543,17 +470,7 @@ impl StoragePort for FileStorageAdapter {
             })?;
 
             // Step 2: Write reservations.json
-            let tmp_path = self.state_dir.join(format!("reservations.{unique_id}.tmp"));
-            let json = serde_json::to_string_pretty(&reservations)
-                .map_err(|e| format!("Failed to serialize reservations: {e}"))?;
-            fs::write(&tmp_path, json).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to write reservations to {tmp_path:?}: {e}")
-            })?;
-            fs::rename(&tmp_path, &reservations_path).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to finalize reservations to {reservations_path:?}: {e}")
-            })?;
+            write_reservations_file(&self.state_dir, &reservations)?;
 
             // Step 3: Write consumed.json
             let consumed_path = self.state_dir.join("consumed.json");
