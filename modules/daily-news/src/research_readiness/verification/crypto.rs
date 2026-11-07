@@ -71,9 +71,22 @@ impl TrustStore {
     }
 
     pub fn allows_test_keys(&self) -> bool {
-        self.allow_test_keys
-            || std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").map(|v| v != "0").unwrap_or(false)
-            || std::env::args().any(|a| a.contains("test") || a.contains("cargo-test"))
+        if self.allow_test_keys {
+            return true;
+        }
+        if std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").map(|v| v != "0").unwrap_or(false) {
+            return true;
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            let exe_str = exe.to_string_lossy();
+            if exe_str.contains("/deps/test_")
+                || exe_str.contains("/deps/test-")
+                || exe_str.contains("/deps/daily_news-")
+            {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn seed_accredited_keys(&self) {
@@ -292,6 +305,110 @@ pub fn verify_parsed_attestation(
     )
 }
 
+fn verify_redirect_domain(orig_domain: &str, final_domain: &str) -> bool {
+    if final_domain.is_empty() || final_domain == "localhost" || final_domain == "127.0.0.1" {
+        return false;
+    }
+
+    // SSRF boundary protection: block loopback and private/reserved IPv4
+    if let Ok(ip) = final_domain.parse::<std::net::Ipv4Addr>() {
+        if crate::url::is_restricted_ipv4(ip, false).is_err() {
+            return false;
+        }
+    }
+
+    // Redirect domain binding: final_domain must match or be a subdomain of orig_domain, or vice versa
+    if orig_domain.is_empty() || final_domain == orig_domain {
+        return true;
+    }
+
+    final_domain.ends_with(&format!(".{orig_domain}"))
+        || orig_domain.ends_with(&format!(".{final_domain}"))
+}
+
+fn verify_attestation_freshness(fetched_at: u64) -> bool {
+    if fetched_at == 0 {
+        return false;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1793618000);
+    const MAX_CLOCK_SKEW_SECS: u64 = 3600;
+    if fetched_at > now + MAX_CLOCK_SKEW_SECS {
+        return false;
+    }
+    const MAX_ATTESTATION_TTL_SECS: u64 = 180 * 86400;
+    now <= fetched_at + MAX_ATTESTATION_TTL_SECS
+}
+
+fn verify_content_hash_binding(
+    content_sha256: &str,
+    actual_body_sha: Option<&str>,
+    expected_hash: Option<&str>,
+    audit_text_sha: Option<&str>,
+) -> bool {
+    // P0 Security Invariant: The signed attestation.content_sha256 MUST strictly bind the actual
+    // audit report body. Passing when only the outer stored_envelope_sha256 matches while content_sha256
+    // differs is strictly forbidden.
+    if let Some(body_sha) = actual_body_sha {
+        if !content_sha256.eq_ignore_ascii_case(body_sha.trim()) {
+            return false;
+        }
+    }
+
+    if let Some(exp_h) = expected_hash {
+        let exp_clean = exp_h.trim().to_ascii_lowercase();
+        let matches_content = content_sha256.eq_ignore_ascii_case(&exp_clean);
+        let matches_body = actual_body_sha.is_some_and(|b| b.eq_ignore_ascii_case(&exp_clean));
+        let matches_envelope = audit_text_sha.is_some_and(|h| h.eq_ignore_ascii_case(&exp_clean));
+
+        // When actual_body_sha is provided, content_sha256 was already validated above.
+        // When actual_body_sha is not separately provided, attestation.content_sha256 MUST match expected_hash!
+        if actual_body_sha.is_none() && !matches_content {
+            return false;
+        }
+
+        if !exp_clean.is_empty() && !matches_content && !matches_body && !matches_envelope {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn is_issuer_authorized(trusted_entry: &TrustedKeyEntry, attestation_issuer: &str) -> bool {
+    if trusted_entry.allowed_issuer == "*" {
+        return true;
+    }
+    let allowed = trusted_entry.allowed_issuer.to_lowercase();
+    let issuer = attestation_issuer.to_lowercase();
+    issuer.contains(&allowed) || allowed.contains(&issuer)
+}
+
+fn verify_crypto_signature(
+    key: &TrustedKey,
+    canonical_payload: &[u8],
+    signature_bytes: &[u8],
+) -> bool {
+    match key {
+        TrustedKey::Ed25519(pub_bytes) => {
+            if pub_bytes.len() != 32 {
+                return false;
+            }
+            let peer = UnparsedPublicKey::new(&ED25519, pub_bytes);
+            peer.verify(canonical_payload, signature_bytes).is_ok()
+        }
+        TrustedKey::HmacSha256(secret) => {
+            if secret.is_empty() {
+                return false;
+            }
+            let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+            hmac::verify(&key, canonical_payload, signature_bytes).is_ok()
+        }
+    }
+}
+
 pub fn verify_parsed_attestation_with_body(
     attestation: &ParsedAttestation,
     expected_sec_ref: &str,
@@ -311,71 +428,24 @@ pub fn verify_parsed_attestation_with_body(
     // 2. Verify redirect domain integrity: final_url must be on authoritative domain and not SSRF
     let orig_domain = crate::url::extract_domain(&attestation.url);
     let final_domain = crate::url::extract_domain(&attestation.final_url);
-    if final_domain.is_empty() {
-        return false;
-    }
-
-    // SSRF boundary protection: block loopback and private/reserved IPv4
-    if let Ok(ip) = final_domain.parse::<std::net::Ipv4Addr>() {
-        if crate::url::is_restricted_ipv4(ip, false).is_err() {
-            return false;
-        }
-    }
-    if final_domain == "localhost" || final_domain == "127.0.0.1" {
-        return false;
-    }
-
-    // Redirect domain binding: final_domain must match or be a subdomain of orig_domain, or vice versa
-    if !orig_domain.is_empty()
-        && final_domain != orig_domain
-        && !final_domain.ends_with(&format!(".{orig_domain}"))
-        && !orig_domain.ends_with(&format!(".{final_domain}"))
-    {
+    if !verify_redirect_domain(&orig_domain, &final_domain) {
         return false;
     }
 
     // 3. Timestamp & Freshness verification:
     // fetched_at must be positive, not in future (> 3600s clock skew), and not expired (180 days TTL)
-    if attestation.fetched_at == 0 {
-        return false;
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(1793618000);
-    if attestation.fetched_at > now + 3600 {
-        return false;
-    }
-    const MAX_ATTESTATION_TTL_SECS: u64 = 180 * 86400;
-    if now > attestation.fetched_at + MAX_ATTESTATION_TTL_SECS {
+    if !verify_attestation_freshness(attestation.fetched_at) {
         return false;
     }
 
     // 4. Strict Content Hash & Audit Body Binding
-    // P0 Security Invariant: The signed attestation.content_sha256 MUST strictly bind the actual
-    // audit report body. Passing when only the outer stored_envelope_sha256 matches while content_sha256
-    // differs is strictly forbidden.
-    if let Some(body_sha) = actual_body_sha {
-        if !attestation.content_sha256.eq_ignore_ascii_case(body_sha.trim()) {
-            return false;
-        }
-    }
-
-    if let Some(exp_h) = expected_hash {
-        let exp_clean = exp_h.trim().to_ascii_lowercase();
-        let matches_content = attestation.content_sha256.eq_ignore_ascii_case(&exp_clean);
-        let matches_body = actual_body_sha.is_some_and(|b| b.eq_ignore_ascii_case(&exp_clean));
-        let matches_envelope = audit_text_sha.is_some_and(|h| h.eq_ignore_ascii_case(&exp_clean));
-
-        // When actual_body_sha is provided, content_sha256 was already validated above.
-        // When actual_body_sha is not separately provided, attestation.content_sha256 MUST match expected_hash!
-        if actual_body_sha.is_none() && !matches_content {
-            return false;
-        }
-
-        if !exp_clean.is_empty() && !matches_content && !matches_body && !matches_envelope {
-            return false;
-        }
+    if !verify_content_hash_binding(
+        &attestation.content_sha256,
+        actual_body_sha,
+        expected_hash,
+        audit_text_sha,
+    ) {
+        return false;
     }
 
     // 5. Retrieve trusted key entry from trust store
@@ -389,10 +459,7 @@ pub fn verify_parsed_attestation_with_body(
     }
 
     // Enforce key-to-issuer authorization binding
-    if trusted_entry.allowed_issuer != "*"
-        && !attestation.issuer.to_lowercase().contains(&trusted_entry.allowed_issuer.to_lowercase())
-        && !trusted_entry.allowed_issuer.to_lowercase().contains(&attestation.issuer.to_lowercase())
-    {
+    if !is_issuer_authorized(&trusted_entry, &attestation.issuer) {
         return false;
     }
 
@@ -406,22 +473,7 @@ pub fn verify_parsed_attestation_with_body(
     );
 
     // 7. Cryptographically verify signature
-    match trusted_entry.key {
-        TrustedKey::Ed25519(pub_bytes) => {
-            if pub_bytes.len() != 32 {
-                return false;
-            }
-            let peer = UnparsedPublicKey::new(&ED25519, &pub_bytes);
-            peer.verify(&canonical, &attestation.signature_bytes).is_ok()
-        }
-        TrustedKey::HmacSha256(secret) => {
-            if secret.is_empty() {
-                return false;
-            }
-            let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
-            hmac::verify(&key, &canonical, &attestation.signature_bytes).is_ok()
-        }
-    }
+    verify_crypto_signature(&trusted_entry.key, &canonical, &attestation.signature_bytes)
 }
 
 pub fn create_signed_gateway_attestation(
@@ -455,11 +507,16 @@ pub fn create_signed_gateway_attestation(
 
 /// Dedicated test helpers isolated from production verification pipeline.
 pub mod test_helpers {
-    use super::*;
+    use super::{create_signed_gateway_attestation, global_trust_store, TrustedKey};
 
     /// Test fixture helper.
     /// Strictly registered as `is_test: true` and rejected by production trust stores.
     pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
+        if !global_trust_store().allows_test_keys() {
+            eprintln!("[daily-news] Security: make_test_certik_attestation is prohibited in production runtime");
+            return String::new();
+        }
+
         let test_secret = b"ephemeral-test-certik-attestation-secret-only";
         let key_id = "test-certik-notary-hmac";
         global_trust_store().register_key_with_issuer(

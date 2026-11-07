@@ -534,7 +534,33 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
             }
             let width = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
             let height = 1 + (bytes[27] as u32 | ((bytes[28] as u32) << 8) | ((bytes[29] as u32) << 16));
-            width > 0 && height > 0
+            if width == 0 || height == 0 {
+                return false;
+            }
+            // VP8X extended WebP must contain subsequent raster/animation data chunk (VP8 , VP8L, or ANIM)
+            let mut sub_pos = 20 + chunk_size;
+            if chunk_size % 2 == 1 {
+                sub_pos += 1;
+            }
+            let mut has_image_data = false;
+            while sub_pos + 8 <= bytes.len() {
+                let sub_tag = &bytes[sub_pos..sub_pos + 4];
+                let sub_size = u32::from_le_bytes([
+                    bytes[sub_pos + 4],
+                    bytes[sub_pos + 5],
+                    bytes[sub_pos + 6],
+                    bytes[sub_pos + 7],
+                ]) as usize;
+                if sub_tag == b"VP8 " || sub_tag == b"VP8L" || sub_tag == b"ANIM" {
+                    has_image_data = true;
+                    break;
+                }
+                sub_pos += 8 + sub_size;
+                if sub_size % 2 == 1 {
+                    sub_pos += 1;
+                }
+            }
+            has_image_data
         }
         _ => false,
     }

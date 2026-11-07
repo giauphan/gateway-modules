@@ -182,3 +182,91 @@ fn test_unverified_self_declared_licensor_rejected() {
         "Self-certified or user upload licensor document must be rejected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 6. Security P0: Empty audit body cannot achieve verification
+// ---------------------------------------------------------------------------
+#[test]
+fn test_empty_audit_body_rejected() {
+    let empty_audit_body = "";
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1793618000);
+
+    let test_secret = b"test-secret-for-empty-body-check";
+    let store = daily_news::research_readiness::verification::crypto::TrustStore::new();
+    store.register_key("test-key", daily_news::research_readiness::verification::crypto::TrustedKey::HmacSha256(test_secret.to_vec()));
+
+    let empty_sha = compute_sha256(empty_audit_body);
+    let attestation_block = daily_news::research_readiness::verification::crypto::create_signed_gateway_attestation(
+        "https://certik.com/reports/audit.pdf",
+        "https://certik.com/reports/audit.pdf",
+        &empty_sha,
+        now,
+        "CertiK",
+        "test-key",
+        test_secret,
+    );
+
+    let envelope_text = format!("{empty_audit_body}\n{attestation_block}");
+    let _parsed = parse_attestation_envelope(&envelope_text).expect("Parse envelope");
+
+    let rec = daily_news::domain::VerificationRecord {
+        record_id: "rec_empty".to_string(),
+        verified_at: "2026-11-06T00:00:00Z".to_string(),
+        reviewer_id: "certik-notary".to_string(),
+        organization: "CertiK".to_string(),
+        method: "cryptographic_attestation".to_string(),
+        audit_trail_ref: Some(empty_sha),
+        secondary_source_ref: Some("https://certik.com/reports/audit.pdf".to_string()),
+    };
+
+    let resolver = Some(&|_r: &str| -> Option<String> { Some(envelope_text.clone()) } as &dyn Fn(&str) -> Option<String>);
+    assert!(
+        !daily_news::research_readiness::is_audit_source_verified_with_resolver(&envelope_text, &rec, resolver),
+        "Attestation with empty audit body must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Media P1: Truncated VP8X WebP without raster chunk is rejected
+// ---------------------------------------------------------------------------
+#[test]
+fn test_truncated_extended_webp_rejected() {
+    // 30-byte WebP header with VP8X chunk, but without subsequent image chunk
+    let mut truncated_vp8x = Vec::new();
+    truncated_vp8x.extend_from_slice(b"RIFF");
+    truncated_vp8x.extend_from_slice(&22u32.to_le_bytes()); // RIFF payload size
+    truncated_vp8x.extend_from_slice(b"WEBP");
+    truncated_vp8x.extend_from_slice(b"VP8X");
+    truncated_vp8x.extend_from_slice(&10u32.to_le_bytes()); // VP8X chunk size = 10
+    truncated_vp8x.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // flags
+    truncated_vp8x.extend_from_slice(&[0x64, 0x00, 0x00]); // width-1 = 100
+    truncated_vp8x.extend_from_slice(&[0x64, 0x00, 0x00]); // height-1 = 100
+
+    assert!(
+        !is_visual_media_decodable(&truncated_vp8x),
+        "Truncated VP8X WebP missing image data chunk must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Storage P1: is_consumed fails closed on query failure
+// ---------------------------------------------------------------------------
+#[test]
+fn test_sqlite_is_consumed_fails_closed_on_error() {
+    let tmp_dir = make_temp_dir("sqlite_fail_closed");
+    let adapter = SqliteStorageAdapter::new(&tmp_dir).expect("SQLite init");
+
+    // Intentionally drop the consumed table to simulate database corruption
+    let db_path = tmp_dir.join(".state").join("daily_news.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open raw db");
+    conn.execute("DROP TABLE consumed", []).expect("drop consumed table");
+
+    // Under database query failure, is_consumed must FAIL CLOSED (return true) to prevent duplicate publishing
+    assert!(
+        adapter.is_consumed("any_candidate"),
+        "is_consumed must fail closed (return true) when database query fails"
+    );
+}

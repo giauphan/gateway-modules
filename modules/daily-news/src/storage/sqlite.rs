@@ -306,7 +306,10 @@ impl StoragePort for SqliteStorageAdapter {
     fn is_consumed(&self, candidate_id: &str) -> bool {
         let conn = match self.conn.lock() {
             Ok(c) => c,
-            Err(_) => return false,
+            Err(e) => {
+                eprintln!("[daily-news] Storage error: SQLite lock poisoned in is_consumed: {e}");
+                return true; // Fail closed against duplicate publishing
+            }
         };
         // Dual check: consumed table and PUBLISHED status in reservations table
         let count: Result<i64, _> = conn.query_row(
@@ -318,7 +321,13 @@ impl StoragePort for SqliteStorageAdapter {
             params![candidate_id, candidate_id],
             |r| r.get(0),
         );
-        count.unwrap_or(0) > 0
+        match count {
+            Ok(c) => c > 0,
+            Err(e) => {
+                eprintln!("[daily-news] Storage error: query failed in is_consumed for '{candidate_id}': {e}");
+                true // Fail closed against duplicate publishing on database query error
+            }
+        }
     }
 
     fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {
@@ -345,14 +354,27 @@ impl StoragePort for SqliteStorageAdapter {
     fn consumed_count(&self) -> usize {
         let conn = match self.conn.lock() {
             Ok(c) => c,
-            Err(_) => return 0,
+            Err(e) => {
+                eprintln!("[daily-news] Storage error: SQLite lock poisoned in consumed_count: {e}");
+                return 0;
+            }
         };
         let count: Result<i64, _> = conn.query_row(
-            "SELECT count(*) FROM consumed",
+            "SELECT count(*) FROM (
+                SELECT candidate_id FROM consumed
+                UNION
+                SELECT candidate_id FROM reservations WHERE status = 'PUBLISHED'
+            )",
             [],
             |r| r.get(0),
         );
-        count.unwrap_or(0) as usize
+        match count {
+            Ok(c) => c as usize,
+            Err(e) => {
+                eprintln!("[daily-news] Storage error: query failed in consumed_count: {e}");
+                0
+            }
+        }
     }
 
     fn load_config(&self) -> ModuleConfig {
@@ -384,7 +406,9 @@ impl StoragePort for SqliteStorageAdapter {
     }
 
     fn cache_candidates(&self, candidates: &[NormalizedCandidate]) {
-        let _ = self.save_candidates(candidates);
+        if let Err(e) = self.save_candidates(candidates) {
+            eprintln!("[daily-news] Error caching candidates in SQLite: {e}");
+        }
     }
 
     fn get_cached_candidates(&self) -> Vec<NormalizedCandidate> {
@@ -412,7 +436,9 @@ impl StoragePort for SqliteStorageAdapter {
     }
 
     fn upsert_candidates(&self, candidates: &[NormalizedCandidate]) {
-        let _ = self.save_candidates(candidates);
+        if let Err(e) = self.save_candidates(candidates) {
+            eprintln!("[daily-news] Error upserting candidates in SQLite: {e}");
+        }
     }
 
     fn save_candidates(&self, candidates: &[NormalizedCandidate]) -> Result<usize, String> {

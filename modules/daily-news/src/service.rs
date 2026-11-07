@@ -495,7 +495,9 @@ impl DailyNewsService {
     pub fn get_candidate(&self, candidate_id: &str) -> Option<NormalizedCandidate> {
         let mut cand = self.storage.get_candidate(candidate_id)?;
         if self.reverify_cached_readiness_if_needed(&mut cand) {
-            let _ = self.storage.save_candidates(std::slice::from_ref(&cand));
+            if let Err(e) = self.storage.save_candidates(std::slice::from_ref(&cand)) {
+                eprintln!("[daily-news] Warning: Failed to persist reverified candidate in get_candidate: {e}");
+            }
         }
         Some(cand)
     }
@@ -606,7 +608,9 @@ impl DailyNewsService {
         cand.research.research_readiness = Some(fresh);
 
         if changed {
-            let _ = self.storage.save_candidates(std::slice::from_ref(&cand));
+            if let Err(e) = self.storage.save_candidates(std::slice::from_ref(&cand)) {
+                eprintln!("[daily-news] Warning: Failed to persist verified candidate in verify_production_handoff: {e}");
+            }
         }
 
         if status != ReadinessStatus::VideoReady {

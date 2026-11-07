@@ -189,8 +189,11 @@ pub(crate) fn verify_cryptographic_provenance(
 
     // Attempt cryptographic attestation verification
     if let Some(parsed) = super::crypto::parse_attestation_envelope(audit_text) {
-        let audit_text_sha = crate::url::compute_sha256(audit_text);
         let actual_body = extract_audit_body(audit_text);
+        if actual_body.is_empty() {
+            return false;
+        }
+        let audit_text_sha = crate::url::compute_sha256(audit_text);
         let actual_body_sha = crate::url::compute_sha256(actual_body);
         if parsed.issuer.to_lowercase().contains(accred)
             && super::crypto::verify_parsed_attestation_with_body(
@@ -257,8 +260,11 @@ pub(crate) fn verify_trusted_fetch_attestation(
         return false;
     }
 
-    let audit_text_sha = crate::url::compute_sha256(audit_text);
     let actual_body = extract_audit_body(audit_text);
+    if actual_body.is_empty() {
+        return false;
+    }
+    let audit_text_sha = crate::url::compute_sha256(audit_text);
     let actual_body_sha = crate::url::compute_sha256(actual_body);
     super::crypto::verify_parsed_attestation_with_body(
         &parsed,
