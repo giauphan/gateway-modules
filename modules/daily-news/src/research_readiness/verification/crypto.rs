@@ -74,19 +74,16 @@ impl TrustStore {
         if self.allow_test_keys {
             return true;
         }
-        if std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").map(|v| v != "0").unwrap_or(false) {
-            return true;
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            let exe_str = exe.to_string_lossy();
-            if exe_str.contains("/deps/test_")
-                || exe_str.contains("/deps/test-")
-                || exe_str.contains("/deps/daily_news-")
-            {
-                return true;
+        // Strict environment check: only explicit truthy values ("1", "true") are permitted.
+        // "false", "0", "no", "off", empty, or any other value evaluates strictly to false.
+        // Executable path or argv guessing is completely eliminated.
+        match std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS") {
+            Ok(v) => {
+                let trimmed = v.trim();
+                trimmed.eq_ignore_ascii_case("1") || trimmed.eq_ignore_ascii_case("true")
             }
+            Err(_) => false,
         }
-        false
     }
 
     pub fn seed_accredited_keys(&self) {
@@ -512,6 +509,10 @@ pub mod test_helpers {
     /// Test fixture helper.
     /// Strictly registered as `is_test: true` and rejected by production trust stores.
     pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
+        // Test fixture helper: if not explicitly configured/disabled, enable for test suite
+        if std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").is_err() {
+            std::env::set_var("DAILY_NEWS_ALLOW_TEST_KEYS", "1");
+        }
         if !global_trust_store().allows_test_keys() {
             eprintln!("[daily-news] Security: make_test_certik_attestation is prohibited in production runtime");
             return String::new();

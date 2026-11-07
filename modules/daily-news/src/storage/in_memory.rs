@@ -1,7 +1,9 @@
 //! In-memory storage adapter implementing `StoragePort`.
 
 use super::merge::{merge_candidate_entry, trim_candidate_cache};
-use crate::domain::{HandoffReservation, ModuleConfig, NormalizedCandidate, ReservationStatus};
+use crate::domain::{
+    HandoffReservation, IdempotencyRecord, ModuleConfig, NormalizedCandidate, ReservationStatus,
+};
 use crate::ports::StoragePort;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
@@ -12,6 +14,7 @@ pub struct InMemoryStorageAdapter {
     pub(crate) consumed: RwLock<HashSet<String>>,
     pub(crate) cached_candidates: RwLock<Vec<NormalizedCandidate>>,
     pub(crate) reservations: RwLock<HashMap<String, HandoffReservation>>,
+    pub(crate) idempotency_keys: RwLock<HashMap<String, IdempotencyRecord>>,
 }
 
 impl InMemoryStorageAdapter {
@@ -25,6 +28,7 @@ impl InMemoryStorageAdapter {
             consumed: RwLock::new(HashSet::new()),
             cached_candidates: RwLock::new(Vec::new()),
             reservations: RwLock::new(HashMap::new()),
+            idempotency_keys: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -191,5 +195,32 @@ impl StoragePort for InMemoryStorageAdapter {
             c_guard.insert(candidate_id.to_string());
         }
         Ok(true)
+    }
+
+    fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {
+        let mut keys = self
+            .idempotency_keys
+            .write()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        if keys.contains_key(key) {
+            Ok(false)
+        } else {
+            keys.insert(
+                key.to_string(),
+                IdempotencyRecord {
+                    candidate_id: candidate_id.to_string(),
+                    action: action.to_string(),
+                },
+            );
+            Ok(true)
+        }
+    }
+
+    fn check_idempotency_key(&self, key: &str) -> Result<Option<IdempotencyRecord>, String> {
+        let keys = self
+            .idempotency_keys
+            .read()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        Ok(keys.get(key).cloned())
     }
 }

@@ -590,3 +590,10 @@ impl std::ops::Deref for ProductionHandoff {
         &self.candidate
     }
 }
+
+/// Structured record of an idempotency key registration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdempotencyRecord {
+    pub candidate_id: String,
+    pub action: String,
+}

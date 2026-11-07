@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde_json;
 
-use crate::domain::{HandoffReservation, ModuleConfig, NormalizedCandidate, ReservationStatus};
+use crate::domain::{
+    HandoffReservation, IdempotencyRecord, ModuleConfig, NormalizedCandidate, ReservationStatus,
+};
 use crate::ports::StoragePort;
 use super::file::resolve_state_dir;
 use super::merge::merge_candidate_entry;
@@ -300,19 +302,10 @@ impl SqliteStorageAdapter {
 
         Ok(())
     }
-}
 
-impl StoragePort for SqliteStorageAdapter {
-    fn is_consumed(&self, candidate_id: &str) -> bool {
-        let conn = match self.conn.lock() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[daily-news] Storage error: SQLite lock poisoned in is_consumed: {e}");
-                return true; // Fail closed against duplicate publishing
-            }
-        };
-        // Dual check: consumed table and PUBLISHED status in reservations table
-        let count: Result<i64, _> = conn.query_row(
+    pub fn try_is_consumed(&self, candidate_id: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("SQLite lock poisoned in is_consumed: {e}"))?;
+        let count: i64 = conn.query_row(
             "SELECT count(*) FROM (
                 SELECT candidate_id FROM consumed WHERE candidate_id = ?
                 UNION
@@ -320,14 +313,62 @@ impl StoragePort for SqliteStorageAdapter {
             )",
             params![candidate_id, candidate_id],
             |r| r.get(0),
+        ).map_err(|e| format!("Query failed in is_consumed for '{candidate_id}': {e}"))?;
+        Ok(count > 0)
+    }
+
+    pub fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("SQLite lock poisoned: {e}"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO idempotency_keys (key, candidate_id, action, created_at) VALUES (?, ?, ?, ?)",
+            params![key, candidate_id, action, now],
+        ).map_err(|e| format!("Failed to record idempotency key '{key}': {e}"))?;
+        Ok(inserted > 0)
+    }
+
+    pub fn check_idempotency_key(&self, key: &str) -> Result<Option<IdempotencyRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("SQLite lock poisoned: {e}"))?;
+        let result: Result<(String, String), _> = conn.query_row(
+            "SELECT candidate_id, action FROM idempotency_keys WHERE key = ?",
+            params![key],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         );
-        match count {
-            Ok(c) => c > 0,
+        match result {
+            Ok((cid, act)) => Ok(Some(IdempotencyRecord {
+                candidate_id: cid,
+                action: act,
+            })),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Failed to query idempotency key '{key}': {e}")),
+        }
+    }
+}
+
+impl StoragePort for SqliteStorageAdapter {
+    fn try_is_consumed(&self, candidate_id: &str) -> Result<bool, String> {
+        SqliteStorageAdapter::try_is_consumed(self, candidate_id)
+    }
+
+    fn is_consumed(&self, candidate_id: &str) -> bool {
+        match self.try_is_consumed(candidate_id) {
+            Ok(consumed) => consumed,
             Err(e) => {
-                eprintln!("[daily-news] Storage error: query failed in is_consumed for '{candidate_id}': {e}");
+                eprintln!("[daily-news] Storage error: query failed in is_consumed for '{candidate_id}': {e}. Enforcing fail-closed publish safety.");
                 true // Fail closed against duplicate publishing on database query error
             }
         }
+    }
+
+    fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {
+        SqliteStorageAdapter::register_idempotency_key(self, key, candidate_id, action)
+    }
+
+    fn check_idempotency_key(&self, key: &str) -> Result<Option<IdempotencyRecord>, String> {
+        SqliteStorageAdapter::check_idempotency_key(self, key)
     }
 
     fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String> {

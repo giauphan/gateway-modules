@@ -304,6 +304,50 @@ pub fn is_mock_visual_bytes(bytes: &[u8]) -> bool {
 
 pub use super::media_decoder::*;
 
+fn is_authoritative_license_source(lic_ref: &str, source_url: &str) -> bool {
+    let lic_host = lic_ref
+        .split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let src_host = source_url
+        .split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    if lic_host.contains('@') || src_host.contains('@') {
+        return false;
+    }
+    let lic_domain = lic_host.split(':').next().unwrap_or("").trim_start_matches("www.");
+    let src_domain = src_host.split(':').next().unwrap_or("").trim_start_matches("www.");
+
+    if !lic_domain.is_empty()
+        && !src_domain.is_empty()
+        && (lic_domain == src_domain
+            || src_domain.ends_with(&format!(".{lic_domain}"))
+            || lic_domain.ends_with(&format!(".{src_domain}")))
+    {
+        return true;
+    }
+
+    const ACCREDITED_LICENSE_DOMAINS: &[&str] = &[
+        "creativecommons.org",
+        "opensource.org",
+        "apache.org",
+        "gnu.org",
+        "wikimedia.org",
+    ];
+    ACCREDITED_LICENSE_DOMAINS
+        .iter()
+        .any(|d| lic_domain == *d || lic_domain.ends_with(&format!(".{d}")))
+}
+
 pub fn is_visual_rights_verified(
     v: &VisualEvidence,
     secondary_resolver: super::types::SecondaryResolver,
@@ -329,6 +373,10 @@ pub fn is_visual_rights_verified(
     let is_https = tr.starts_with("https://");
     let is_sha256 = tr.len() == 64 && tr.chars().all(|c| c.is_ascii_hexdigit());
     if !is_https && !is_sha256 {
+        return false;
+    }
+
+    if is_https && !is_authoritative_license_source(tr, &v.source_url) {
         return false;
     }
 
@@ -493,6 +541,9 @@ pub fn is_visual_rights_verified(
         .next()
         .unwrap_or("")
         .to_lowercase();
+    if host.contains('@') {
+        return false;
+    }
     let host_domain = host.split(':').next().unwrap_or("").trim_start_matches("www.");
     let has_domain_linkage = !host_domain.is_empty() && lower.contains(host_domain);
 

@@ -492,25 +492,25 @@ pub fn decode_gif_stream(bytes: &[u8]) -> bool {
     saw_image_descriptor
 }
 
-fn validate_webp_vp8(bytes: &[u8], chunk_size: usize) -> bool {
-    if bytes.len() < 30 || chunk_size < 10 {
+fn validate_webp_vp8_payload(payload: &[u8]) -> bool {
+    if payload.len() < 10 {
         return false;
     }
-    // VP8 keyframe start code 0x9D 0x01 0x2A
-    let has_keyframe_code = bytes[23..26] == [0x9D, 0x01, 0x2A];
-    let width = (u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3FFF) as u32;
-    let height = (u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3FFF) as u32;
+    // VP8 keyframe start code 0x9D 0x01 0x2A at payload bytes 3..6
+    let has_keyframe_code = payload[3..6] == [0x9D, 0x01, 0x2A];
+    let width = (u16::from_le_bytes([payload[6], payload[7]]) & 0x3FFF) as u32;
+    let height = (u16::from_le_bytes([payload[8], payload[9]]) & 0x3FFF) as u32;
     has_keyframe_code && width > 0 && height > 0
 }
 
-fn validate_webp_vp8l(bytes: &[u8], chunk_size: usize) -> bool {
-    if bytes.len() < 25 || bytes[20] != 0x2F || chunk_size < 5 {
+fn validate_webp_vp8l_payload(payload: &[u8]) -> bool {
+    if payload.len() < 5 || payload[0] != 0x2F {
         return false;
     }
-    let b1 = bytes[21] as u32;
-    let b2 = bytes[22] as u32;
-    let b3 = bytes[23] as u32;
-    let b4 = bytes[24] as u32;
+    let b1 = payload[1] as u32;
+    let b2 = payload[2] as u32;
+    let b3 = payload[3] as u32;
+    let b4 = payload[4] as u32;
     let width = 1 + (((b2 & 0x3F) << 8) | b1);
     let height = 1 + (((b4 & 0x0F) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6));
     width > 0 && height > 0
@@ -525,10 +525,24 @@ fn has_webp_sub_chunk(bytes: &[u8], mut sub_pos: usize) -> bool {
             bytes[sub_pos + 6],
             bytes[sub_pos + 7],
         ]) as usize;
-        if sub_tag == b"VP8 " || sub_tag == b"VP8L" || sub_tag == b"ANIM" {
-            return true;
+        let sub_data_start = sub_pos + 8;
+        let Some(sub_data_end) = sub_data_start.checked_add(sub_size) else {
+            return false;
+        };
+        // Verify subchunk payload is strictly bounded per RFC 9649
+        if sub_data_end > bytes.len() {
+            return false;
         }
-        sub_pos += 8 + sub_size;
+        if sub_tag == b"VP8 " {
+            return validate_webp_vp8_payload(&bytes[sub_data_start..sub_data_end]);
+        }
+        if sub_tag == b"VP8L" {
+            return validate_webp_vp8l_payload(&bytes[sub_data_start..sub_data_end]);
+        }
+        if sub_tag == b"ANIM" {
+            return sub_size >= 6;
+        }
+        sub_pos = sub_data_end;
         if sub_size % 2 == 1 {
             sub_pos += 1;
         }
@@ -563,8 +577,8 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
         return false;
     }
     match chunk_tag {
-        b"VP8 " => validate_webp_vp8(bytes, chunk_size),
-        b"VP8L" => validate_webp_vp8l(bytes, chunk_size),
+        b"VP8 " => validate_webp_vp8_payload(&bytes[20..20 + chunk_size]),
+        b"VP8L" => validate_webp_vp8l_payload(&bytes[20..20 + chunk_size]),
         b"VP8X" => validate_webp_vp8x(bytes, chunk_size),
         _ => false,
     }
@@ -605,13 +619,43 @@ fn parse_mp4_box_length(bytes: &[u8], pos: usize, box_len: usize) -> Option<usiz
     }
 }
 
-fn decode_mp4_stream(bytes: &[u8]) -> bool {
-    if bytes.len() < 16 || (&bytes[4..8] != b"ftyp" && &bytes[4..8] != b"moov") {
+fn contains_mp4_video_track(bytes: &[u8], moov_start: usize, moov_end: usize) -> bool {
+    let mut pos = moov_start;
+    let mut saw_video_handler = false;
+
+    while pos + 8 <= moov_end {
+        let box_len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+        let box_type = &bytes[pos + 4..pos + 8];
+        let Some(effective_len) = parse_mp4_box_length(bytes, pos, box_len) else {
+            return false;
+        };
+        let Some(next_pos) = pos.checked_add(effective_len) else {
+            return false;
+        };
+        if next_pos > moov_end || next_pos <= pos {
+            return false;
+        }
+
+        if box_type == b"trak" {
+            let trak_slice = &bytes[pos + 8..next_pos];
+            if trak_slice.windows(4).any(|w| w == b"vide" || w == b"vmhd") {
+                saw_video_handler = true;
+            }
+        }
+        pos = next_pos;
+    }
+    saw_video_handler
+}
+
+pub fn decode_mp4_stream(bytes: &[u8]) -> bool {
+    if bytes.len() < 32 || &bytes[4..8] != b"ftyp" {
         return false;
     }
     let mut pos = 0;
     let mut saw_ftyp = false;
-    let mut saw_moov_or_mdat = false;
+    let mut saw_moov = false;
+    let mut saw_valid_mdat = false;
+    let mut saw_video_track = false;
 
     while pos + 8 <= bytes.len() {
         let box_len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
@@ -629,21 +673,35 @@ fn decode_mp4_stream(bytes: &[u8]) -> bool {
 
         if box_type == b"ftyp" {
             saw_ftyp = true;
-        } else if box_type == b"moov" || box_type == b"mdat" {
-            saw_moov_or_mdat = true;
+        } else if box_type == b"moov" {
+            saw_moov = true;
+            if contains_mp4_video_track(bytes, pos + 8, next_pos) {
+                saw_video_track = true;
+            }
+        } else if box_type == b"mdat" && effective_len >= 16 {
+            saw_valid_mdat = true;
         }
 
         pos = next_pos;
     }
 
-    (saw_ftyp || &bytes[4..8] == b"moov") && (saw_moov_or_mdat || saw_ftyp)
+    saw_ftyp && saw_moov && saw_video_track && saw_valid_mdat
 }
 
 pub fn decode_raster_image(bytes: &[u8]) -> bool {
     if is_mock_visual_bytes(bytes) {
         return false;
     }
-    match image::load_from_memory(bytes) {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(10_000);
+    limits.max_image_height = Some(10_000);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    let mut reader = match image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format() {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    reader.limits(limits);
+    match reader.decode() {
         Ok(img) => img.width() > 0 && img.height() > 0,
         Err(_) => false,
     }
@@ -667,7 +725,7 @@ pub fn is_visual_media_decodable(bytes: &[u8]) -> bool {
         return decode_gif_stream(bytes) && decode_raster_image(bytes);
     }
     if bytes.starts_with(b"RIFF") {
-        return decode_webp_stream(bytes);
+        return decode_webp_stream(bytes) && decode_raster_image(bytes);
     }
     if let Ok(utf8_str) = std::str::from_utf8(bytes) {
         if validate_svg_content(utf8_str) {

@@ -4,7 +4,9 @@
 //! Core application services depend on these traits, while external
 //! HTTP fetchers and storage adapters implement them.
 
-use crate::domain::{DiscussionThread, ModuleConfig, NormalizedCandidate, RawNewsItem};
+use crate::domain::{
+    DiscussionThread, IdempotencyRecord, ModuleConfig, NormalizedCandidate, RawNewsItem,
+};
 
 pub trait DiscussionFetcherPort: Send + Sync {
     /// Inspect a discussion thread (Reddit or Hacker News) by URL or item ID.
@@ -42,6 +44,24 @@ pub trait FeedFetcherPort: Send + Sync {
 pub trait StoragePort: Send + Sync {
     /// Check if a candidate ID has already been consumed/processed.
     fn is_consumed(&self, candidate_id: &str) -> bool;
+
+    /// Operationally verify consumed status with explicit error propagation.
+    fn try_is_consumed(&self, candidate_id: &str) -> Result<bool, String> {
+        Ok(self.is_consumed(candidate_id))
+    }
+
+    /// Record or check an idempotency key for an action (e.g. "publish_upload").
+    /// Returns Ok(true) if newly registered, Ok(false) if previously recorded (duplicate),
+    /// or Err(e) on database error or if unsupported.
+    fn register_idempotency_key(&self, _key: &str, _candidate_id: &str, _action: &str) -> Result<bool, String> {
+        Err("idempotency keys are not supported by this storage backend".to_string())
+    }
+
+    /// Check if an idempotency key was previously recorded for a candidate and action.
+    /// Returns Ok(Some(record)) on match, Ok(None) if not recorded, or Err(e) if unsupported or on storage failure.
+    fn check_idempotency_key(&self, _key: &str) -> Result<Option<IdempotencyRecord>, String> {
+        Err("idempotency keys are not supported by this storage backend".to_string())
+    }
 
     /// Mark a batch of candidate IDs as consumed.
     fn mark_consumed(&self, candidate_ids: &[String]) -> Result<usize, String>;

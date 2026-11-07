@@ -586,7 +586,7 @@ fn test_issue6_feed_observed_discovery_admission_and_html_date_extraction() {
         canonical_url: "https://example.com/reddit_news".to_string(),
         title: "Fresh Reddit Article".to_string(),
         publisher: "reddit.com".to_string(),
-        published_at_utc: "2026-11-05T00:00:00+00:00".to_string(),
+        published_at_utc: daily_news::date::current_utc_timestamp(),
         content_hash: compute_sha256("reddit content"),
         title_hash: compute_sha256("fresh reddit article"),
         content_origin: ContentOrigin::Article,

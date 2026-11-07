@@ -3,7 +3,9 @@
 use super::in_memory::InMemoryStorageAdapter;
 use super::lock::ProcessFileLock;
 use super::merge::{merge_candidate_entry, trim_candidate_cache};
-use crate::domain::{HandoffReservation, ModuleConfig, NormalizedCandidate, ReservationStatus};
+use crate::domain::{
+    HandoffReservation, IdempotencyRecord, ModuleConfig, NormalizedCandidate, ReservationStatus,
+};
 use crate::ports::StoragePort;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -172,6 +174,16 @@ impl FileStorageAdapter {
             HashMap::new()
         };
 
+        let idempotency_path = state_dir.join("idempotency.json");
+        let initial_idempotency: HashMap<String, IdempotencyRecord> = if idempotency_path.is_file() {
+            fs::read_to_string(&idempotency_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
         // State reconciliation: any candidate marked Published in reservations.json
         // is authoritatively consumed, preventing desync across unexpected restarts.
         for (cid, res) in &initial_reservations {
@@ -188,6 +200,7 @@ impl FileStorageAdapter {
                 consumed: RwLock::new(initial_consumed),
                 cached_candidates: RwLock::new(initial_candidates),
                 reservations: RwLock::new(initial_reservations),
+                idempotency_keys: RwLock::new(initial_idempotency),
             },
             persist_mutex: Mutex::new(()),
         }
@@ -612,5 +625,73 @@ impl StoragePort for FileStorageAdapter {
             }
         }
         cached
+    }
+
+    fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {
+        self.with_lock(|| {
+            let idemp_path = self.state_dir.join("idempotency.json");
+            let mut records: HashMap<String, IdempotencyRecord> = if idemp_path.is_file() {
+                let content = fs::read_to_string(&idemp_path)
+                    .map_err(|e| format!("Failed to read {idemp_path:?}: {e}"))?;
+                serde_json::from_str(&content)
+                    .map_err(|e| format!("Corrupt idempotency state in {idemp_path:?}: {e}"))?
+            } else {
+                self.inner
+                    .idempotency_keys
+                    .read()
+                    .map(|g| g.clone())
+                    .unwrap_or_default()
+            };
+
+            if records.contains_key(key) {
+                return Ok(false);
+            }
+
+            records.insert(
+                key.to_string(),
+                IdempotencyRecord {
+                    candidate_id: candidate_id.to_string(),
+                    action: action.to_string(),
+                },
+            );
+
+            let unique_id = uuid::Uuid::new_v4();
+            let tmp_path = self.state_dir.join(format!("idempotency.{unique_id}.tmp"));
+            let json = serde_json::to_string_pretty(&records)
+                .map_err(|e| format!("Failed to serialize idempotency records: {e}"))?;
+
+            fs::write(&tmp_path, json).map_err(|e| {
+                let _ = fs::remove_file(&tmp_path);
+                format!("Failed to write idempotency records to {tmp_path:?}: {e}")
+            })?;
+
+            fs::rename(&tmp_path, &idemp_path).map_err(|e| {
+                let _ = fs::remove_file(&tmp_path);
+                format!("Failed to finalize idempotency state to {idemp_path:?}: {e}")
+            })?;
+
+            if let Ok(mut guard) = self.inner.idempotency_keys.write() {
+                *guard = records;
+            }
+
+            Ok(true)
+        })
+    }
+
+    fn check_idempotency_key(&self, key: &str) -> Result<Option<IdempotencyRecord>, String> {
+        let idemp_path = self.state_dir.join("idempotency.json");
+        if idemp_path.is_file() {
+            let content = fs::read_to_string(&idemp_path)
+                .map_err(|e| format!("Failed to read {idemp_path:?}: {e}"))?;
+            let records: HashMap<String, IdempotencyRecord> = serde_json::from_str(&content)
+                .map_err(|e| format!("Corrupt idempotency state in {idemp_path:?}: {e}"))?;
+            return Ok(records.get(key).cloned());
+        }
+        let guard = self
+            .inner
+            .idempotency_keys
+            .read()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        Ok(guard.get(key).cloned())
     }
 }
