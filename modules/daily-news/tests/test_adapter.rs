@@ -3,7 +3,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn send_rpc_request(req: Value) -> Value {
+    let tmp_state = std::env::temp_dir().join(format!("dn_adapter_test_{}_{}", std::process::id(), uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&tmp_state);
     let mut child = Command::new(env!("CARGO_BIN_EXE_daily-news"))
+        .env("DAILY_NEWS_STATE_DIR", &tmp_state)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -49,7 +52,10 @@ fn test_precompiled_release_binary_matches_version() {
         "Precompiled release binary must exist at {:?}",
         precompiled_path
     );
+    let tmp_state = std::env::temp_dir().join(format!("dn_precompiled_test_{}_{}", std::process::id(), uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&tmp_state);
     let mut child = Command::new(&precompiled_path)
+        .env("DAILY_NEWS_STATE_DIR", &tmp_state)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -171,13 +177,14 @@ fn test_adapter_candidates_custom_items() {
 
 #[test]
 fn test_adapter_topic_and_limit_aliases() {
+    let now_ts = daily_news::date::current_utc_timestamp();
     let curated = json!([
         {
             "id": "c_tool",
             "url": "https://mcp.io/tool-spec",
             "title": "Model Context Protocol Tool Schema Spec",
             "publisher": "MCP",
-            "published_at": "2026-11-04T10:00:00+00:00",
+            "published_at": now_ts,
             "body": "Tool call schemas and function parameters."
         },
         {
@@ -185,7 +192,7 @@ fn test_adapter_topic_and_limit_aliases() {
             "url": "https://debug.io/trace",
             "title": "Debugging Flaky Test Retries in CI",
             "publisher": "DebugIO",
-            "published_at": "2026-11-04T10:00:00+00:00",
+            "published_at": now_ts,
             "body": "Crash traces and retry loops."
         }
     ]);

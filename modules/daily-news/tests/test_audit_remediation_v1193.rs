@@ -158,6 +158,7 @@ fn test_audit_provenance_distinguishes_resolved_doc_from_authenticated_issuer() 
 
     // Case 3: Document accompanied by authentic trusted fetch attestation from accredited domain.
     // MUST achieve IssuerAuthenticated!
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation(
         "https://certik.com/reports/certik_2026_101",
         rec.audit_trail_ref.as_deref().unwrap(),

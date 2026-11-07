@@ -104,6 +104,45 @@ impl Default for ModuleConfig {
     }
 }
 
+pub fn parse_string_list(
+    val: &serde_json::Value,
+    field_name: &str,
+    lowercase: bool,
+) -> Result<Vec<String>, String> {
+    let mut list = Vec::new();
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            let s = item
+                .as_str()
+                .ok_or_else(|| format!("'{field_name}' elements must be strings"))?;
+            let tr = if lowercase {
+                s.trim().to_lowercase()
+            } else {
+                s.trim().to_string()
+            };
+            if !tr.is_empty() {
+                list.push(tr);
+            }
+        }
+    } else if let Some(s) = val.as_str() {
+        for item in s.split(',') {
+            let tr = if lowercase {
+                item.trim().to_lowercase()
+            } else {
+                item.trim().to_string()
+            };
+            if !tr.is_empty() {
+                list.push(tr);
+            }
+        }
+    } else {
+        return Err(format!(
+            "'{field_name}' must be an array of strings or a comma-separated string"
+        ));
+    }
+    Ok(list)
+}
+
 impl ModuleConfig {
     fn apply_content_updates(&mut self, obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
         if let Some(val) = obj.get("freshness_window_hours") {
@@ -133,20 +172,7 @@ impl ModuleConfig {
         }
 
         if let Some(val) = obj.get("default_sources") {
-            let arr = val
-                .as_array()
-                .ok_or_else(|| "'default_sources' must be an array of strings".to_string())?;
-            let mut sources = Vec::new();
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| "'default_sources' elements must be strings".to_string())?;
-                let tr = s.trim().to_lowercase();
-                if !tr.is_empty() {
-                    sources.push(tr);
-                }
-            }
-            self.default_sources = sources;
+            self.default_sources = parse_string_list(val, "default_sources", true)?;
         }
 
         Ok(())
@@ -201,19 +227,7 @@ impl ModuleConfig {
         }
 
         if let Some(val) = obj.get("reddit_subreddits") {
-            let arr = val
-                .as_array()
-                .ok_or_else(|| "'reddit_subreddits' must be an array of strings".to_string())?;
-            let mut subs = Vec::new();
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| "'reddit_subreddits' elements must be strings".to_string())?;
-                if !s.trim().is_empty() {
-                    subs.push(s.trim().to_string());
-                }
-            }
-            self.reddit_subreddits = subs;
+            self.reddit_subreddits = parse_string_list(val, "reddit_subreddits", false)?;
         }
 
         if let Some(val) = obj.get("reddit_client_id") {

@@ -2,7 +2,7 @@
   "id": "daily-news",
   "name": "Daily News & Content Discovery Service",
   "short_name": "Daily News",
-  "version": "1.19.10",
+  "version": "1.19.11",
   "namespace": "/custom/daily-news",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -256,9 +256,49 @@
           "token": {
             "type": "string",
             "description": "Secret reservation token received during handoff verification"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Optional client-supplied idempotency key to prevent duplicate publishing on retry"
           }
         },
         "required": ["candidate_id", "token"]
+      }
+    },
+    {
+      "name": "check_publish_idempotency",
+      "description": "Check if an idempotency key was previously recorded for a candidate and publishing action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Unique client idempotency key to check"
+          }
+        },
+        "required": ["key"]
+      }
+    },
+    {
+      "name": "register_publish_idempotency",
+      "description": "Record an idempotency key before initiating an external publish/upload action, guaranteeing exactly-once execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Unique client idempotency key"
+          },
+          "candidate_id": {
+            "type": "string",
+            "description": "Candidate ID associated with the publish action"
+          },
+          "action": {
+            "type": "string",
+            "description": "Publish action descriptor (default: publish_upload)"
+          }
+        },
+        "required": ["key", "candidate_id"]
       }
     },
     {

@@ -20,29 +20,65 @@ pub struct FileStorageAdapter {
     persist_mutex: Mutex<()>,
 }
 
+fn is_directory_writable(candidate: &Path) -> bool {
+    if fs::create_dir_all(candidate).is_err() {
+        return false;
+    }
+    let test_file = candidate.join(format!(".wt_{}", uuid::Uuid::new_v4()));
+    if fs::write(&test_file, b"ok").is_ok() {
+        let _ = fs::remove_file(&test_file);
+        true
+    } else {
+        false
+    }
+}
+
+pub fn is_ephemeral_state_allowed() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    matches!(
+        std::env::var("DAILY_NEWS_ALLOW_EPHEMERAL_STATE").as_deref(),
+        Ok("1" | "true" | "TRUE")
+    )
+}
+
+pub fn try_resolve_state_dir(base_dir: &Path) -> Result<PathBuf, String> {
+    if let Ok(dir_str) = std::env::var("DAILY_NEWS_STATE_DIR") {
+        let path = PathBuf::from(dir_str);
+        if is_directory_writable(&path) {
+            return Ok(path);
+        } else {
+            return Err(format!(
+                "Configured state directory '{}' from DAILY_NEWS_STATE_DIR is not writable.",
+                path.display()
+            ));
+        }
+    }
+
+    let candidate = base_dir.join(".state");
+    if is_directory_writable(&candidate) {
+        return Ok(candidate);
+    }
+
+    if is_ephemeral_state_allowed() {
+        let fallback = std::env::temp_dir().join("daily-news").join(".state");
+        let _ = fs::create_dir_all(&fallback);
+        return Ok(fallback);
+    }
+
+    Err(format!(
+        "Persistent state directory '{}' is not writable. Ephemeral fallback to /tmp is prohibited in production.",
+        candidate.display()
+    ))
+}
+
 pub fn resolve_state_dir(base_dir: &Path) -> PathBuf {
-    std::env::var("DAILY_NEWS_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let candidate = base_dir.join(".state");
-            let is_writable = {
-                let _ = fs::create_dir_all(&candidate);
-                let test_file = candidate.join(format!(".wt_{}", uuid::Uuid::new_v4()));
-                if fs::write(&test_file, b"ok").is_ok() {
-                    let _ = fs::remove_file(&test_file);
-                    true
-                } else {
-                    false
-                }
-            };
-            if is_writable {
-                candidate
-            } else {
-                let fallback = std::env::temp_dir().join("daily-news").join(".state");
-                let _ = fs::create_dir_all(&fallback);
-                fallback
-            }
-        })
+    try_resolve_state_dir(base_dir).unwrap_or_else(|_| {
+        let fallback = std::env::temp_dir().join("daily-news").join(".state");
+        let _ = fs::create_dir_all(&fallback);
+        fallback
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,9 +157,19 @@ fn reconcile_transaction_journal(state_dir: &Path) {
 }
 
 impl FileStorageAdapter {
+    pub fn try_new<P: AsRef<Path>>(base_dir: P) -> Result<Self, String> {
+        let base = base_dir.as_ref();
+        let state_dir = try_resolve_state_dir(base)?;
+        Ok(Self::new_with_resolved_state_dir(base, state_dir))
+    }
+
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let base = base_dir.as_ref();
         let state_dir = resolve_state_dir(base);
+        Self::new_with_resolved_state_dir(base, state_dir)
+    }
+
+    fn new_with_resolved_state_dir(base: &Path, state_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&state_dir);
         let _process_lock = ProcessFileLock::acquire(&state_dir.join(".state.lock"));
         reconcile_transaction_journal(&state_dir);
@@ -230,6 +276,43 @@ impl FileStorageAdapter {
         } else {
             self.inner.reservations.read().map(|g| g.clone()).unwrap_or_default()
         }
+    }
+
+    fn load_idempotency_map(&self) -> Result<HashMap<String, IdempotencyRecord>, String> {
+        let idemp_path = self.state_dir.join("idempotency.json");
+        if idemp_path.is_file() {
+            let content = fs::read_to_string(&idemp_path)
+                .map_err(|e| format!("Failed to read {idemp_path:?}: {e}"))?;
+            let records: HashMap<String, IdempotencyRecord> = serde_json::from_str(&content)
+                .map_err(|e| format!("Corrupt idempotency state in {idemp_path:?}: {e}"))?;
+            return Ok(records);
+        }
+        let guard = self
+            .inner
+            .idempotency_keys
+            .read()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        Ok(guard.clone())
+    }
+
+    fn write_idempotency_file(&self, records: &HashMap<String, IdempotencyRecord>) -> Result<(), String> {
+        let idemp_path = self.state_dir.join("idempotency.json");
+        let unique_id = uuid::Uuid::new_v4();
+        let tmp_path = self.state_dir.join(format!("idempotency.{unique_id}.tmp"));
+        let json = serde_json::to_string_pretty(records)
+            .map_err(|e| format!("Failed to serialize idempotency records: {e}"))?;
+        fs::write(&tmp_path, json).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to write idempotency records to {tmp_path:?}: {e}")
+        })?;
+        fs::rename(&tmp_path, &idemp_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to finalize idempotency state to {idemp_path:?}: {e}")
+        })?;
+        if let Ok(mut guard) = self.inner.idempotency_keys.write() {
+            *guard = records.clone();
+        }
+        Ok(())
     }
 }
 
@@ -448,8 +531,32 @@ impl StoragePort for FileStorageAdapter {
         })
     }
 
-    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+    fn commit_consumed_with_idempotency(
+        &self,
+        candidate_id: &str,
+        token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<bool, String> {
         self.with_lock(|| {
+            let mut idemp_records = self.load_idempotency_map()?;
+            if let Some(key) = idempotency_key {
+                if let Some(record) = idemp_records.get(key) {
+                    if record.candidate_id == candidate_id && record.action == "commit_handoff" {
+                        return Ok(true);
+                    } else if record.candidate_id == candidate_id {
+                        return Err(format!(
+                            "Idempotency key '{key}' already registered for action '{}', cannot reuse for commit_handoff",
+                            record.action
+                        ));
+                    } else {
+                        return Err(format!(
+                            "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
+                            record.candidate_id
+                        ));
+                    }
+                }
+            }
+
             let mut reservations = self.load_reservations_map();
             let res = reservations
                 .get_mut(candidate_id)
@@ -457,6 +564,16 @@ impl StoragePort for FileStorageAdapter {
 
             let now = super::reservation::current_epoch_seconds();
             if super::reservation::validate_reservation_commit(res, candidate_id, token, now)? {
+                if let Some(key) = idempotency_key {
+                    idemp_records.insert(
+                        key.to_string(),
+                        IdempotencyRecord {
+                            candidate_id: candidate_id.to_string(),
+                            action: "commit_handoff".to_string(),
+                        },
+                    );
+                    let _ = self.write_idempotency_file(&idemp_records);
+                }
                 return Ok(true);
             }
 
@@ -509,7 +626,19 @@ impl StoragePort for FileStorageAdapter {
                 format!("Failed to finalize consumed set to {consumed_path:?}: {e}")
             })?;
 
-            // Step 4: Transaction completed; remove journal
+            // Step 4: Write idempotency if key provided
+            if let Some(key) = idempotency_key {
+                idemp_records.insert(
+                    key.to_string(),
+                    IdempotencyRecord {
+                        candidate_id: candidate_id.to_string(),
+                        action: "commit_handoff".to_string(),
+                    },
+                );
+                self.write_idempotency_file(&idemp_records)?;
+            }
+
+            // Step 5: Transaction completed; remove journal
             let _ = fs::remove_file(&journal_path);
 
             if let Ok(mut guard) = self.inner.reservations.write() {
@@ -521,6 +650,10 @@ impl StoragePort for FileStorageAdapter {
 
             Ok(true)
         })
+    }
+
+    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+        self.commit_consumed_with_idempotency(candidate_id, token, None)
     }
 
     fn consumed_count(&self) -> usize {
@@ -629,24 +762,10 @@ impl StoragePort for FileStorageAdapter {
 
     fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {
         self.with_lock(|| {
-            let idemp_path = self.state_dir.join("idempotency.json");
-            let mut records: HashMap<String, IdempotencyRecord> = if idemp_path.is_file() {
-                let content = fs::read_to_string(&idemp_path)
-                    .map_err(|e| format!("Failed to read {idemp_path:?}: {e}"))?;
-                serde_json::from_str(&content)
-                    .map_err(|e| format!("Corrupt idempotency state in {idemp_path:?}: {e}"))?
-            } else {
-                self.inner
-                    .idempotency_keys
-                    .read()
-                    .map(|g| g.clone())
-                    .unwrap_or_default()
-            };
-
+            let mut records = self.load_idempotency_map()?;
             if records.contains_key(key) {
                 return Ok(false);
             }
-
             records.insert(
                 key.to_string(),
                 IdempotencyRecord {
@@ -654,44 +773,13 @@ impl StoragePort for FileStorageAdapter {
                     action: action.to_string(),
                 },
             );
-
-            let unique_id = uuid::Uuid::new_v4();
-            let tmp_path = self.state_dir.join(format!("idempotency.{unique_id}.tmp"));
-            let json = serde_json::to_string_pretty(&records)
-                .map_err(|e| format!("Failed to serialize idempotency records: {e}"))?;
-
-            fs::write(&tmp_path, json).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to write idempotency records to {tmp_path:?}: {e}")
-            })?;
-
-            fs::rename(&tmp_path, &idemp_path).map_err(|e| {
-                let _ = fs::remove_file(&tmp_path);
-                format!("Failed to finalize idempotency state to {idemp_path:?}: {e}")
-            })?;
-
-            if let Ok(mut guard) = self.inner.idempotency_keys.write() {
-                *guard = records;
-            }
-
+            self.write_idempotency_file(&records)?;
             Ok(true)
         })
     }
 
     fn check_idempotency_key(&self, key: &str) -> Result<Option<IdempotencyRecord>, String> {
-        let idemp_path = self.state_dir.join("idempotency.json");
-        if idemp_path.is_file() {
-            let content = fs::read_to_string(&idemp_path)
-                .map_err(|e| format!("Failed to read {idemp_path:?}: {e}"))?;
-            let records: HashMap<String, IdempotencyRecord> = serde_json::from_str(&content)
-                .map_err(|e| format!("Corrupt idempotency state in {idemp_path:?}: {e}"))?;
-            return Ok(records.get(key).cloned());
-        }
-        let guard = self
-            .inner
-            .idempotency_keys
-            .read()
-            .map_err(|e| format!("Lock error: {e}"))?;
-        Ok(guard.get(key).cloned())
+        let records = self.load_idempotency_map()?;
+        Ok(records.get(key).cloned())
     }
 }

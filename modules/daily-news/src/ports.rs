@@ -110,6 +110,39 @@ pub trait StoragePort: Send + Sync {
     /// Commit consumption of a reserved candidate using the reservation token, transitioning to PUBLISHED.
     fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String>;
 
+    /// Commit consumption with atomic idempotency key registration and validation.
+    fn commit_consumed_with_idempotency(
+        &self,
+        candidate_id: &str,
+        token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<bool, String> {
+        if let Some(key) = idempotency_key {
+            if let Some(record) = self.check_idempotency_key(key)? {
+                if record.candidate_id == candidate_id && record.action == "commit_handoff" {
+                    return Ok(true);
+                } else if record.candidate_id == candidate_id {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for action '{}', cannot reuse for commit_handoff",
+                        record.action
+                    ));
+                } else {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
+                        record.candidate_id
+                    ));
+                }
+            }
+            let committed = self.commit_consumed(candidate_id, token)?;
+            if committed {
+                self.register_idempotency_key(key, candidate_id, "commit_handoff")?;
+            }
+            Ok(committed)
+        } else {
+            self.commit_consumed(candidate_id, token)
+        }
+    }
+
     /// Release a reservation if rendering or downstream handoff fails, restoring candidate to AVAILABLE.
     fn release_reservation(&self, candidate_id: &str, token: &str) -> Result<bool, String>;
 }

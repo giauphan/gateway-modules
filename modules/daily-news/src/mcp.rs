@@ -299,11 +299,61 @@ fn handle_commit_production_handoff(service: &DailyNewsService, args: &Value) ->
         Err(resp) => return resp,
     };
 
-    match service.commit_handoff(candidate_id, token) {
+    let idempotency_key = args["idempotency_key"]
+        .as_str()
+        .or_else(|| args["idempotencyKey"].as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    match service.commit_handoff_with_idempotency(candidate_id, token, idempotency_key) {
         Ok(true) => McpToolResponse::success(
-            json!({ "status": "PUBLISHED", "candidate_id": candidate_id }).to_string(),
+            json!({
+                "status": "PUBLISHED",
+                "candidate_id": candidate_id,
+                "idempotent": idempotency_key.is_some()
+            }).to_string(),
         ),
         Ok(false) => McpToolResponse::error(format!("No reservation found for candidate '{candidate_id}'")),
+        Err(e) => McpToolResponse::error(e),
+    }
+}
+
+fn handle_check_publish_idempotency(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let key = match args["key"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(k) => k,
+        None => return McpToolResponse::error("Missing required parameter: 'key'"),
+    };
+    match service.check_publish_idempotency(key) {
+        Ok(Some(record)) => McpToolResponse::success(
+            json!({ "status": "RECORDED", "exists": true, "record": record }).to_string(),
+        ),
+        Ok(None) => McpToolResponse::success(
+            json!({ "status": "AVAILABLE", "exists": false }).to_string(),
+        ),
+        Err(e) => McpToolResponse::error(e),
+    }
+}
+
+fn handle_register_publish_idempotency(service: &DailyNewsService, args: &Value) -> McpToolResponse {
+    let key = match args["key"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(k) => k,
+        None => return McpToolResponse::error("Missing required parameter: 'key'"),
+    };
+    let candidate_id = match args["candidate_id"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(c) => c,
+        None => return McpToolResponse::error("Missing required parameter: 'candidate_id'"),
+    };
+    let action = args["action"].as_str().unwrap_or("publish_upload").trim();
+    match service.register_publish_idempotency(key, candidate_id, action) {
+        Ok(true) => McpToolResponse::success(
+            json!({ "status": "REGISTERED", "registered": true, "key": key, "candidate_id": candidate_id }).to_string(),
+        ),
+        Ok(false) => {
+            let existing = service.check_publish_idempotency(key).ok().flatten();
+            McpToolResponse::error(
+                json!({ "status": "DUPLICATE", "registered": false, "key": key, "existing": existing }).to_string(),
+            )
+        }
         Err(e) => McpToolResponse::error(e),
     }
 }
@@ -370,6 +420,8 @@ pub fn dispatch_mcp_tool(
         "commit_production_handoff" | "commit_handoff" => {
             handle_commit_production_handoff(service, arguments)
         }
+        "check_publish_idempotency" => handle_check_publish_idempotency(service, arguments),
+        "register_publish_idempotency" => handle_register_publish_idempotency(service, arguments),
         "get_evidence_snapshot" | "evidence" => handle_get_evidence_snapshot(base_dir, arguments),
         "get_discussion" | "discussion" => handle_get_discussion(service, arguments),
         other => McpToolResponse::error(format!("Unknown or unsupported MCP tool: '{other}'")),

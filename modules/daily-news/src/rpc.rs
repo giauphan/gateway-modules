@@ -86,13 +86,21 @@ pub fn extract_date_range(body: &Value) -> (Option<String>, Option<String>) {
     (from, to)
 }
 
-pub fn parse_request_body(req: &Value, query: &str) -> Value {
+pub fn try_parse_request_body(req: &Value, query: &str) -> Result<Value, String> {
     let mut body: Value = if let Some(b) = req["body"].as_str() {
-        serde_json::from_str(b).unwrap_or_else(|_| json!({}))
+        let trimmed = b.trim();
+        if trimmed.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(trimmed)
+                .map_err(|e| format!("Invalid JSON request body: {e}"))?
+        }
     } else if req["body"].is_object() {
         req["body"].clone()
-    } else {
+    } else if req.get("body").is_none() || req["body"].is_null() {
         json!({})
+    } else {
+        return Err("Request body must be a JSON object or string".to_string());
     };
 
     if !body.is_object() {
@@ -112,5 +120,9 @@ pub fn parse_request_body(req: &Value, query: &str) -> Value {
             }
         }
     }
-    body
+    Ok(body)
+}
+
+pub fn parse_request_body(req: &Value, query: &str) -> Value {
+    try_parse_request_body(req, query).unwrap_or_else(|_| json!({}))
 }

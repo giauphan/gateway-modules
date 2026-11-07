@@ -58,6 +58,15 @@ pub fn get_mcp_tools_list() -> Vec<Value> {
         }),
     );
 
+    let mut commit_extras = serde_json::Map::new();
+    commit_extras.insert(
+        "idempotency_key".to_string(),
+        json!({
+            "type": "string",
+            "description": "Optional client-supplied idempotency key ensuring replay safety across network timeouts"
+        }),
+    );
+
     vec![
         json!({
             "name": "discover_candidates",
@@ -148,7 +157,41 @@ pub fn get_mcp_tools_list() -> Vec<Value> {
             "inputSchema": candidate_token_schema(
                 "Unique candidate identifier to mark permanently PUBLISHED",
                 "Secret reservation token received during handoff verification",
-                None,
+                Some(commit_extras),
+            )
+        }),
+        json!({
+            "name": "check_publish_idempotency",
+            "description": "Check if an idempotency key was previously recorded for a candidate and publishing action.",
+            "inputSchema": object_schema(
+                json!({
+                    "key": {
+                        "type": "string",
+                        "description": "Unique client idempotency key to check"
+                    }
+                }),
+                &["key"],
+            )
+        }),
+        json!({
+            "name": "register_publish_idempotency",
+            "description": "Record an idempotency key before initiating an external publish/upload action, guaranteeing exactly-once execution.",
+            "inputSchema": object_schema(
+                json!({
+                    "key": {
+                        "type": "string",
+                        "description": "Unique client idempotency key"
+                    },
+                    "candidate_id": {
+                        "type": "string",
+                        "description": "Candidate ID associated with the publish action"
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Publish action descriptor (default: publish_upload)"
+                    }
+                }),
+                &["key", "candidate_id"],
             )
         }),
         json!({

@@ -14,7 +14,7 @@ use crate::domain::{
     HandoffReservation, IdempotencyRecord, ModuleConfig, NormalizedCandidate, ReservationStatus,
 };
 use crate::ports::StoragePort;
-use super::file::resolve_state_dir;
+use super::file::try_resolve_state_dir;
 use super::merge::merge_candidate_entry;
 
 pub struct SqliteStorageAdapter {
@@ -25,7 +25,7 @@ pub struct SqliteStorageAdapter {
 
 impl SqliteStorageAdapter {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Result<Self, String> {
-        let state_dir = resolve_state_dir(base_dir.as_ref());
+        let state_dir = try_resolve_state_dir(base_dir.as_ref())?;
         let _ = fs::create_dir_all(&state_dir);
         let db_path = state_dir.join("daily_news.db");
 
@@ -610,10 +610,36 @@ impl StoragePort for SqliteStorageAdapter {
         Ok(token)
     }
 
-    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+    fn commit_consumed_with_idempotency(
+        &self,
+        candidate_id: &str,
+        token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<bool, String> {
         let mut conn = self.conn.lock().map_err(|_| "Poisoned SQLite lock")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("Failed to start commit transaction: {e}"))?;
+
+        if let Some(key) = idempotency_key {
+            let existing: Result<(String, String), _> = tx.query_row(
+                "SELECT candidate_id, action FROM idempotency_keys WHERE key = ?",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            );
+            if let Ok((reg_cid, reg_action)) = existing {
+                if reg_cid == candidate_id && reg_action == "commit_handoff" {
+                    return Ok(true);
+                } else if reg_cid == candidate_id {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for action '{reg_action}', cannot reuse for commit_handoff"
+                    ));
+                } else {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for candidate '{reg_cid}', cannot reuse for '{candidate_id}'"
+                    ));
+                }
+            }
+        }
 
         let res_info: Result<(String, String, u64), _> = tx.query_row(
             "SELECT token_hash, status, expires_at FROM reservations WHERE candidate_id = ?",
@@ -631,14 +657,21 @@ impl StoragePort for SqliteStorageAdapter {
             return Err(format!("Invalid reservation token for candidate '{candidate_id}'"));
         }
 
-        if status == "PUBLISHED" {
-            return Ok(true);
-        }
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+
+        if status == "PUBLISHED" {
+            if let Some(key) = idempotency_key {
+                let _ = tx.execute(
+                    "INSERT OR IGNORE INTO idempotency_keys (key, candidate_id, action, created_at) VALUES (?, ?, 'commit_handoff', ?)",
+                    params![key, candidate_id, now as i64],
+                );
+            }
+            tx.commit().map_err(|e| format!("Failed to commit idempotent transaction: {e}"))?;
+            return Ok(true);
+        }
 
         if now > expires_at {
             return Err(format!("Reservation lease for candidate '{candidate_id}' has expired"));
@@ -654,8 +687,19 @@ impl StoragePort for SqliteStorageAdapter {
             params![candidate_id, now as i64],
         ).map_err(|e| format!("Failed to mark candidate consumed in SQLite: {e}"))?;
 
+        if let Some(key) = idempotency_key {
+            tx.execute(
+                "INSERT OR REPLACE INTO idempotency_keys (key, candidate_id, action, created_at) VALUES (?, ?, 'commit_handoff', ?)",
+                params![key, candidate_id, now as i64],
+            ).map_err(|e| format!("Failed to record idempotency key in SQLite: {e}"))?;
+        }
+
         tx.commit().map_err(|e| format!("Failed to commit transaction: {e}"))?;
         Ok(true)
+    }
+
+    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+        self.commit_consumed_with_idempotency(candidate_id, token, None)
     }
 
     fn release_reservation(&self, candidate_id: &str, token: &str) -> Result<bool, String> {

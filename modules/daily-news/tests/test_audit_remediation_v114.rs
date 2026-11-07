@@ -1,6 +1,6 @@
 use daily_news::domain::{
-    ClaimEvidence, ContentOrigin, EvidenceRef, NormalizedCandidate, RawProvenance,
-    ReadinessStatus, VerificationRecord, VisualEvidence,
+    ClaimEvidence, ContentOrigin, EvidenceRef, NormalizedCandidate, PrimarySourceEvidence,
+    RawProvenance, ReadinessStatus, ResearchEvidenceFields, VerificationRecord, VisualEvidence,
 };
 use daily_news::fetcher::LiveFeedFetcher;
 use daily_news::research_readiness::{
@@ -31,7 +31,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral server");
     let port = listener.local_addr().unwrap().port();
 
-    let server_body = "<html><head><title>Deterministic Async Engine</title></head><body><p>Our production deployment achieved a 4x reduction in cache latency across edge nodes.</p></body></html>";
+    let server_body = "<html><head><title>Deterministic Async Engine Benchmark</title></head><body><p>Our production deployment achieved a 4x reduction in cache latency across edge nodes. Extensive benchmark evaluations demonstrate consistent sub-millisecond execution times and deterministic memory allocation behavior across high-concurrency production workloads with zero garbage collection pauses or thread contention bottlenecks.</p></body></html>";
     let body_clone = server_body.to_string();
 
     let _server_handle = std::thread::spawn(move || {
@@ -59,10 +59,11 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     let scorer = CandidateScorer::default();
 
     let service = DailyNewsService::new(fetcher, storage.clone(), scorer)
-        .with_source_capture(capturer);
+        .with_source_capture(capturer.clone());
 
     let cand_url = format!("http://127.0.0.1:{port}/article");
     let cand_id = "cand_v114_test";
+    let (snap_ref, snap_sha) = capturer.store_snapshot_text(server_body).unwrap();
     let cand = NormalizedCandidate {
         candidate_id: cand_id.to_string(),
         canonical_url: cand_url.clone(),
@@ -70,7 +71,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
         url: cand_url.clone(),
         source_url: cand_url.clone(),
         source_type: "news".to_string(),
-        title: "Deterministic Async Engine".to_string(),
+        title: "Deterministic Async Engine Benchmark".to_string(),
         publisher: "example.com".to_string(),
         normalized_publisher: "example".to_string(),
         published_at_utc: "2026-11-04T05:00:00Z".to_string(),
@@ -94,9 +95,24 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
         evidence: Default::default(),
         independent_fact_check: None,
         scoring: None,
-        content_origin: ContentOrigin::HeadlineOnly,
+        content_origin: ContentOrigin::Article,
         published_at_kind: "article_publication".to_string(),
-        research: Default::default(),
+        research: ResearchEvidenceFields {
+            primary_source: Some(PrimarySourceEvidence {
+                url: cand_url.clone(),
+                fetch_status: "SUCCESS".to_string(),
+                content_quality: Some("ARTICLE_CONTENT_VALID".to_string()),
+                content_type: Some("text/html".to_string()),
+                title: Some("Deterministic Async Engine Benchmark".to_string()),
+                published_at: Some("2026-11-04T05:00:00Z".to_string()),
+                excerpt: Some("Our production deployment achieved a 4x reduction in cache latency across edge nodes.".to_string()),
+                snapshot_ref: Some(snap_ref),
+                snapshot_sha256: Some(snap_sha),
+                captured_at: Some("2026-11-04T05:00:00Z".to_string()),
+                extraction_method: Some("conservative_html".to_string()),
+            }),
+            ..Default::default()
+        },
     };
     storage.cache_candidates(&[cand]);
 
@@ -181,6 +197,7 @@ fn test_v114_production_audit_resolver_corroboration_gate() {
     // 3. Trusted accredited issuer + real PNG bytes reaches production VideoReady
     let base_audit = "Official CertiK Audit Report from CertiK (https://certik.com/reports/2026-V114 ref #: 2026-V114): CertiK independently verified the benchmark findings and confirmed 4x reduction in cache latency across reproducible test runs.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-V114", &base_sha);
     let trusted_audit_doc = format!("{base_audit}\n{att}");
     let trusted_audit_sha = compute_sha256(&trusted_audit_doc);

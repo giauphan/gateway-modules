@@ -126,6 +126,7 @@ fn test_issue1_false_positive_video_ready_prevention() {
 
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01): CertiK independently verified findings confirmed for 4x improvement in system throughput across test runs.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-CERT-01", &base_sha);
     let official_audit = format!("{base_audit}\n{att}");
     let official_audit_sha = compute_sha256(&official_audit);
@@ -215,6 +216,7 @@ fn test_issue2_cached_video_ready_reverification_and_handoff_gate() {
 
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-H1 ref #: 2026-H1): CertiK independently verified findings confirmed for 4x improvement across test runs.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-H1", &base_sha);
     let audit_text = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_text);

@@ -99,6 +99,7 @@ fn test_audit_provenance_fail_open_eliminated() {
     );
 
     // D. Document accompanied by authentic trusted fetch attestation envelope -> SUCCEEDS (IssuerAuthenticated)
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-101", &auth_sha);
     let attested_text = format!("{audit_text}\n{att}");
     assert!(is_audit_source_verified_with_resolver(
@@ -160,6 +161,7 @@ fn test_handoff_lifecycle_token_security_and_published_state() {
 
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-HND ref #: 2026-HND): CertiK independently verified findings confirmed for 4x performance gain.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-HND", &base_sha);
     let audit_text = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_text);
@@ -320,6 +322,7 @@ fn test_per_claim_verification_blocks_partial_fake_claims() {
 
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-OK ref #: 2026-OK): CertiK independently verified findings confirmed for 4x throughput across test runs.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-OK", &base_sha);
     let audit_text = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_text);

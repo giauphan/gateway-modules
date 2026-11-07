@@ -5,7 +5,8 @@ set -euo pipefail
 # Synchronizes module version across module.json, documentation, and release binary
 # based on the single source of truth: Cargo.toml
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_SOURCE="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
 MODULE_DIR="$ROOT_DIR/modules/daily-news"
 CARGO_TOML="$MODULE_DIR/Cargo.toml"
 

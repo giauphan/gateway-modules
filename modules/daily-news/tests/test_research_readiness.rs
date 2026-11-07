@@ -195,6 +195,7 @@ fn test_all_criteria_met_yields_video_ready() {
     // With accredited issuer and valid media asset resolvers, evaluate_readiness_full yields VideoReady
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-01 ref #: 2026-01): verified findings confirmed for 4x latency improvement across all systems.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-01", &base_sha);
     let audit_doc = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_doc);
@@ -681,6 +682,7 @@ fn test_verification_record_structured_evidence() {
     // When resolvers are provided for accredited CertiK audit + valid visual bytes, evaluates to VideoReady
     let base_audit = "Official Cryptographic Audit Report from CertiK (https://certik.com/reports/2026-001 ref #: 2026-001): CertiK independently verified findings confirmed for hardened signature boundaries across all test cases.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-001", &base_sha);
     let audit_doc = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_doc);

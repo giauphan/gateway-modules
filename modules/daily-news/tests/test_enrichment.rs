@@ -104,6 +104,7 @@ fn test_enrich_candidate_workflow_state_transitions() {
     // 2. Second stage enrichment: provide verified claims with accredited reviewer + CC-BY visual asset
     let base_audit = "Official Cryptographic Audit Trail Report #2026-02 from CertiK (https://certik.com/reports/benchmark ref #: 2026-02): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.";
     let base_sha = daily_news::url::compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/benchmark", &base_sha);
     let audit_content = format!("{base_audit}\n{att}");
     let audit_sha = daily_news::url::compute_sha256(&audit_content);

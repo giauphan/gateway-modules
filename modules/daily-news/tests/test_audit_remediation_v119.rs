@@ -94,6 +94,7 @@ fn test_issue1_audit_provenance_issuer_authenticated_vs_content_matched() {
     assert!(!is_audit_source_verified(spoofed_text, &spoofed_rec));
 
     // Case 1C: Genuine CertiK audit anchored with authoritative domain and report id
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let base_audit = "Official Audit Report from CertiK: independently verified findings confirmed for 4x throughput improvement (https://certik.com/reports/2026-CERT-01 ref #: 2026-CERT-01).";
     let base_sha = compute_sha256(base_audit);
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-CERT-01", &base_sha);
@@ -424,6 +425,7 @@ fn test_issue5_atomic_handoff_claim_and_freshness_gate() {
 
     let base_audit = "Official Audit Report from CertiK: verified findings confirmed for 4x speedup on neural compiler benchmarks (https://certik.com/reports/2026-HND ref #: 2026-HND).";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-HND", &base_sha);
     let audit_text = format!("{base_audit}\n{att}");
     let audit_sha = compute_sha256(&audit_text);

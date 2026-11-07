@@ -116,6 +116,7 @@ fn test_v116_trusted_evidence_provenance_rejects_mock_from_video_ready() {
     // 2. Trusted Accredited Issuer ("CertiK") + Real PNG Media Bytes -> VIDEO_READY
     let base_audit = "Official Cryptographic Audit Trail Report from CertiK (https://certik.com/reports/2026-P1 ref #: 2026-P1): CertiK independently verified the performance benchmarks and confirmed findings for 4x latency reduction across all test runs.";
     let base_sha = compute_sha256(base_audit);
+    daily_news::research_readiness::global_trust_store().enable_test_keys();
     let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/2026-P1", &base_sha);
     let prod_audit_text = format!("{base_audit}\n{att}");
     let prod_audit_sha = compute_sha256(&prod_audit_text);

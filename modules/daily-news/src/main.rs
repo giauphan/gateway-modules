@@ -21,6 +21,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("daily-news {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Daily News & Content Discovery Service v{}", env!("CARGO_PKG_VERSION"));
+        println!("Usage: daily-news [options]");
+        println!("Options:");
+        println!("  -V, --version    Print version information");
+        println!("  -h, --help       Print help information");
+        return;
+    }
+
     let base_dir = std::env::var("DAILY_NEWS_BASE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -49,7 +63,14 @@ fn main() {
             }
         }
     } else {
-        Arc::new(FileStorageAdapter::new(&base_dir))
+        match FileStorageAdapter::try_new(&base_dir) {
+            Ok(file) => Arc::new(file),
+            Err(e) => {
+                eprintln!("[daily-news] FATAL: File storage engine initialization failed: {e}");
+                eprintln!("[daily-news] Failing closed to prevent split-brain state or duplicate publish claims.");
+                std::process::exit(1);
+            }
+        }
     };
     let initial_config = storage.load_config();
     let redis_provider = initial_config.redis_enabled.then(|| {

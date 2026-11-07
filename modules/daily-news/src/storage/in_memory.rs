@@ -175,7 +175,35 @@ impl StoragePort for InMemoryStorageAdapter {
         Ok(true)
     }
 
-    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+    fn commit_consumed_with_idempotency(
+        &self,
+        candidate_id: &str,
+        token: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<bool, String> {
+        let mut idemp_guard = self
+            .idempotency_keys
+            .write()
+            .map_err(|e| format!("Lock error: {e}"))?;
+
+        if let Some(key) = idempotency_key {
+            if let Some(record) = idemp_guard.get(key) {
+                if record.candidate_id == candidate_id && record.action == "commit_handoff" {
+                    return Ok(true);
+                } else if record.candidate_id == candidate_id {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for action '{}', cannot reuse for commit_handoff",
+                        record.action
+                    ));
+                } else {
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
+                        record.candidate_id
+                    ));
+                }
+            }
+        }
+
         let mut guard = self
             .reservations
             .write()
@@ -187,6 +215,15 @@ impl StoragePort for InMemoryStorageAdapter {
 
         let now = super::reservation::current_epoch_seconds();
         if super::reservation::validate_reservation_commit(res, candidate_id, token, now)? {
+            if let Some(key) = idempotency_key {
+                idemp_guard.insert(
+                    key.to_string(),
+                    IdempotencyRecord {
+                        candidate_id: candidate_id.to_string(),
+                        action: "commit_handoff".to_string(),
+                    },
+                );
+            }
             return Ok(true);
         }
 
@@ -194,7 +231,20 @@ impl StoragePort for InMemoryStorageAdapter {
         if let Ok(mut c_guard) = self.consumed.write() {
             c_guard.insert(candidate_id.to_string());
         }
+        if let Some(key) = idempotency_key {
+            idemp_guard.insert(
+                key.to_string(),
+                IdempotencyRecord {
+                    candidate_id: candidate_id.to_string(),
+                    action: "commit_handoff".to_string(),
+                },
+            );
+        }
         Ok(true)
+    }
+
+    fn commit_consumed(&self, candidate_id: &str, token: &str) -> Result<bool, String> {
+        self.commit_consumed_with_idempotency(candidate_id, token, None)
     }
 
     fn register_idempotency_key(&self, key: &str, candidate_id: &str, action: &str) -> Result<bool, String> {

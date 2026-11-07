@@ -79,6 +79,7 @@ fn test_ten_candidates_enrich_and_restart_persistence() {
         // Enrich Candidate 2 -> with accredited reviewer and visual evidence -> VIDEO_READY
         let base_audit = "Official Cryptographic Audit Trail Report #2026-01 from CertiK (https://certik.com/reports/benchmark ref #: 2026-01): CertiK independently verified findings confirmed for 4x reduction in cache latency across all test runs.";
         let base_sha = compute_sha256(base_audit);
+        daily_news::research_readiness::global_trust_store().enable_test_keys();
         let att = daily_news::research_readiness::make_test_certik_attestation("https://certik.com/reports/benchmark", &base_sha);
         let audit_content = format!("{base_audit}\n{att}");
         let audit_sha = compute_sha256(&audit_content);

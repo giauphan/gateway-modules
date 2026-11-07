@@ -9,7 +9,7 @@ pub mod merge;
 pub mod reservation;
 pub mod sqlite;
 
-pub use file::{resolve_state_dir, FileStorageAdapter};
+pub use file::{resolve_state_dir, try_resolve_state_dir, FileStorageAdapter};
 pub use in_memory::InMemoryStorageAdapter;
 pub use lock::ProcessFileLock;
 pub use merge::merge_candidate_entry;

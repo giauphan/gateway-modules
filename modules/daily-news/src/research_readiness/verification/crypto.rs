@@ -3,6 +3,7 @@
 //! Enforces strict trust boundaries: mock signatures and unverified tokens fail closed.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 use ring::signature::{UnparsedPublicKey, ED25519};
 use ring::hmac;
@@ -36,7 +37,7 @@ pub struct TrustedKeyEntry {
 #[derive(Debug)]
 pub struct TrustStore {
     keys: RwLock<HashMap<String, TrustedKeyEntry>>,
-    allow_test_keys: bool,
+    allow_test_keys: AtomicBool,
 }
 
 static GLOBAL_TRUST_STORE: std::sync::OnceLock<TrustStore> = std::sync::OnceLock::new();
@@ -59,31 +60,34 @@ impl TrustStore {
     pub fn new() -> Self {
         Self {
             keys: RwLock::new(HashMap::new()),
-            allow_test_keys: false,
+            allow_test_keys: AtomicBool::new(false),
         }
     }
 
     pub fn new_test() -> Self {
         Self {
             keys: RwLock::new(HashMap::new()),
-            allow_test_keys: true,
+            allow_test_keys: AtomicBool::new(true),
         }
     }
 
     pub fn allows_test_keys(&self) -> bool {
-        if self.allow_test_keys {
-            return true;
-        }
-        // Strict environment check: only explicit truthy values ("1", "true") are permitted.
-        // "false", "0", "no", "off", empty, or any other value evaluates strictly to false.
-        // Executable path or argv guessing is completely eliminated.
-        match std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS") {
-            Ok(v) => {
-                let trimmed = v.trim();
-                trimmed.eq_ignore_ascii_case("1") || trimmed.eq_ignore_ascii_case("true")
+        // Strict environment check: explicit false/0 overrides any runtime state
+        if let Ok(v) = std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS") {
+            let trimmed = v.trim();
+            if trimmed.eq_ignore_ascii_case("0") || trimmed.eq_ignore_ascii_case("false") {
+                return false;
             }
-            Err(_) => false,
+            if trimmed.eq_ignore_ascii_case("1") || trimmed.eq_ignore_ascii_case("true") {
+                return true;
+            }
         }
+        self.allow_test_keys.load(Ordering::SeqCst)
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn enable_test_keys(&self) {
+        self.allow_test_keys.store(true, Ordering::SeqCst);
     }
 
     pub fn seed_accredited_keys(&self) {
@@ -503,16 +507,13 @@ pub fn create_signed_gateway_attestation(
 }
 
 /// Dedicated test helpers isolated from production verification pipeline.
+#[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers {
     use super::{create_signed_gateway_attestation, global_trust_store, TrustedKey};
 
     /// Test fixture helper.
     /// Strictly registered as `is_test: true` and rejected by production trust stores.
     pub fn make_test_certik_attestation(url: &str, content_sha256: &str) -> String {
-        // Test fixture helper: if not explicitly configured/disabled, enable for test suite
-        if std::env::var("DAILY_NEWS_ALLOW_TEST_KEYS").is_err() {
-            std::env::set_var("DAILY_NEWS_ALLOW_TEST_KEYS", "1");
-        }
         if !global_trust_store().allows_test_keys() {
             eprintln!("[daily-news] Security: make_test_certik_attestation is prohibited in production runtime");
             return String::new();
@@ -544,4 +545,5 @@ pub mod test_helpers {
     }
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 pub use test_helpers::make_test_certik_attestation;
