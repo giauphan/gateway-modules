@@ -492,6 +492,63 @@ pub fn decode_gif_stream(bytes: &[u8]) -> bool {
     saw_image_descriptor
 }
 
+fn validate_webp_vp8(bytes: &[u8], chunk_size: usize) -> bool {
+    if bytes.len() < 30 || chunk_size < 10 {
+        return false;
+    }
+    // VP8 keyframe start code 0x9D 0x01 0x2A
+    let has_keyframe_code = bytes[23..26] == [0x9D, 0x01, 0x2A];
+    let width = (u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3FFF) as u32;
+    let height = (u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3FFF) as u32;
+    has_keyframe_code && width > 0 && height > 0
+}
+
+fn validate_webp_vp8l(bytes: &[u8], chunk_size: usize) -> bool {
+    if bytes.len() < 25 || bytes[20] != 0x2F || chunk_size < 5 {
+        return false;
+    }
+    let b1 = bytes[21] as u32;
+    let b2 = bytes[22] as u32;
+    let b3 = bytes[23] as u32;
+    let b4 = bytes[24] as u32;
+    let width = 1 + (((b2 & 0x3F) << 8) | b1);
+    let height = 1 + (((b4 & 0x0F) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6));
+    width > 0 && height > 0
+}
+
+fn has_webp_sub_chunk(bytes: &[u8], mut sub_pos: usize) -> bool {
+    while sub_pos + 8 <= bytes.len() {
+        let sub_tag = &bytes[sub_pos..sub_pos + 4];
+        let sub_size = u32::from_le_bytes([
+            bytes[sub_pos + 4],
+            bytes[sub_pos + 5],
+            bytes[sub_pos + 6],
+            bytes[sub_pos + 7],
+        ]) as usize;
+        if sub_tag == b"VP8 " || sub_tag == b"VP8L" || sub_tag == b"ANIM" {
+            return true;
+        }
+        sub_pos += 8 + sub_size;
+        if sub_size % 2 == 1 {
+            sub_pos += 1;
+        }
+    }
+    false
+}
+
+fn validate_webp_vp8x(bytes: &[u8], chunk_size: usize) -> bool {
+    if bytes.len() < 30 || chunk_size < 10 {
+        return false;
+    }
+    let width = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
+    let height = 1 + (bytes[27] as u32 | ((bytes[28] as u32) << 8) | ((bytes[29] as u32) << 16));
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let sub_pos = 20 + chunk_size + (chunk_size % 2);
+    has_webp_sub_chunk(bytes, sub_pos)
+}
+
 pub fn decode_webp_stream(bytes: &[u8]) -> bool {
     if bytes.len() < 20 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
         return false;
@@ -506,62 +563,9 @@ pub fn decode_webp_stream(bytes: &[u8]) -> bool {
         return false;
     }
     match chunk_tag {
-        b"VP8 " => {
-            if bytes.len() < 30 || chunk_size < 10 {
-                return false;
-            }
-            // VP8 keyframe start code 0x9D 0x01 0x2A
-            let has_keyframe_code = bytes[23..26] == [0x9D, 0x01, 0x2A];
-            let width = (u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3FFF) as u32;
-            let height = (u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3FFF) as u32;
-            has_keyframe_code && width > 0 && height > 0
-        }
-        b"VP8L" => {
-            if bytes.len() < 25 || bytes[20] != 0x2F || chunk_size < 5 {
-                return false;
-            }
-            let b1 = bytes[21] as u32;
-            let b2 = bytes[22] as u32;
-            let b3 = bytes[23] as u32;
-            let b4 = bytes[24] as u32;
-            let width = 1 + (((b2 & 0x3F) << 8) | b1);
-            let height = 1 + (((b4 & 0x0F) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6));
-            width > 0 && height > 0
-        }
-        b"VP8X" => {
-            if bytes.len() < 30 || chunk_size < 10 {
-                return false;
-            }
-            let width = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
-            let height = 1 + (bytes[27] as u32 | ((bytes[28] as u32) << 8) | ((bytes[29] as u32) << 16));
-            if width == 0 || height == 0 {
-                return false;
-            }
-            // VP8X extended WebP must contain subsequent raster/animation data chunk (VP8 , VP8L, or ANIM)
-            let mut sub_pos = 20 + chunk_size;
-            if chunk_size % 2 == 1 {
-                sub_pos += 1;
-            }
-            let mut has_image_data = false;
-            while sub_pos + 8 <= bytes.len() {
-                let sub_tag = &bytes[sub_pos..sub_pos + 4];
-                let sub_size = u32::from_le_bytes([
-                    bytes[sub_pos + 4],
-                    bytes[sub_pos + 5],
-                    bytes[sub_pos + 6],
-                    bytes[sub_pos + 7],
-                ]) as usize;
-                if sub_tag == b"VP8 " || sub_tag == b"VP8L" || sub_tag == b"ANIM" {
-                    has_image_data = true;
-                    break;
-                }
-                sub_pos += 8 + sub_size;
-                if sub_size % 2 == 1 {
-                    sub_pos += 1;
-                }
-            }
-            has_image_data
-        }
+        b"VP8 " => validate_webp_vp8(bytes, chunk_size),
+        b"VP8L" => validate_webp_vp8l(bytes, chunk_size),
+        b"VP8X" => validate_webp_vp8x(bytes, chunk_size),
         _ => false,
     }
 }
