@@ -48,12 +48,11 @@ pub fn try_resolve_state_dir(base_dir: &Path) -> Result<PathBuf, String> {
         let path = PathBuf::from(dir_str);
         if is_directory_writable(&path) {
             return Ok(path);
-        } else {
-            return Err(format!(
-                "Configured state directory '{}' from DAILY_NEWS_STATE_DIR is not writable.",
-                path.display()
-            ));
         }
+        return Err(format!(
+            "Configured state directory '{}' from DAILY_NEWS_STATE_DIR is not writable.",
+            path.display()
+        ));
     }
 
     let candidate = base_dir.join(".state");
@@ -543,17 +542,17 @@ impl StoragePort for FileStorageAdapter {
                 if let Some(record) = idemp_records.get(key) {
                     if record.candidate_id == candidate_id && record.action == "commit_handoff" {
                         return Ok(true);
-                    } else if record.candidate_id == candidate_id {
+                    }
+                    if record.candidate_id == candidate_id {
                         return Err(format!(
                             "Idempotency key '{key}' already registered for action '{}', cannot reuse for commit_handoff",
                             record.action
                         ));
-                    } else {
-                        return Err(format!(
-                            "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
-                            record.candidate_id
-                        ));
                     }
+                    return Err(format!(
+                        "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
+                        record.candidate_id
+                    ));
                 }
             }
 

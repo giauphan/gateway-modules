@@ -179,11 +179,10 @@ fn dispatch_read_and_discovery(
     }
 }
 
-fn dispatch_pipeline_and_admin(
+fn dispatch_pipeline(
     route: &str,
     method: &str,
     body: &Value,
-    req: &Value,
     service: &DailyNewsService,
     base_dir: &Path,
 ) -> Option<Value> {
@@ -194,13 +193,12 @@ fn dispatch_pipeline_and_admin(
             }
             let cid = body["candidate_id"].as_str().map(str::trim).unwrap_or("");
             if cid.is_empty() {
-                Some(make_json_resp(
+                return Some(make_json_resp(
                     400,
                     json!({ "error": "Missing required parameter: 'candidate_id'" }),
-                ))
-            } else {
-                Some(handle_enrich_candidate(service, cid, body))
+                ));
             }
+            Some(handle_enrich_candidate(service, cid, body))
         }
         "/api/v1/capture" | "/capture" => {
             if let Err(err) = enforce_method(method, &["POST"]) {
@@ -238,6 +236,24 @@ fn dispatch_pipeline_and_admin(
             }
             Some(handle_verify_research_readiness(service, base_dir, body))
         }
+        _ => None,
+    }
+}
+
+fn handle_handoff_with_action(service: &DailyNewsService, body: &Value, action: &str) -> Value {
+    let mut b = if body.is_object() { body.clone() } else { json!({}) };
+    b["action"] = json!(action);
+    handle_handoff(service, &b)
+}
+
+fn dispatch_handoff_and_admin(
+    route: &str,
+    method: &str,
+    body: &Value,
+    req: &Value,
+    service: &DailyNewsService,
+) -> Option<Value> {
+    match route {
         "/api/v1/release-consumed" | "/release-consumed" => {
             if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
@@ -260,17 +276,13 @@ fn dispatch_pipeline_and_admin(
             if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
             }
-            let mut b = if body.is_object() { body.clone() } else { json!({}) };
-            b["action"] = json!("release");
-            Some(handle_handoff(service, &b))
+            Some(handle_handoff_with_action(service, body, "release"))
         }
         "/api/v1/handoff/commit" | "/handoff/commit" => {
             if let Err(err) = enforce_method(method, &["POST"]) {
                 return Some(err);
             }
-            let mut b = if body.is_object() { body.clone() } else { json!({}) };
-            b["action"] = json!("commit");
-            Some(handle_handoff(service, &b))
+            Some(handle_handoff_with_action(service, body, "commit"))
         }
         "/api/v1/config" | "/config" => {
             if let Err(err) = enforce_method(method, &["GET", "POST"]) {
@@ -280,6 +292,18 @@ fn dispatch_pipeline_and_admin(
         }
         _ => None,
     }
+}
+
+fn dispatch_pipeline_and_admin(
+    route: &str,
+    method: &str,
+    body: &Value,
+    req: &Value,
+    service: &DailyNewsService,
+    base_dir: &Path,
+) -> Option<Value> {
+    dispatch_pipeline(route, method, body, service, base_dir)
+        .or_else(|| dispatch_handoff_and_admin(route, method, body, req, service))
 }
 
 #[allow(clippy::too_many_arguments)]

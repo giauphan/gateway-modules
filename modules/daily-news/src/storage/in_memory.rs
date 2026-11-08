@@ -190,17 +190,17 @@ impl StoragePort for InMemoryStorageAdapter {
             if let Some(record) = idemp_guard.get(key) {
                 if record.candidate_id == candidate_id && record.action == "commit_handoff" {
                     return Ok(true);
-                } else if record.candidate_id == candidate_id {
+                }
+                if record.candidate_id == candidate_id {
                     return Err(format!(
                         "Idempotency key '{key}' already registered for action '{}', cannot reuse for commit_handoff",
                         record.action
                     ));
-                } else {
-                    return Err(format!(
-                        "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
-                        record.candidate_id
-                    ));
                 }
+                return Err(format!(
+                    "Idempotency key '{key}' already registered for candidate '{}', cannot reuse for '{candidate_id}'",
+                    record.candidate_id
+                ));
             }
         }
 

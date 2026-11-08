@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "daily-news"
-version = "1.19.11"
+version = "1.19.12"
 dependencies = [
  "crc32fast",
  "daily-news",

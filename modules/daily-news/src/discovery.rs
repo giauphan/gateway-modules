@@ -118,14 +118,16 @@ impl<'a> CandidateEligibilityPolicy<'a> {
             .map(|d| d.as_secs())
             .unwrap_or(1793618000);
 
-        let default_cutoff = {
-            let window_secs = (cfg.freshness_window_hours * 3600.0) as u64;
-            ref_epoch.saturating_sub(window_secs)
+        let cutoff = match from_epoch {
+            Some(from_e) => from_e,
+            None => {
+                let window_secs = (cfg.freshness_window_hours * 3600.0) as u64;
+                let default_cutoff = ref_epoch.saturating_sub(window_secs);
+                let max_age_secs = (cfg.max_age_days as u64) * 86400;
+                let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
+                default_cutoff.max(max_age_cutoff)
+            }
         };
-        let cutoff = from_epoch.unwrap_or(default_cutoff);
-        let max_age_secs = (cfg.max_age_days as u64) * 86400;
-        let max_age_cutoff = ref_epoch.saturating_sub(max_age_secs);
-        let cutoff = cutoff.max(max_age_cutoff);
         let upper_bound = to_epoch.unwrap_or(ref_epoch + 300);
 
         Self {

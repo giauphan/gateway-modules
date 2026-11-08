@@ -629,15 +629,15 @@ impl StoragePort for SqliteStorageAdapter {
             if let Ok((reg_cid, reg_action)) = existing {
                 if reg_cid == candidate_id && reg_action == "commit_handoff" {
                     return Ok(true);
-                } else if reg_cid == candidate_id {
+                }
+                if reg_cid == candidate_id {
                     return Err(format!(
                         "Idempotency key '{key}' already registered for action '{reg_action}', cannot reuse for commit_handoff"
                     ));
-                } else {
-                    return Err(format!(
-                        "Idempotency key '{key}' already registered for candidate '{reg_cid}', cannot reuse for '{candidate_id}'"
-                    ));
                 }
+                return Err(format!(
+                    "Idempotency key '{key}' already registered for candidate '{reg_cid}', cannot reuse for '{candidate_id}'"
+                ));
             }
         }
 
