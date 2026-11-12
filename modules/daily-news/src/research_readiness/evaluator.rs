@@ -18,7 +18,7 @@ fn snapshot_contains_excerpt(snapshot_text: &str, excerpt: &str) -> bool {
         .split_whitespace()
         .collect::<Vec<&str>>()
         .join(" ");
-    let cleaned_snapshot = crate::source_capture::extract_main_text(snapshot_text);
+    let cleaned_snapshot = crate::domain::extract_main_text(snapshot_text);
     if cleaned_snapshot.contains(&norm_excerpt) {
         return true;
     }

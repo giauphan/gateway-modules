@@ -2,9 +2,14 @@
 //!
 //! Pure domain logic matching Clean Architecture rules and strict contracts.
 
+mod candidate_merge;
+mod html_text;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub use candidate_merge::*;
+pub use html_text::*;
 pub use crate::date::*;
 pub use crate::research_readiness::*;
 pub use crate::scoring::ProductionReadinessScoring;

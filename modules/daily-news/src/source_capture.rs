@@ -6,6 +6,7 @@
 //! stores content-addressed snapshots in `.state/evidence/`.
 
 use crate::domain::{current_utc_timestamp, PrimarySourceEvidence};
+pub use crate::domain::{clean_html_entities, extract_main_text};
 use crate::ports::SourceCapturePort;
 use crate::url::{is_restricted_ipv4, is_restricted_ipv6};
 use sha2::{Digest, Sha256};
@@ -179,16 +180,6 @@ pub fn extract_article_title(html: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-pub fn clean_html_entities(text: &str) -> String {
-    text.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&nbsp;", " ")
-}
-
 fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
     let n_bytes = needle.as_bytes();
     if n_bytes.is_empty() {
@@ -293,49 +284,7 @@ pub fn extract_html_published_at(html: &str) -> Option<String> {
         .or_else(|| extract_jsonld_published_at(html))
 }
 
-fn is_block_tag(t: &str) -> bool {
-    matches!(
-        t,
-        "p" | "div" | "br" | "li" | "tr" | "td" | "article" | "section" | "blockquote"
-    ) || (t.len() == 2 && t.starts_with('h') && t.ends_with(|c: char| ('1'..='6').contains(&c)))
-}
 
-pub fn extract_main_text(html: &str) -> String {
-    let mut cleaned = String::with_capacity(html.len());
-    let mut in_script = false;
-    let mut in_style = false;
-    let mut in_tag = false;
-    let mut tag_buf = String::with_capacity(32);
-
-    for c in html.chars() {
-        if c == '<' {
-            in_tag = true;
-            tag_buf.clear();
-        } else if c == '>' && in_tag {
-            in_tag = false;
-            let tag_lower = tag_buf.to_ascii_lowercase();
-            let tag_name = tag_lower
-                .trim_start_matches('/')
-                .split_whitespace()
-                .next()
-                .unwrap_or("");
-            if tag_name == "script" {
-                in_script = !tag_lower.starts_with('/');
-            } else if tag_name == "style" {
-                in_style = !tag_lower.starts_with('/');
-            } else if is_block_tag(tag_name) {
-                cleaned.push(' ');
-            }
-        } else if in_tag {
-            tag_buf.push(c);
-        } else if !in_script && !in_style {
-            cleaned.push(c);
-        }
-    }
-
-    let decoded = clean_html_entities(&cleaned);
-    decoded.split_whitespace().collect::<Vec<&str>>().join(" ")
-}
 
 #[derive(Debug, Clone)]
 struct SsrfSafeResolver {

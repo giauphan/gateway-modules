@@ -392,7 +392,7 @@ pub fn build_substantive_research_package(
     snapshot_text: &str,
     snapshot_ref: Option<&str>,
 ) -> (Vec<ClaimEvidence>, StoryboardEvidence) {
-    let visible_text = crate::source_capture::extract_main_text(snapshot_text);
+    let visible_text = crate::domain::extract_main_text(snapshot_text);
     let raw_sentences = extract_raw_sentences(&visible_text);
 
     let problem_sentence = select_problem_sentence(&raw_sentences, excerpt);

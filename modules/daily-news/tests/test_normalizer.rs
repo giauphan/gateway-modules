@@ -104,17 +104,25 @@ fn test_batch_deduplication_and_date_filtering() {
     };
     let svc = create_test_service(cfg);
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let recent = daily_news::format_utc_timestamp(now - 3600);
+    let recent_duplicate = daily_news::format_utc_timestamp(now - 3000);
+    let evergreen_updated = daily_news::format_utc_timestamp(now - 2 * 86400);
+
     let raw1 = make_dummy_item(
         "1",
         "https://news.ycombinator.com/item?id=100",
         "New Rust Toolcase Gateway Released",
-        "2026-11-04T08:00:00+00:00",
+        &recent,
     );
     let raw2_duplicate = make_dummy_item(
         "2",
         "https://news.ycombinator.com/item?id=100&utm_source=twitter",
         "New Rust Toolcase Gateway Released",
-        "2026-11-04T08:05:00+00:00",
+        &recent_duplicate,
     );
     let mut raw_evergreen = make_dummy_item(
         "eg_1",
@@ -123,7 +131,7 @@ fn test_batch_deduplication_and_date_filtering() {
         "2015-07-28T00:00:00+00:00",
     );
     raw_evergreen.is_evergreen = true;
-    raw_evergreen.updated_at = Some("2026-10-28T14:00:00+00:00".to_string());
+    raw_evergreen.updated_at = Some(evergreen_updated);
 
     let items = vec![raw1, raw2_duplicate, raw_evergreen];
     let ranked = svc.filter_and_score(&items, None, None, None, 10);
