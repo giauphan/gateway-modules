@@ -92,13 +92,18 @@ For complete architectural details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 When Toolcase Gateway starts, `./run.sh` immediately executes the precompiled standalone native binary (`./daily-news`), falling back to `cargo run --release` only if the binary is absent.
 
 ### Compiling from Source
+The shipped binary is built for `aarch64-unknown-linux-musl` so the gateway server needs no glibc
+matching (`.cargo/config.toml` sets the `musl-gcc` linker). Requires `musl-tools` and the Rust
+target (`rustup target add aarch64-unknown-linux-musl`).
 ```bash
-cargo build --release
+cargo build --release --target aarch64-unknown-linux-musl
 ```
-Places the optimized binary in `target/release/daily-news`. Copy to the module root to update:
+Places the statically linked binary in `target/aarch64-unknown-linux-musl/release/daily-news`
+(3.8 MB, `not a dynamic executable`). Copy to the module root to update:
 ```bash
-cp target/release/daily-news ./daily-news && chmod +x ./daily-news
+cp target/aarch64-unknown-linux-musl/release/daily-news ./daily-news && chmod +x ./daily-news
 ```
+`./scripts/sync-version.sh <version>` performs this build and copy automatically.
 
 ### Running Test Suite
 ```bash

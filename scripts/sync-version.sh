@@ -54,8 +54,16 @@ if [[ -f "$SPEC_MD" ]]; then
 fi
 
 echo "==> Rebuilding release binary for v$VERSION..."
-CARGO_TARGET_DIR="/tmp/target" cargo build --release --manifest-path "$CARGO_TOML"
-cp "/tmp/target/release/daily-news" "$MODULE_DIR/daily-news"
+# Static musl by default: the committed binary must not depend on the server's glibc.
+BUILD_TARGET="${DAILY_NEWS_BUILD_TARGET:-aarch64-unknown-linux-musl}"
+BUILD_DIR="${DAILY_NEWS_BUILD_DIR:-/tmp/target}"
+CARGO_TARGET_DIR="$BUILD_DIR" cargo build --release --target "$BUILD_TARGET" --manifest-path "$CARGO_TOML"
+RELEASE_BINARY="$BUILD_DIR/$BUILD_TARGET/release/daily-news"
+if [[ ! -f "$RELEASE_BINARY" ]]; then
+    echo "Error: expected release binary not found at $RELEASE_BINARY" >&2
+    exit 1
+fi
+cp "$RELEASE_BINARY" "$MODULE_DIR/daily-news"
 chmod +x "$MODULE_DIR/daily-news"
 
 echo "==> Successfully synchronized all files to version $VERSION!"

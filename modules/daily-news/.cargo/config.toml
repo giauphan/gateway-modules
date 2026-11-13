@@ -1,0 +1,8 @@
+# The shipped precompiled binary is built for musl so it carries no glibc
+# dependency on the gateway server. Host arch == server arch (aarch64).
+[target.aarch64-unknown-linux-musl]
+linker = "musl-gcc"
+
+[env]
+CC_aarch64_unknown_linux_musl = "musl-gcc"
+AR_aarch64_unknown_linux_musl = "ar"

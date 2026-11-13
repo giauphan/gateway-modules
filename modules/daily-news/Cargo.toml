@@ -1,6 +1,6 @@
 [package]
 name = "daily-news"
-version = "1.19.22"
+version = "1.19.24"
 edition = "2021"
 description = "Native Rust engine and stdio-stream adapter for Daily News & Content Discovery Service"
 license = "MIT"
@@ -16,6 +16,15 @@ path = "src/lib.rs"
 [features]
 default = []
 test-helpers = []
+
+# Shipped binary is the precompiled ./daily-news executed by run.sh: favour size.
+# Tests run on the dev profile, so panic = "abort" does not affect `cargo test`.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
 
 [dev-dependencies]
 daily-news = { path = ".", features = ["test-helpers"] }
