@@ -1,0 +1,130 @@
+{
+  "id": "facebook-suite",
+  "name": "Meta Business Suite / Facebook Creator Studio Adapter",
+  "short_name": "Meta Business Suite",
+  "icon": "ⓕ",
+  "source": "https://github.com/giauphan/gateway-modules/tree/main/modules/facebook-suite",
+  "version": "1.0.0",
+  "namespace": "/custom/facebook",
+  "entrypoint": "run.sh",
+  "protocol": "stdio-stream",
+  "capabilities": [
+    "studio",
+    "composer",
+    "upload",
+    "publish",
+    "reels",
+    "stories",
+    "auto_translate",
+    "chat_completions",
+    "models"
+  ],
+  "config_schema": {
+    "title": "Meta Business Suite Config & HAR Import",
+    "module_id": "facebook-suite",
+    "namespace": "/custom/facebook",
+    "har_endpoint": "/custom/facebook/v1/config/har",
+    "har_hint": "Drop download-facebook.har here or select file (.har, .json) to auto-extract credentials and Comet parameters",
+    "fields": [
+      {
+        "key": "base_url",
+        "label": "Meta Business Base URL",
+        "type": "text",
+        "placeholder": "https://business.facebook.com",
+        "description": "Primary Meta Business Suite upstream URL"
+      },
+      {
+        "key": "enabled",
+        "label": "Module Status",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable Meta Business Suite requests"
+      },
+      {
+        "key": "auto_translate",
+        "label": "Auto-Translate / Video Dubbing",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable multi-language auto-dubbing and translated audio metadata by default"
+      },
+      {
+        "key": "access_token",
+        "label": "Page Access Token",
+        "type": "password",
+        "secret": true,
+        "placeholder": "EAAB... (optional direct Page Access Token override)",
+        "description": "Direct Meta Graph API Page Access Token or system user token"
+      },
+      {
+        "key": "cookie",
+        "label": "Session Cookie",
+        "type": "password",
+        "secret": true,
+        "placeholder": "Leave empty to keep existing cookie (c_user, xs, datr)",
+        "description": "Facebook authenticated session cookie"
+      },
+      {
+        "key": "fb_dtsg",
+        "label": "CSRF Token (fb_dtsg)",
+        "type": "password",
+        "secret": true,
+        "placeholder": "Leave empty to keep existing fb_dtsg",
+        "description": "Comet anti-CSRF token extracted from HAR or page payload"
+      },
+      {
+        "key": "user_id",
+        "label": "Facebook User ID (__user / c_user)",
+        "type": "text",
+        "placeholder": "1000...",
+        "description": "Authenticated Facebook User ID"
+      },
+      {
+        "key": "actor_id",
+        "label": "Actor ID (av)",
+        "type": "text",
+        "placeholder": "1435...",
+        "description": "Active acting identity or Page ID"
+      },
+      {
+        "key": "target_id",
+        "label": "Target Page ID",
+        "type": "text",
+        "placeholder": "1435...",
+        "description": "Default target Facebook Page for uploads and reels"
+      },
+      {
+        "key": "business_id",
+        "label": "Business ID (__bid)",
+        "type": "text",
+        "placeholder": "2567...",
+        "description": "Associated Meta Business Account ID"
+      }
+    ]
+  },
+  "permissions": [
+    "network"
+  ],
+  "group": {
+    "enabled": true,
+    "providers": [
+      {
+        "id": "studio",
+        "name": "Meta Business Suite Profile & Scopes",
+        "subpath": "/studio",
+        "capabilities": ["studio", "manage"]
+      },
+      {
+        "id": "upload",
+        "name": "Facebook Resumable Video Upload (Rupload)",
+        "subpath": "/upload",
+        "capabilities": ["upload", "resumable"]
+      },
+      {
+        "id": "publish",
+        "name": "Facebook Reel, Story & Post Publish",
+        "subpath": "/publish",
+        "capabilities": ["publish", "composer"]
+      }
+    ]
+  }
+}

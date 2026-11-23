@@ -49,6 +49,15 @@ gateway-modules/
 | Module ID | Name | Version | Namespace | Capabilities | Path |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`daily-news`** | **Daily News & Content Discovery Service** | `1.3.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models`, `redis` | [`modules/daily-news`](modules/daily-news) |
+| **`facebook-suite`** | **Meta Business Suite / Facebook Creator Studio Adapter** | `1.0.0` | `/custom/facebook` | `studio`, `composer`, `upload`, `publish`, `reels`, `stories`, `auto_translate` | [`modules/facebook-suite`](modules/facebook-suite) |
+
+### Module Highlights: `facebook-suite`
+- **1-Click HAR Ingestion**: Seamlessly extracts session cookies, CSRF tokens (`fb_dtsg`), user ID (`__user`), actor ID (`av`), and targeting parameters from `download-facebook.har`.
+- **Resumable Chunked Video Upload (rupload)**: Multi-partition chunked streaming upload with offset reconciliation and integrity checks for large video publishing.
+- **Reels & Stories Publishing**: Direct GraphQL and Graph Video API integration supporting title, description, thumbnail, and scheduling.
+- **Automated Video Dubbing & Translation**: Default multi-language auto-dubbing metadata support across 14 languages.
+- **Embedded Web UI**: Self-contained configuration and status dashboard at `/custom/facebook/ui`.
+- **Diagnostic Health Probing**: Supports `/health` probing (`status: "healthy"`) for zero-downtime dashboard diagnostic monitoring.
 
 ### Module Highlights: `daily-news`
 - **Native Rust Engine**: Zero-Python runtime overhead, sub-millisecond invocation, and self-contained static execution.
@@ -107,15 +116,27 @@ All new feature modules MUST top-prioritize Rust as their implementation languag
 
 ---
 
-## 4. Installation in Toolcase Gateway
+## 4. Installation and Upgrade in Toolcase Gateway
 
-Modules in this repository can be installed into Toolcase Gateway via the web dashboard at `http://127.0.0.1:28130/dashboard` or via the gateway REST API:
+Modules in this repository can be installed or upgraded into Toolcase Gateway via the web dashboard at `http://127.0.0.1:28130/dashboard` or via the gateway REST API:
 
+### Install Module
 ```bash
 curl -X POST http://127.0.0.1:28130/api/v1/dashboard/modules/install \
   -H "Content-Type: application/json" \
   -d '{
-    "source": "https://github.com/giauphan/gateway-modules.git",
-    "id": "daily-news"
+    "source": "https://github.com/giauphan/gateway-modules/tree/main/modules/facebook-suite",
+    "id": "facebook-suite"
   }'
 ```
+
+### Upgrade Module
+```bash
+curl -X POST http://127.0.0.1:28130/api/v1/dashboard/modules/upgrade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "facebook-suite",
+    "source": "https://github.com/giauphan/gateway-modules/tree/main/modules/facebook-suite"
+  }'
+```
+

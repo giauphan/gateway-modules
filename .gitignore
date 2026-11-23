@@ -12,4 +12,6 @@ target/
 *.db-wal
 .gw_state/
 gateway_config.json
+**/config.json
+!**/config.example.json
 
