@@ -329,6 +329,26 @@ pub fn handle_mcp_tool_request(
                 Err(e) => make_mcp_error(&e),
             }
         }
+        "chat" => {
+            let resp = crate::handlers::chat::handle_chat_completions(arguments, service);
+            if let Some(content) = resp
+                .get("body")
+                .and_then(|b| b.get("choices"))
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|ch| ch.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+            {
+                make_mcp_success(&json!({ "reply": content }))
+            } else {
+                make_mcp_success(&resp["body"])
+            }
+        }
+        "list_models" => {
+            let resp = crate::handlers::chat::handle_models();
+            make_mcp_success(&resp["body"])
+        }
         _ => make_mcp_error(&format!("Unknown MCP tool '{tool_name}'")),
     }
 }

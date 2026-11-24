@@ -138,3 +138,89 @@ fn test_mcp_optimize_flow_har_and_validation() {
     let invalid_body = invalid_resp["body"].as_str().unwrap();
     assert!(invalid_body.contains("Invalid request entry"));
 }
+
+#[test]
+fn test_models_endpoint_and_mcp() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_models_{}", std::process::id()));
+    let service = make_test_service(&temp_dir);
+
+    // 1. Direct /v1/models route
+    let req = json!({
+        "method": "GET",
+        "path": "/v1/models"
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    let body_str = resp["body"].as_str().unwrap();
+    assert!(body_str.contains("proxy-guard"));
+    assert!(body_str.contains("model"));
+
+    // 2. MCP tool proxy-guard__list_models
+    let mcp_req = json!({
+        "method": "POST",
+        "path": "/tools/call",
+        "body": {
+            "name": "proxy-guard__list_models",
+            "arguments": {}
+        }
+    });
+    let mcp_resp = handle_request(mcp_req, &service);
+    assert_eq!(mcp_resp["status"], 200);
+    let mcp_body = mcp_resp["body"].as_str().unwrap();
+    assert!(mcp_body.contains("proxy-guard"));
+}
+
+#[test]
+fn test_chat_completions_endpoint_and_url_evaluation() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_chat_{}", std::process::id()));
+    let service = make_test_service(&temp_dir);
+
+    // 1. Chat completion asking for status / bandwidth overview
+    let status_req = json!({
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "body": {
+            "messages": [
+                { "role": "user", "content": "How much bandwidth have we saved?" }
+            ]
+        }
+    });
+    let status_resp = handle_request(status_req, &service);
+    assert_eq!(status_resp["status"], 200);
+    let status_body = status_resp["body"].as_str().unwrap();
+    assert!(status_body.contains("chat.completion"));
+    assert!(status_body.contains("Proxy Guard"));
+    assert!(status_body.contains("Bandwidth Saved"));
+
+    // 2. Chat completion asking to evaluate a URL
+    let eval_req = json!({
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+            "messages": [
+                { "role": "user", "content": "Can you check https://www.google-analytics.com/analytics.js please?" }
+            ]
+        }
+    });
+    let eval_resp = handle_request(eval_req, &service);
+    assert_eq!(eval_resp["status"], 200);
+    let eval_body = eval_resp["body"].as_str().unwrap();
+    assert!(eval_body.contains("BLOCKED"));
+    assert!(eval_body.contains("google-analytics.com"));
+
+    // 3. MCP tool proxy-guard__chat
+    let mcp_chat = json!({
+        "method": "POST",
+        "path": "/tools/call",
+        "body": {
+            "name": "proxy-guard__chat",
+            "arguments": {
+                "prompt": "Evaluate https://quotes.toscrape.com"
+            }
+        }
+    });
+    let mcp_chat_resp = handle_request(mcp_chat, &service);
+    assert_eq!(mcp_chat_resp["status"], 200);
+    let mcp_chat_body = mcp_chat_resp["body"].as_str().unwrap();
+    assert!(mcp_chat_body.contains("FORWARDED"));
+}

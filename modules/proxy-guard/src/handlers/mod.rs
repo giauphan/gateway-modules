@@ -2,11 +2,13 @@
 //!
 //! Clean Architecture: Interface Adapters Layer.
 
+pub mod chat;
 pub mod evaluate;
 pub mod proxy_pool;
 pub mod rules;
 pub mod stats;
 
+pub use chat::*;
 pub use evaluate::*;
 pub use proxy_pool::*;
 pub use rules::*;
@@ -58,9 +60,22 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
         );
     }
 
-    // 3. Route matching
+    // 3. OpenAI-Compatible Capabilities (models, chat_completions)
     let clean_path = path.trim_end_matches('/');
 
+    if clean_path == "/models" || clean_path == "/v1/models" || clean_path.ends_with("/models") {
+        return handle_models();
+    }
+
+    if clean_path == "/chat/completions"
+        || clean_path == "/v1/chat/completions"
+        || clean_path.ends_with("/chat/completions")
+    {
+        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
+        return handle_chat_completions(&body, service);
+    }
+
+    // 4. Route matching
     if clean_path.ends_with("/evaluate") {
         let body = match extract_request_body(&req) {
             Ok(b) => b,
@@ -301,6 +316,36 @@ fn get_mcp_tools_list() -> Value {
                     }
                 },
                 "required": ["strategy"]
+            }
+        },
+        {
+            "name": "proxy-guard__chat",
+            "description": "Send a chat completion prompt, status query, or URL evaluation question to Proxy Guard.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "messages": {
+                        "type": "array",
+                        "description": "OpenAI-compatible messages array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": { "type": "string" },
+                                "content": { "type": "string" }
+                            },
+                            "required": ["role", "content"]
+                        }
+                    },
+                    "prompt": { "type": "string", "description": "Optional direct question or URL to evaluate" }
+                }
+            }
+        },
+        {
+            "name": "proxy-guard__list_models",
+            "description": "Lists OpenAI-compatible models supported by this module.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
             }
         }
     ])

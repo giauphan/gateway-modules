@@ -1,12 +1,14 @@
 {
   "id": "proxy-guard",
-  "name": "Proxy Guard & Traffic Optimizer",
+  "name": "Proxy Guard",
   "short_name": "Proxy Guard",
   "version": "1.2.1",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
   "capabilities": [
+    "chat_completions",
+    "models",
     "traffic_optimization",
     "adblock",
     "proxy_interception",
@@ -260,6 +262,36 @@
           }
         },
         "required": ["strategy"]
+      }
+    },
+    {
+      "name": "chat",
+      "description": "Send a chat completion prompt, status query, or URL evaluation question to Proxy Guard.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "description": "OpenAI-compatible messages array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string" },
+                "content": { "type": "string" }
+              },
+              "required": ["role", "content"]
+            }
+          },
+          "prompt": { "type": "string", "description": "Optional direct question or URL to evaluate" }
+        }
+      }
+    },
+    {
+      "name": "list_models",
+      "description": "Lists OpenAI-compatible models supported by this module.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
       }
     }
   ]
