@@ -3,12 +3,14 @@
 //! Clean Architecture: Interface Adapters Layer.
 
 pub mod chat;
+pub mod config;
 pub mod evaluate;
 pub mod proxy_pool;
 pub mod rules;
 pub mod stats;
 
 pub use chat::*;
+pub use config::*;
 pub use evaluate::*;
 pub use proxy_pool::*;
 pub use rules::*;
@@ -26,134 +28,188 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
         .unwrap_or("GET")
         .to_ascii_uppercase();
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+    let clean_path = path.trim_end_matches('/');
 
-    // 1. Check MCP tool call via header or tools/call route
-    if let Some(tool_name) = extract_header_tool(&req) {
-        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
+    if let Some(resp) = handle_mcp_route(&req, path, service) {
+        return resp;
+    }
+    if let Some(resp) = handle_core_route(&req, clean_path, &method, service) {
+        return resp;
+    }
+    if let Some(resp) = handle_custom_route(&req, clean_path, &method, service) {
+        return resp;
+    }
+
+    make_error_resp(404, &format!("Not Found: {method} {path}"))
+}
+
+fn handle_mcp_route(req: &Value, path: &str, service: &ProxyGuardService) -> Option<Value> {
+    if let Some(tool_name) = extract_header_tool(req) {
+        let body = extract_request_body(req).unwrap_or_else(|_| json!({}));
         let args = body.get("arguments").unwrap_or(&body);
         let mcp_res = handle_mcp_tool_request(tool_name, args, service);
-        return make_json_resp(200, mcp_res);
+        return Some(make_json_resp(200, mcp_res));
     }
 
     if path == "/tools/call" || path.ends_with("/tools/call") {
-        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
+        let body = extract_request_body(req).unwrap_or_else(|_| json!({}));
         let tool_name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let default_args = json!({});
         let args = body.get("arguments").unwrap_or(&default_args);
         let mcp_res = handle_mcp_tool_request(tool_name, args, service);
-        return make_json_resp(200, mcp_res);
+        return Some(make_json_resp(200, mcp_res));
     }
 
     if path == "/tools/list" || path.ends_with("/tools/list") {
-        return make_json_resp(200, json!({ "tools": get_mcp_tools_list() }));
+        return Some(make_json_resp(
+            200,
+            json!({ "tools": get_mcp_tools_list() }),
+        ));
     }
 
-    // 2. Health Check & Interactive UI Dashboard
-    if path == "/health" || path == "/custom/proxy-guard/health" || path.ends_with("/health") {
-        return make_json_resp(
+    None
+}
+
+fn handle_core_route(
+    req: &Value,
+    clean_path: &str,
+    method: &str,
+    service: &ProxyGuardService,
+) -> Option<Value> {
+    if clean_path == "/config"
+        || clean_path == "/custom/proxy-guard/config"
+        || clean_path == "/modules/proxy-guard/config"
+        || clean_path.ends_with("/config")
+    {
+        return Some(handle_config_route(req, method, service));
+    }
+
+    if clean_path == "/health"
+        || clean_path == "/custom/proxy-guard/health"
+        || clean_path.ends_with("/health")
+    {
+        return Some(make_json_resp(
             200,
             json!({
                 "status": "healthy",
                 "module": "proxy-guard",
                 "version": env!("CARGO_PKG_VERSION")
             }),
-        );
+        ));
     }
 
-    if path == "/ui" || path == "/custom/proxy-guard/ui" || path.ends_with("/ui") {
+    if clean_path == "/ui" || clean_path == "/custom/proxy-guard/ui" || clean_path.ends_with("/ui")
+    {
         let html = crate::ui::render_dashboard_html(service);
-        return crate::rpc::make_text_resp(200, "text/html; charset=utf-8", &html);
+        return Some(crate::rpc::make_text_resp(
+            200,
+            "text/html; charset=utf-8",
+            &html,
+        ));
     }
-
-    // 3. OpenAI-Compatible Capabilities (models, chat_completions)
-    let clean_path = path.trim_end_matches('/');
 
     if clean_path == "/models" || clean_path == "/v1/models" || clean_path.ends_with("/models") {
-        return handle_models();
+        return Some(handle_models());
     }
 
     if clean_path == "/chat/completions"
         || clean_path == "/v1/chat/completions"
         || clean_path.ends_with("/chat/completions")
     {
-        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
-        return handle_chat_completions(&body, service);
+        let body = extract_request_body(req).unwrap_or_else(|_| json!({}));
+        return Some(handle_chat_completions(&body, service));
     }
 
-    // 4. Route matching
+    None
+}
+
+fn handle_custom_route(
+    req: &Value,
+    clean_path: &str,
+    method: &str,
+    service: &ProxyGuardService,
+) -> Option<Value> {
     if clean_path.ends_with("/evaluate") {
-        let body = match extract_request_body(&req) {
+        let body = match extract_request_body(req) {
             Ok(b) => b,
-            Err(e) => return make_error_resp(400, &e),
+            Err(e) => return Some(make_error_resp(400, &e)),
         };
-        return handle_evaluate_url(&body, service);
+        return Some(handle_evaluate_url(&body, service));
     }
 
     if clean_path.ends_with("/optimize-flow") {
-        let body = match extract_request_body(&req) {
+        let body = match extract_request_body(req) {
             Ok(b) => b,
-            Err(e) => return make_error_resp(400, &e),
+            Err(e) => return Some(make_error_resp(400, &e)),
         };
-        return handle_optimize_flow(&body, service);
+        return Some(handle_optimize_flow(&body, service));
     }
 
     if clean_path.ends_with("/rules") {
         if method == "POST" {
-            let body = match extract_request_body(&req) {
+            let body = match extract_request_body(req) {
                 Ok(b) => b,
-                Err(e) => return make_error_resp(400, &e),
+                Err(e) => return Some(make_error_resp(400, &e)),
             };
-            return handle_update_rules(&body, service);
+            return Some(handle_update_rules(&body, service));
         }
-        return handle_get_rules(service);
+        return Some(handle_get_rules(service));
     }
 
     if clean_path.ends_with("/metrics/reset") {
-        return handle_reset_metrics(service);
+        return Some(handle_reset_metrics(service));
     }
 
     if clean_path.ends_with("/metrics") {
-        return handle_get_metrics(service);
+        return Some(handle_get_metrics(service));
     }
 
+    handle_proxy_subroutes(req, clean_path, service)
+}
+
+fn handle_proxy_subroutes(
+    req: &Value,
+    clean_path: &str,
+    service: &ProxyGuardService,
+) -> Option<Value> {
     if clean_path.ends_with("/proxies/list") {
-        return handle_list_proxies(service);
+        return Some(handle_list_proxies(service));
     }
 
     if clean_path.ends_with("/proxies/add") {
-        let body = match extract_request_body(&req) {
+        let body = match extract_request_body(req) {
             Ok(b) => b,
-            Err(e) => return make_error_resp(400, &e),
+            Err(e) => return Some(make_error_resp(400, &e)),
         };
-        return handle_add_proxy(&body, service);
+        return Some(handle_add_proxy(&body, service));
     }
 
     if clean_path.ends_with("/proxies/remove") {
-        let body = match extract_request_body(&req) {
+        let body = match extract_request_body(req) {
             Ok(b) => b,
-            Err(e) => return make_error_resp(400, &e),
+            Err(e) => return Some(make_error_resp(400, &e)),
         };
-        return handle_remove_proxy(&body, service);
+        return Some(handle_remove_proxy(&body, service));
     }
 
     if clean_path.ends_with("/proxies/next") {
-        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
-        return handle_get_next_proxy(&body, service);
+        let body = extract_request_body(req).unwrap_or_else(|_| json!({}));
+        return Some(handle_get_next_proxy(&body, service));
     }
 
     if clean_path.ends_with("/proxies/strategy") {
-        let body = match extract_request_body(&req) {
+        let body = match extract_request_body(req) {
             Ok(b) => b,
-            Err(e) => return make_error_resp(400, &e),
+            Err(e) => return Some(make_error_resp(400, &e)),
         };
-        return handle_set_strategy(&body, service);
+        return Some(handle_set_strategy(&body, service));
     }
 
     if let Some(target) = clean_path.strip_prefix("/custom/proxy-guard/scripts/") {
-        return handle_get_script(target, service);
+        return Some(handle_get_script(target, service));
     }
 
-    make_error_resp(404, &format!("Not Found: {method} {path}"))
+    None
 }
 
 fn extract_header_tool(req: &Value) -> Option<&str> {

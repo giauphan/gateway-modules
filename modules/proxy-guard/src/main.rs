@@ -17,11 +17,16 @@ use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+struct CliConfig {
+    proxy_port: Option<u16>,
+    raw_upstream_inputs: Vec<String>,
+    configured_strategy: Option<String>,
+}
+
+fn parse_cli_and_env(args: &[String]) -> Result<Option<CliConfig>, ()> {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("proxy-guard {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return Ok(None);
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
@@ -36,39 +41,9 @@ fn main() {
             "  --proxy-port <PORT>     Run background HTTP/CONNECT intercepting proxy on port"
         );
         println!("  --upstream <URL>        Forward allowed traffic to upstream paid proxy");
-        return;
+        return Ok(None);
     }
 
-    let base_dir = std::env::var("PROXY_GUARD_BASE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if cur.join("modules").join("proxy-guard").is_dir() {
-                cur.join("modules").join("proxy-guard")
-            } else {
-                cur
-            }
-        });
-
-    let storage = Arc::new(FileStorageAdapter::new(&base_dir));
-    let cost_usd = std::env::var("PROXY_GUARD_COST_PER_GB")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(3.5);
-
-    let proxy_pool = Arc::new(ProxyPool::new(
-        Arc::clone(&storage) as Arc<_>,
-        ProxyRotationStrategy::RoundRobin,
-    ));
-
-    let service = Arc::new(ProxyGuardService::new(
-        Arc::clone(&storage) as Arc<_>,
-        Arc::clone(&storage) as Arc<_>,
-        proxy_pool,
-        cost_usd,
-    ));
-
-    // Check optional proxy server port and upstream proxies from args or env
     let mut proxy_port: Option<u16> = std::env::var("PROXY_GUARD_PROXY_PORT")
         .ok()
         .and_then(|p| p.parse().ok());
@@ -101,8 +76,28 @@ fn main() {
         }
     }
 
-    // Configure rotation strategy if specified
-    if let Some(ref strat_str) = configured_strategy {
+    Ok(Some(CliConfig {
+        proxy_port,
+        raw_upstream_inputs,
+        configured_strategy,
+    }))
+}
+
+fn resolve_base_dir() -> PathBuf {
+    std::env::var("PROXY_GUARD_BASE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if cur.join("modules").join("proxy-guard").is_dir() {
+                cur.join("modules").join("proxy-guard")
+            } else {
+                cur
+            }
+        })
+}
+
+fn init_proxies(service: &ProxyGuardService, raw_inputs: Vec<String>, strategy: Option<String>) {
+    if let Some(strat_str) = strategy {
         let strat = match strat_str.to_ascii_lowercase().as_str() {
             "round_robin" => ProxyRotationStrategy::RoundRobin,
             "random" => ProxyRotationStrategy::Random,
@@ -113,8 +108,7 @@ fn main() {
         let _ = service.set_strategy(strat);
     }
 
-    // Populate upstream proxies (split by newline, comma, semicolon)
-    for raw in raw_upstream_inputs {
+    for raw in raw_inputs {
         for line in raw.split(['\n', ',', ';']) {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
@@ -124,12 +118,13 @@ fn main() {
             }
         }
     }
+}
 
-    let default_upstream = service.list_proxies().first().map(|p| p.url.clone());
-
+fn start_optional_proxy_server(proxy_port: Option<u16>, service: Arc<ProxyGuardService>) {
     if let Some(port) = proxy_port {
         if port > 0 {
-            let server = ProxyServer::new(port, default_upstream, Arc::clone(&service));
+            let default_upstream = service.list_proxies().first().map(|p| p.url.clone());
+            let server = ProxyServer::new(port, default_upstream, service);
             match server.start_background() {
                 Ok((_handle, bound_port)) => {
                     eprintln!(
@@ -142,8 +137,9 @@ fn main() {
             }
         }
     }
+}
 
-    // stdio-stream event loop for Toolcase Gateway
+fn run_stdio_loop(service: &ProxyGuardService) {
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = match line {
@@ -165,7 +161,42 @@ fn main() {
             }
         };
 
-        let resp = handle_request(req, &service);
+        let resp = handle_request(req, service);
         println!("{}", serde_json::to_string(&resp).unwrap_or_default());
     }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let config = match parse_cli_and_env(&args) {
+        Ok(Some(cfg)) => cfg,
+        _ => return,
+    };
+
+    let base_dir = resolve_base_dir();
+    let storage = Arc::new(FileStorageAdapter::new(&base_dir));
+    let cost_usd = std::env::var("PROXY_GUARD_COST_PER_GB")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(3.5);
+
+    let proxy_pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        proxy_pool,
+        cost_usd,
+    ));
+
+    init_proxies(
+        &service,
+        config.raw_upstream_inputs,
+        config.configured_strategy,
+    );
+    start_optional_proxy_server(config.proxy_port, Arc::clone(&service));
+    run_stdio_loop(&service);
 }

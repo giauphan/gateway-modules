@@ -301,3 +301,68 @@ fn test_dashboard_ui_endpoint() {
     assert!(body_str.contains("Registered Upstream Proxies"));
     assert!(body_str.contains("Add Multiple Upstream Proxies"));
 }
+
+#[test]
+fn test_config_endpoint_get_and_post() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_config_test_{}", std::process::id()));
+    let service = make_test_service(&temp_dir);
+
+    // 1. GET /modules/proxy-guard/config returns default JSON config
+    let get_req = json!({
+        "method": "GET",
+        "path": "/modules/proxy-guard/config"
+    });
+    let get_resp = handle_request(get_req, &service);
+    assert_eq!(get_resp["status"], 200);
+    let body: Value = serde_json::from_str(get_resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["rotation_strategy"], "round_robin");
+    assert_eq!(body["block_analytics"], true);
+    assert_eq!(body["block_ads"], true);
+
+    // 2. POST /modules/proxy-guard/config updates multi-proxy pool and rotation strategy
+    let post_req = json!({
+        "method": "POST",
+        "path": "/modules/proxy-guard/config",
+        "body": {
+            "upstream_proxy_pool": "http://user1:pass1@proxy1.com:8080\nhttp://user2:pass2@proxy2.com:8080",
+            "rotation_strategy": "lowest_failures",
+            "block_media": false,
+            "cost_per_gb_usd": 4.2
+        }
+    });
+    let post_resp = handle_request(post_req, &service);
+    assert_eq!(post_resp["status"], 200);
+    let post_body: Value = serde_json::from_str(post_resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(post_body["status"], "success");
+    assert_eq!(post_body["config"]["rotation_strategy"], "lowest_failures");
+    assert_eq!(post_body["config"]["block_media"], false);
+    assert_eq!(post_body["config"]["cost_per_gb_usd"], 4.2);
+    assert!(post_body["config"]["upstream_proxy_pool"]
+        .as_str()
+        .unwrap()
+        .contains("proxy1.com"));
+
+    // 3. GET /modules/proxy-guard/config with text/html Accept header returns dashboard HTML
+    let html_req = json!({
+        "method": "GET",
+        "path": "/modules/proxy-guard/config",
+        "headers": {
+            "accept": "text/html,application/xhtml+xml"
+        }
+    });
+    let html_resp = handle_request(html_req, &service);
+    assert_eq!(html_resp["status"], 200);
+    assert!(html_resp["body"]
+        .as_str()
+        .unwrap()
+        .contains("Proxy Guard Dashboard"));
+
+    // 4. GET /config alias also works
+    let alias_req = json!({
+        "method": "GET",
+        "path": "/config"
+    });
+    let alias_resp = handle_request(alias_req, &service);
+    assert_eq!(alias_resp["status"], 200);
+}

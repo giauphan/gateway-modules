@@ -44,6 +44,97 @@ impl ProxyPool {
     ) -> Option<PlaywrightProxyConfig> {
         self.select_proxy(query).map(|p| p.to_playwright_config())
     }
+
+    fn filter_candidates(
+        all_proxies: Vec<UpstreamProxy>,
+        query: &ProxySelectionQuery,
+    ) -> Vec<UpstreamProxy> {
+        let mut candidates: Vec<UpstreamProxy> =
+            all_proxies.into_iter().filter(|p| p.enabled).collect();
+
+        if let Some(ref c) = query.country {
+            let target_country = c.trim().to_ascii_uppercase();
+            let country_matches: Vec<UpstreamProxy> = candidates
+                .iter()
+                .filter(|p| {
+                    p.country
+                        .as_ref()
+                        .map(|pc| pc.eq_ignore_ascii_case(&target_country))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            if !country_matches.is_empty() {
+                candidates = country_matches;
+            }
+        }
+
+        if let Some(ref tag) = query.tag {
+            let tag_matches: Vec<UpstreamProxy> = candidates
+                .iter()
+                .filter(|p| p.tags.iter().any(|t| t.eq_ignore_ascii_case(tag)))
+                .cloned()
+                .collect();
+            if !tag_matches.is_empty() {
+                candidates = tag_matches;
+            }
+        }
+
+        candidates
+    }
+
+    fn apply_strategy(
+        &self,
+        strategy: ProxyRotationStrategy,
+        candidates: &[UpstreamProxy],
+        session_id: Option<&String>,
+    ) -> Option<UpstreamProxy> {
+        if candidates.is_empty() {
+            return None;
+        }
+        match strategy {
+            ProxyRotationStrategy::StickySession => {
+                if let Some(session_id) = session_id {
+                    if let Ok(sessions) = self.sticky_sessions.read() {
+                        if let Some(assigned_id) = sessions.get(session_id) {
+                            if let Some(p) = candidates.iter().find(|p| p.id == *assigned_id) {
+                                return Some(p.clone());
+                            }
+                        }
+                    }
+                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                    let selected = candidates[idx].clone();
+                    if let Ok(mut sessions) = self.sticky_sessions.write() {
+                        sessions.insert(session_id.clone(), selected.id.clone());
+                    }
+                    Some(selected)
+                } else {
+                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                    Some(candidates[idx].clone())
+                }
+            }
+            ProxyRotationStrategy::LowestFailures => {
+                candidates.iter().min_by_key(|p| p.failure_count).cloned()
+            }
+            ProxyRotationStrategy::Random => {
+                if candidates.len() <= 1 {
+                    return candidates.first().cloned();
+                }
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as usize)
+                    .unwrap_or(0);
+                let count = self.rr_counter.fetch_add(1, Ordering::Relaxed);
+                let mixed = (nanos.rotate_left(17) ^ count).wrapping_mul(0x9e3779b97f4a7c15);
+                let idx = mixed % candidates.len();
+                Some(candidates[idx].clone())
+            }
+            ProxyRotationStrategy::RoundRobin => {
+                let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                Some(candidates[idx].clone())
+            }
+        }
+    }
 }
 
 impl ProxyPoolManagementPort for ProxyPool {
@@ -112,42 +203,9 @@ impl ProxyPoolManagementPort for ProxyPool {
             }
         }
 
-        // 2. Filter enabled proxies
-        let mut candidates: Vec<UpstreamProxy> =
-            all_proxies.into_iter().filter(|p| p.enabled).collect();
-
+        let candidates = Self::filter_candidates(all_proxies, query);
         if candidates.is_empty() {
             return None;
-        }
-
-        // 3. Filter by country if specified
-        if let Some(ref c) = query.country {
-            let target_country = c.trim().to_ascii_uppercase();
-            let country_matches: Vec<UpstreamProxy> = candidates
-                .iter()
-                .filter(|p| {
-                    p.country
-                        .as_ref()
-                        .map(|pc| pc.eq_ignore_ascii_case(&target_country))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            if !country_matches.is_empty() {
-                candidates = country_matches;
-            }
-        }
-
-        // 4. Filter by tag if specified
-        if let Some(ref tag) = query.tag {
-            let tag_matches: Vec<UpstreamProxy> = candidates
-                .iter()
-                .filter(|p| p.tags.iter().any(|t| t.eq_ignore_ascii_case(tag)))
-                .cloned()
-                .collect();
-            if !tag_matches.is_empty() {
-                candidates = tag_matches;
-            }
         }
 
         let strategy = self
@@ -156,53 +214,7 @@ impl ProxyPoolManagementPort for ProxyPool {
             .map(|s| *s)
             .unwrap_or(ProxyRotationStrategy::RoundRobin);
 
-        // 5. Apply Strategy
-        match strategy {
-            ProxyRotationStrategy::StickySession => {
-                if let Some(ref session_id) = query.session_id {
-                    // Check if existing proxy is mapped and still exists in candidates
-                    if let Ok(sessions) = self.sticky_sessions.read() {
-                        if let Some(assigned_id) = sessions.get(session_id) {
-                            if let Some(p) = candidates.iter().find(|p| p.id == *assigned_id) {
-                                return Some(p.clone());
-                            }
-                        }
-                    }
-
-                    // Pick new proxy and bind to session
-                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                    let selected = candidates[idx].clone();
-                    if let Ok(mut sessions) = self.sticky_sessions.write() {
-                        sessions.insert(session_id.clone(), selected.id.clone());
-                    }
-                    Some(selected)
-                } else {
-                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                    Some(candidates[idx].clone())
-                }
-            }
-            ProxyRotationStrategy::LowestFailures => {
-                let best = candidates.iter().min_by_key(|p| p.failure_count).cloned();
-                best
-            }
-            ProxyRotationStrategy::Random => {
-                if candidates.len() <= 1 {
-                    return candidates.first().cloned();
-                }
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as usize)
-                    .unwrap_or(0);
-                let count = self.rr_counter.fetch_add(1, Ordering::Relaxed);
-                let mixed = (nanos.rotate_left(17) ^ count).wrapping_mul(0x9e3779b97f4a7c15);
-                let idx = mixed % candidates.len();
-                Some(candidates[idx].clone())
-            }
-            ProxyRotationStrategy::RoundRobin => {
-                let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                Some(candidates[idx].clone())
-            }
-        }
+        self.apply_strategy(strategy, &candidates, query.session_id.as_ref())
     }
 
     fn select_fallback(

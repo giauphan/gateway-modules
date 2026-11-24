@@ -146,7 +146,7 @@ class TestFacebookAdapter(unittest.TestCase):
         self.assertEqual(resp["status"], 200)
         body = json.loads(resp["body"])
         self.assertEqual(body["model"], "facebook-suite")
-        self.assertTrue(len(body["choices"]) > 0)
+        self.assertGreater(len(body["choices"]), 0)
 
     def test_upload_chunk_validation(self):
         req = {
@@ -214,6 +214,21 @@ class TestFacebookAdapter(unittest.TestCase):
         self.assertEqual(kwargs.get("title"), "My Reel")
         self.assertEqual(kwargs.get("scheduled_publish_time"), 1793500000)
         self.assertEqual(kwargs.get("publish_type"), "FEED")
+
+    @mock.patch("adapter.upload_and_publish_video")
+    def test_upload_video_path_traversal_rejected(self, mock_upload):
+        req = {
+            "method": "POST",
+            "path": "/v1/upload/video",
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps({
+                "video_path": "/etc/passwd",
+                "title": "Malicious",
+            }),
+        }
+        resp = handle_request(req)
+        self.assertEqual(resp["status"], 400)
+        mock_upload.assert_not_called()
 
     @mock.patch("adapter.upload_and_publish_video")
     def test_one_step_publish_with_file_path(self, mock_upload):

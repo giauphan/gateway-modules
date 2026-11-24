@@ -87,10 +87,8 @@ Toolcase Gateway is an extensible MCP gateway: modules contribute domain capabil
 
 Non-negotiable rules — full decision tables and worked examples in [`docs/RUST_SAFETY_RULES.md`](docs/RUST_SAFETY_RULES.md):
 
-- No `unwrap()` / `expect()` in production code: use `?`, `unwrap_or*`, `match` / `if let`. `expect()` only at startup or in tests.
-- No `.clone()` to silence the borrow checker: borrow (`&str`, `&[T]`), use lifetimes for views, `Cow` for read-mostly data, `Arc` for `'static` sharing.
-- No `&String` / `&Vec<T>` parameters; no index loops; no `+` concatenation in loops; no `let _ = fallible_fn()`.
-- No `unsafe` to bypass borrow/lifetime errors — FFI only, with a `// SAFETY:` comment.
-- `thiserror` in domain/application; `anyhow` + `.context(...)` in adapters/bin.
-- Never hold a synchronous lock guard across `.await`; preallocate with `with_capacity` when the size is known.
-- Gate: `cargo clippy --all-targets --all-features -- -D warnings`.
+- **Error Safety**: No `unwrap()` / `expect` in production code: use `?`, `unwrap_or`, `unwrap_or_else`, `unwrap_or_default`, `match` / `if let`. `expect` only at startup or in tests.
+- **Anti-Patterns**: No `&String` / `&Vec` parameters; no index loops (use `.enumerate()`); no `+` concatenation in loops (use `.join`); no silent error swallowing via `let _ =`; no `unsafe` to bypass borrow/lifetime errors. Gate: `cargo clippy --all-targets --all-features -- -D warnings`.
+- **Borrowing & Lifetimes**: No `.clone()` to silence the borrow checker: borrow with Lifetimes (`'a`, `LogEntry<'a>`) for zero-copy views, `#[serde(borrow)]`, and `Cow<'a, B>` (`Cow::Borrowed`, `Cow::Owned`, avoid premature `.to_mut()`) for read-mostly data.
+- **Type-Driven Design & Architecture**: "Parse, Don't Validate" with private newtypes (e.g. `EmailAddress`), Typestate pattern for illegal states, `thiserror` in domain/application, `anyhow` in adapters/bin.
+- **Memory & Concurrency**: Preallocate with `with_capacity`; never hold synchronous `MutexGuard` across an `.await`.

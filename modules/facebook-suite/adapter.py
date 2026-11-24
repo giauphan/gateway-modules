@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 from typing import Optional, Tuple
 import urllib.parse
@@ -74,17 +75,35 @@ def _handle_api_resp(res: dict, success_code: int = 200) -> dict:
     return json_resp(success_code, res)
 
 
+def _is_safe_video_path(p: Path) -> bool:
+    """Verifies that the target path stays strictly within allowed directories (no path traversal)."""
+    try:
+        resolved = p.resolve(strict=True)
+        allowed_roots = [
+            Path(tempfile.gettempdir()).resolve(),
+            Path("/tmp").resolve(),
+            Path.cwd().resolve(),
+        ]
+        media_env = os.environ.get("MEDIA_DIR")
+        if media_env:
+            allowed_roots.append(Path(media_env).resolve())
+        return any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots)
+    except (ValueError, RuntimeError, OSError):
+        return False
+
+
 def _extract_video_bytes(body: dict) -> Tuple[Optional[bytes], str]:
     """Extracts raw video bytes and filename from video_path, file_path, or video_base64."""
     video_bytes = None
     file_name = str(body.get("file_name") or "")
     if "video_path" in body or "file_path" in body:
         path_str = str(body.get("video_path") or body.get("file_path"))
-        p = Path(path_str)
-        if p.is_file():
-            video_bytes = p.read_bytes()
-            if not file_name:
-                file_name = p.name
+        if ".." not in path_str and not path_str.startswith("\x00"):
+            p = Path(path_str)
+            if p.is_file() and _is_safe_video_path(p):
+                video_bytes = p.read_bytes()
+                if not file_name:
+                    file_name = p.name
     elif "video_base64" in body and body["video_base64"]:
         video_bytes = base64.b64decode(str(body["video_base64"]))
     return video_bytes, file_name or "video.mp4"
@@ -106,7 +125,7 @@ def _extract_schedule_time(body: dict) -> Optional[int]:
 def handle_request(req: dict) -> dict:
     method = str(req.get("method") or "GET").upper()
     raw_path = str(req.get("path") or "/")
-    clean_path, _, query_str = raw_path.partition("?")
+    clean_path, _, _ = raw_path.partition("?")
     sub = clean_path.strip("/")
     headers = normalize_headers(req.get("headers"))
     raw_body = str(req.get("body") or "")
@@ -201,71 +220,144 @@ def handle_request(req: dict) -> dict:
             return json_resp(500, {"error": {"code": 500, "message": str(exc)}})
 
     # 6. Video Upload Pipeline
-    if sub in ("upload/init", "v1/upload/init"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                file_size = int(b.get("file_size", 0))
-                file_ext = str(b.get("file_extension", "mp4"))
-                target_id = b.get("target_id")
-                return _handle_api_resp(init_video_upload(cfg, file_size, file_ext, target_id))
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+    if sub in ("upload/init", "v1/upload/init") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            file_size = int(b.get("file_size", 0))
+            file_ext = str(b.get("file_extension", "mp4"))
+            target_id = b.get("target_id")
+            return _handle_api_resp(init_video_upload(cfg, file_size, file_ext, target_id))
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
 
-    if sub in ("upload/start", "v1/upload/start"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                session = VideoUploadSession(
-                    waterfall_id=str(b.get("waterfall_id") or uuid.uuid4()),
-                    file_size=int(b.get("file_size", 0)),
-                    file_name=b.get("file_name", "video.mp4"),
-                )
-                res = start_video_upload(cfg, session, b.get("target_id"))
-                if isinstance(res, dict) and "error" not in res:
-                    res = {**res, "waterfall_id": session.waterfall_id}
-                return _handle_api_resp(res)
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+    if sub in ("upload/start", "v1/upload/start") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            session = VideoUploadSession(
+                waterfall_id=str(b.get("waterfall_id") or uuid.uuid4()),
+                file_size=int(b.get("file_size", 0)),
+                file_name=b.get("file_name", "video.mp4"),
+            )
+            res = start_video_upload(cfg, session, b.get("target_id"))
+            if isinstance(res, dict) and "error" not in res:
+                res = {**res, "waterfall_id": session.waterfall_id}
+            return _handle_api_resp(res)
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
 
-    if sub in ("upload/chunk", "v1/upload/chunk"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                chunk_b64 = b.get("chunk_base64") or b.get("data")
-                if not chunk_b64:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing chunk_base64 or data"}})
-                chunk_bytes = base64.b64decode(chunk_b64)
-                offset = int(b.get("offset", 0))
-                session = VideoUploadSession(
-                    waterfall_id=str(b.get("waterfall_id") or ""),
-                    video_id=str(b.get("video_id") or ""),
-                    upload_session_id=str(b.get("upload_session_id") or ""),
-                    file_size=int(b.get("file_size", len(chunk_bytes))),
-                )
-                res = upload_video_chunk(cfg, session, chunk_bytes, offset)
-                return _handle_api_resp(res)
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+    if sub in ("upload/chunk", "v1/upload/chunk") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            chunk_b64 = b.get("chunk_base64") or b.get("data")
+            if not chunk_b64:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing chunk_base64 or data"}})
+            chunk_bytes = base64.b64decode(chunk_b64)
+            offset = int(b.get("offset", 0))
+            session = VideoUploadSession(
+                waterfall_id=str(b.get("waterfall_id") or ""),
+                video_id=str(b.get("video_id") or ""),
+                upload_session_id=str(b.get("upload_session_id") or ""),
+                file_size=int(b.get("file_size", len(chunk_bytes))),
+            )
+            res = upload_video_chunk(cfg, session, chunk_bytes, offset)
+            return _handle_api_resp(res)
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
 
-    if sub in ("upload/video", "v1/upload/video"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                video_bytes, file_name = _extract_video_bytes(b)
-                if not video_bytes:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing video_base64 or valid video_path"}})
-                auto_trans = b.get("enable_auto_translate")
-                if auto_trans is None:
-                    auto_trans = cfg.get("auto_translate", True)
+    if sub in ("upload/video", "v1/upload/video") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            video_bytes, file_name = _extract_video_bytes(b)
+            if not video_bytes:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing video_base64 or valid video_path"}})
+            auto_trans = b.get("enable_auto_translate")
+            if auto_trans is None:
+                auto_trans = cfg.get("auto_translate", True)
+            res = upload_and_publish_video(
+                cfg,
+                video_bytes,
+                file_name=file_name,
+                title=str(b.get("title", "New Reel")),
+                description=str(b.get("description", "")),
+                target_id=b.get("target_id"),
+                scheduled_publish_time=_extract_schedule_time(b),
+                enable_auto_translate=auto_trans,
+                translated_languages=b.get("translated_languages"),
+                publish_type=str(b.get("publish_type", "REEL")),
+            )
+            if res.get("status") == "error":
+                return json_resp(502, res)
+            return json_resp(200, res)
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+
+    if sub in ("upload/finish", "v1/upload/finish") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            waterfall_id = str(b.get("waterfall_id") or "")
+            if not waterfall_id:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing required waterfall_id"}})
+            session = VideoUploadSession(
+                waterfall_id=waterfall_id,
+                video_id=b.get("video_id", ""),
+                file_size=int(b.get("file_size", 0)),
+                start_offset=int(b.get("start_offset", 0)),
+            )
+            res = finish_video_upload(cfg, session, b.get("target_id"))
+            return _handle_api_resp(res)
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+
+    # 7. Status, Feed & Object Publishing
+    if sub in ("publish/status", "v1/publish/status", "feed/post") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            msg = b.get("message") or b.get("text") or b.get("content")
+            if not msg:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing message or text"}})
+            sched_time = _extract_schedule_time(b)
+            return _handle_api_resp(publish_feed_status(cfg, msg, b.get("target_id"), scheduled_publish_time=sched_time))
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+
+    if sub in ("delete", "v1/delete", "publish/delete") and method in ("POST", "DELETE"):
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            obj_id = b.get("object_id") or b.get("id") or b.get("post_id") or b.get("video_id")
+            if not obj_id:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing object_id or id"}})
+            return _handle_api_resp(delete_object(cfg, obj_id))
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+
+    if sub in ("token", "v1/token", "access_token") and method == "GET":
+        tok = fetch_page_access_token(cfg)
+        if tok:
+            return json_resp(200, {"status": "ok", "access_token": tok[:10] + "..." + tok[-5:], "discovered": True})
+        return json_resp(404, {"error": {"code": 404, "message": "No active page token discovered."}})
+
+    # 8. Reel, Story & Post Publish (1-step video upload & publish, or video_id / text status publish)
+    if sub in ("publish", "v1/publish", "reels", "v1/reels") and method == "POST":
+        try:
+            b = json.loads(raw_body) if raw_body else {}
+            target_id = b.get("target_id") or cfg.get("target_id") or cfg.get("actor_id")
+            if not target_id:
+                return json_resp(400, {"error": {"code": 400, "message": "Missing target_id"}})
+            auto_trans = b.get("enable_auto_translate")
+            if auto_trans is None:
+                auto_trans = cfg.get("auto_translate", True)
+            sched_time = _extract_schedule_time(b)
+            # 1-step direct video file or base64 publish
+            video_bytes, file_name = _extract_video_bytes(b)
+            if video_bytes:
                 res = upload_and_publish_video(
                     cfg,
                     video_bytes,
                     file_name=file_name,
                     title=str(b.get("title", "New Reel")),
                     description=str(b.get("description", "")),
-                    target_id=b.get("target_id"),
-                    scheduled_publish_time=_extract_schedule_time(b),
+                    target_id=target_id,
+                    scheduled_publish_time=sched_time,
                     enable_auto_translate=auto_trans,
                     translated_languages=b.get("translated_languages"),
                     publish_type=str(b.get("publish_type", "REEL")),
@@ -273,107 +365,25 @@ def handle_request(req: dict) -> dict:
                 if res.get("status") == "error":
                     return json_resp(502, res)
                 return json_resp(200, res)
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
-
-    if sub in ("upload/finish", "v1/upload/finish"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                waterfall_id = str(b.get("waterfall_id") or "")
-                if not waterfall_id:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing required waterfall_id"}})
-                session = VideoUploadSession(
-                    waterfall_id=waterfall_id,
-                    video_id=b.get("video_id", ""),
-                    file_size=int(b.get("file_size", 0)),
-                    start_offset=int(b.get("start_offset", 0)),
-                )
-                res = finish_video_upload(cfg, session, b.get("target_id"))
-                return _handle_api_resp(res)
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
-
-    # 7. Status, Feed & Object Publishing
-    if sub in ("publish/status", "v1/publish/status", "feed/post"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                msg = b.get("message") or b.get("text") or b.get("content")
-                if not msg:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing message or text"}})
-                sched_time = _extract_schedule_time(b)
-                return _handle_api_resp(publish_feed_status(cfg, msg, b.get("target_id"), scheduled_publish_time=sched_time))
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
-
-    if sub in ("delete", "v1/delete", "publish/delete"):
-        if method in ("POST", "DELETE"):
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                obj_id = b.get("object_id") or b.get("id") or b.get("post_id") or b.get("video_id")
-                if not obj_id:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing object_id or id"}})
-                return _handle_api_resp(delete_object(cfg, obj_id))
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
-
-    if sub in ("token", "v1/token", "access_token"):
-        if method == "GET":
-            tok = fetch_page_access_token(cfg)
-            if tok:
-                return json_resp(200, {"status": "ok", "access_token": tok[:10] + "..." + tok[-5:], "discovered": True})
-            return json_resp(404, {"error": {"code": 404, "message": "No active page token discovered."}})
-
-    # 8. Reel, Story & Post Publish (1-step video upload & publish, or video_id / text status publish)
-    if sub in ("publish", "v1/publish", "reels", "v1/reels"):
-        if method == "POST":
-            try:
-                b = json.loads(raw_body) if raw_body else {}
-                target_id = b.get("target_id") or cfg.get("target_id") or cfg.get("actor_id")
-                if not target_id:
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing target_id"}})
-                auto_trans = b.get("enable_auto_translate")
-                if auto_trans is None:
-                    auto_trans = cfg.get("auto_translate", True)
-                sched_time = _extract_schedule_time(b)
-                # 1-step direct video file or base64 publish
-                video_bytes, file_name = _extract_video_bytes(b)
-                if video_bytes:
-                    res = upload_and_publish_video(
-                        cfg,
-                        video_bytes,
-                        file_name=file_name,
-                        title=str(b.get("title", "New Reel")),
-                        description=str(b.get("description", "")),
-                        target_id=target_id,
-                        scheduled_publish_time=sched_time,
-                        enable_auto_translate=auto_trans,
-                        translated_languages=b.get("translated_languages"),
-                        publish_type=str(b.get("publish_type", "REEL")),
-                    )
-                    if res.get("status") == "error":
-                        return json_resp(502, res)
-                    return json_resp(200, res)
-                video_id = b.get("video_id", "")
-                if not video_id:
-                    msg = b.get("message") or b.get("text") or b.get("description")
-                    if msg:
-                        return _handle_api_resp(publish_feed_status(cfg, msg, target_id, scheduled_publish_time=sched_time))
-                    return json_resp(400, {"error": {"code": 400, "message": "Missing video_id, video_path, or message"}})
-                spec = PublishSpec(
-                    target_id=target_id,
-                    video_id=video_id,
-                    title=b.get("title", ""),
-                    description=b.get("description", ""),
-                    publish_type=b.get("publish_type", "REEL"),
-                    scheduled_publish_time=sched_time,
-                    enable_auto_translate=auto_trans,
-                    translated_languages=b.get("translated_languages"),
-                )
-                return _handle_api_resp(publish_reel_or_post(cfg, spec))
-            except Exception as exc:
-                return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
+            video_id = b.get("video_id", "")
+            if not video_id:
+                msg = b.get("message") or b.get("text") or b.get("description")
+                if msg:
+                    return _handle_api_resp(publish_feed_status(cfg, msg, target_id, scheduled_publish_time=sched_time))
+                return json_resp(400, {"error": {"code": 400, "message": "Missing video_id, video_path, or message"}})
+            spec = PublishSpec(
+                target_id=target_id,
+                video_id=video_id,
+                title=b.get("title", ""),
+                description=b.get("description", ""),
+                publish_type=b.get("publish_type", "REEL"),
+                scheduled_publish_time=sched_time,
+                enable_auto_translate=auto_trans,
+                translated_languages=b.get("translated_languages"),
+            )
+            return _handle_api_resp(publish_reel_or_post(cfg, spec))
+        except Exception as exc:
+            return json_resp(400, {"error": {"code": 400, "message": str(exc)}})
 
     # 8. OpenAI Models facade
     if method == "GET" and sub in ("models", "v1/models"):

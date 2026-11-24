@@ -3,7 +3,7 @@
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 
 use super::utils::{
-    base64_encode, extract_host_port, find_header_end, perform_socks5_connect, try_connect_socket,
+    base64_encode, find_header_end, perform_socks5_connect, try_connect_socket,
     try_connect_target_socket,
 };
 use crate::domain::{ProxyProtocol, ProxySelectionQuery, UpstreamProxy};
@@ -118,6 +118,23 @@ fn perform_connect_handshake(
     Ok((stream, leftover))
 }
 
+fn try_dial_connect_proxy(
+    proxy: &UpstreamProxy,
+    host_port: &str,
+) -> Result<(TcpStream, Vec<u8>), ()> {
+    let addr = format!("{}:{}", proxy.host, proxy.port);
+    let stream = try_connect_socket(&addr).ok_or(())?;
+    if proxy.protocol == ProxyProtocol::Socks5 {
+        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
+        let port_num = tp.parse::<u16>().unwrap_or(443);
+        perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
+            .map(|s| (s, Vec::new()))
+            .ok_or(())
+    } else {
+        perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
+    }
+}
+
 fn dial_connect_tunnel(
     service: &ProxyGuardService,
     query: &ProxySelectionQuery,
@@ -126,62 +143,21 @@ fn dial_connect_tunnel(
 ) -> Option<(TcpStream, Vec<u8>)> {
     // 1. Try pool proxy selection
     if let Some(proxy) = service.select_proxy(query) {
-        let addr = format!("{}:{}", proxy.host, proxy.port);
-        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
-        let port_num = tp.parse::<u16>().unwrap_or(443);
-
-        let primary_result = if let Some(stream) = try_connect_socket(&addr) {
-            if proxy.protocol == ProxyProtocol::Socks5 {
-                perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
-                    .map(|s| (s, Vec::new()))
-                    .ok_or(())
-            } else {
-                perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
-            }
-        } else {
-            Err(())
-        };
-
-        match primary_result {
+        match try_dial_connect_proxy(&proxy, host_port) {
             Ok((stream, leftover)) => {
                 service.record_proxy_result(&proxy.id, true);
                 return Some((stream, leftover));
             }
             Err(()) => {
-                // Handshake or TCP connect failed on primary: record failure and try backup
                 service.record_proxy_result(&proxy.id, false);
                 if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
-                    let fb_addr = format!("{}:{}", fallback_proxy.host, fallback_proxy.port);
-                    let fallback_result = if let Some(stream) = try_connect_socket(&fb_addr) {
-                        if fallback_proxy.protocol == ProxyProtocol::Socks5 {
-                            perform_socks5_connect(
-                                stream,
-                                th,
-                                port_num,
-                                fallback_proxy.auth.as_ref(),
-                            )
-                            .map(|s| (s, Vec::new()))
-                            .ok_or(())
-                        } else {
-                            perform_connect_handshake(
-                                stream,
-                                host_port,
-                                fallback_proxy.auth.as_ref(),
-                            )
-                        }
-                    } else {
-                        Err(())
-                    };
-
-                    match fallback_result {
-                        Ok((stream, leftover)) => {
-                            service.record_proxy_result(&fallback_proxy.id, true);
-                            return Some((stream, leftover));
-                        }
-                        Err(()) => {
-                            service.record_proxy_result(&fallback_proxy.id, false);
-                        }
+                    if let Ok((stream, leftover)) =
+                        try_dial_connect_proxy(&fallback_proxy, host_port)
+                    {
+                        service.record_proxy_result(&fallback_proxy.id, true);
+                        return Some((stream, leftover));
                     }
+                    service.record_proxy_result(&fallback_proxy.id, false);
                 }
             }
         }
@@ -189,22 +165,8 @@ fn dial_connect_tunnel(
 
     // 2. Try static fallback CLI proxy if provided
     if let Some(up) = fallback_url {
-        let parsed = UpstreamProxy::parse(up, None, None, None).ok();
-        let addr = extract_host_port(up, 8080);
-        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
-        let port_num = tp.parse::<u16>().unwrap_or(443);
-
-        if let Some(stream) = try_connect_socket(&addr) {
-            let auth = parsed.as_ref().and_then(|p| p.auth.as_ref());
-            let is_socks5 = parsed
-                .as_ref()
-                .is_some_and(|p| p.protocol == ProxyProtocol::Socks5);
-
-            if is_socks5 {
-                if let Some(s) = perform_socks5_connect(stream, th, port_num, auth) {
-                    return Some((s, Vec::new()));
-                }
-            } else if let Ok((s, leftover)) = perform_connect_handshake(stream, host_port, auth) {
+        if let Ok(parsed) = UpstreamProxy::parse(up, None, None, None) {
+            if let Ok((s, leftover)) = try_dial_connect_proxy(&parsed, host_port) {
                 return Some((s, leftover));
             }
         }
