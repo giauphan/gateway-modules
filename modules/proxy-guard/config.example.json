@@ -1,0 +1,12 @@
+{
+  "upstream_proxy_url": "http://user:pass@upstream-proxy.example.com:8080",
+  "proxy_listener_port": 3128,
+  "block_analytics": true,
+  "block_ads": true,
+  "block_telemetry": true,
+  "block_media": true,
+  "block_fonts": true,
+  "cost_per_gb_usd": 3.5,
+  "whitelist_domains": [],
+  "custom_blocked_domains": []
+}

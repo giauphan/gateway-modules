@@ -1,0 +1,177 @@
+{
+  "id": "proxy-guard",
+  "name": "Proxy Guard & Traffic Optimizer",
+  "short_name": "Proxy Guard",
+  "version": "1.0.0",
+  "namespace": "/custom/proxy-guard",
+  "entrypoint": "run.sh",
+  "protocol": "stdio-stream",
+  "capabilities": [
+    "traffic_optimization",
+    "adblock",
+    "proxy_interception",
+    "analytics_filtering",
+    "bandwidth_saving",
+    "mcp"
+  ],
+  "icon": "🛡️",
+  "config_schema": {
+    "title": "Proxy Guard & Traffic Optimizer Config",
+    "module_id": "proxy-guard",
+    "namespace": "/custom/proxy-guard",
+    "fields": [
+      {
+        "key": "upstream_proxy_url",
+        "label": "Upstream Paid Proxy URL",
+        "type": "text",
+        "placeholder": "http://user:pass@pr.oxylabs.io:7777",
+        "description": "Upstream residential/datacenter proxy endpoint that costs bandwidth"
+      },
+      {
+        "key": "proxy_listener_port",
+        "label": "Local Intercepting Proxy Port",
+        "type": "number",
+        "default": 3128,
+        "description": "Local port to listen for incoming client HTTP/CONNECT traffic (0 to disable local proxy server)"
+      },
+      {
+        "key": "block_analytics",
+        "label": "Block Analytics (GA, GTM, Pixel, Hotjar)",
+        "type": "boolean",
+        "default": true,
+        "description": "Intercept Google Analytics, Tag Manager, Meta Pixel, Hotjar, Clarity"
+      },
+      {
+        "key": "block_ads",
+        "label": "Block Ad Networks & Trackers",
+        "type": "boolean",
+        "default": true,
+        "description": "Intercept DoubleClick, Google Syndication, Criteo, Taboola, Outbrain"
+      },
+      {
+        "key": "block_telemetry",
+        "label": "Block Error Telemetry (Sentry, Datadog RUM)",
+        "type": "boolean",
+        "default": true,
+        "description": "Intercept Sentry, Bugsnag, Datadog RUM, Segment, Amplitude"
+      },
+      {
+        "key": "block_media",
+        "label": "Block Heavy Media (Images, Video, Audio)",
+        "type": "boolean",
+        "default": true,
+        "description": "Intercept heavy PNG, JPG, WebP, MP4, WebM assets to save maximal bandwidth"
+      },
+      {
+        "key": "block_fonts",
+        "label": "Block Custom Web Fonts",
+        "type": "boolean",
+        "default": true,
+        "description": "Intercept WOFF, WOFF2, TTF fonts"
+      },
+      {
+        "key": "cost_per_gb_usd",
+        "label": "Proxy Cost ($ / GB)",
+        "type": "number",
+        "default": 3.5,
+        "description": "Price per Gigabyte of your paid upstream proxy for cost calculation"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "evaluate_url",
+      "description": "Evaluates a target URL and method to determine if Proxy Guard will block, mock, or forward it, along with estimated bytes and dollar savings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to inspect (e.g. 'https://www.google-analytics.com/analytics.js' or 'https://example.com/hero.jpg')"
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method (GET, POST, etc.)",
+            "default": "GET"
+          },
+          "resource_type": {
+            "type": "string",
+            "description": "Resource type hint (e.g. 'script', 'image', 'media', 'font', 'xhr', 'document')",
+            "enum": ["script", "image", "media", "font", "stylesheet", "xhr", "document", "beacon", "other"]
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "optimize_flow",
+      "description": "Analyzes a complete batch flow (list of HTTP requests or HAR log entries), filters unnecessary requests, and computes total bandwidth and dollar savings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "description": "List of HTTP request objects with 'url', optional 'method', 'resource_type', and 'size_bytes'",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": { "type": "string" },
+                "method": { "type": "string" },
+                "resource_type": { "type": "string" },
+                "size_bytes": { "type": "number" }
+              },
+              "required": ["url"]
+            }
+          }
+        },
+        "required": ["requests"]
+      }
+    },
+    {
+      "name": "generate_script",
+      "description": "Generates production-ready browser automation interceptor code (Playwright, Puppeteer, or mitmproxy addon) with built-in zero-bandwidth filters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Target framework: 'playwright' (Python/Node), 'puppeteer' (Node), or 'mitmproxy' (Python addon)",
+            "enum": ["playwright_ts", "playwright_py", "puppeteer_ts", "mitmproxy_py"]
+          }
+        },
+        "required": ["target"]
+      }
+    },
+    {
+      "name": "get_metrics",
+      "description": "Returns cumulative statistics on total requests processed, blocked requests, forwarded requests, bytes saved, and proxy cost saved in USD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "configure_rules",
+      "description": "Configures filtering options, toggles categories (analytics, ads, media, fonts, telemetry), and manages whitelist/blacklist domains.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "block_analytics": { "type": "boolean" },
+          "block_ads": { "type": "boolean" },
+          "block_telemetry": { "type": "boolean" },
+          "block_media": { "type": "boolean" },
+          "block_fonts": { "type": "boolean" },
+          "cost_per_gb_usd": { "type": "number" },
+          "add_whitelist_domains": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "add_blocked_domains": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  ]
+}

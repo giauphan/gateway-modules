@@ -50,6 +50,15 @@ gateway-modules/
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`daily-news`** | **Daily News & Content Discovery Service** | `1.3.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models`, `redis` | [`modules/daily-news`](modules/daily-news) |
 | **`facebook-suite`** | **Meta Business Suite / Facebook Creator Studio Adapter** | `1.0.0` | `/custom/facebook` | `studio`, `composer`, `upload`, `publish`, `reels`, `stories`, `auto_translate` | [`modules/facebook-suite`](modules/facebook-suite) |
+| **`proxy-guard`** | **Proxy Guard & Traffic Optimizer** | `1.0.0` | `/custom/proxy-guard` | `traffic_optimization`, `adblock`, `proxy_interception`, `analytics_filtering`, `bandwidth_saving`, `mcp` | [`modules/proxy-guard`](modules/proxy-guard) |
+
+### Module Highlights: `proxy-guard`
+- **Native Rust Proxy Bandwidth Saver**: Cuts paid proxy traffic by 90%–95% per flow by intercepting heavy media, tracking beacons, ads, and telemetry.
+- **Non-Crashing Synthetic Mocks**: Injects harmless stub JavaScript for Google Analytics, GTM, Meta Pixel, and TikTok so client automation scripts never crash.
+- **Dual Mode Operation**: Functions as both an in-process MCP module for AI agents and a standalone multithreaded HTTP/CONNECT intercepting proxy listener on configurable ports.
+- **Automated Client Script Generators**: Produces ready-to-use zero-bandwidth route interceptors for Playwright (Node/Python), Puppeteer, and mitmproxy.
+- **Real-Time Savings Tracking**: Tracks total requests, blocked assets, bytes saved, and proxy dollars saved in USD.
+
 
 ### Module Highlights: `facebook-suite`
 - **1-Click HAR Ingestion**: Seamlessly extracts session cookies, CSRF tokens (`fb_dtsg`), user ID (`__user`), actor ID (`av`), and targeting parameters from `download-facebook.har`.
