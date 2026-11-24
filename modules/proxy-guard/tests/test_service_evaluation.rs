@@ -7,7 +7,16 @@ use std::sync::Arc;
 
 #[test]
 fn test_flow_optimization_drastic_reduction() {
-    let temp_dir = std::env::temp_dir().join(format!("pg_test_{}", std::process::id()));
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_test_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
     let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
     let pool = Arc::new(ProxyPool::new(
         Arc::clone(&storage) as Arc<_>,

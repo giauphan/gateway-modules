@@ -8,7 +8,7 @@ use crate::ports::{MetricsStoragePort, ProxyPoolStoragePort, RuleRepositoryPort}
 use crate::rules_engine::RulesEngine;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::RwLock;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -19,6 +19,10 @@ pub struct FileStorageAdapter {
     whitelist_cache: RwLock<Vec<String>>,
     metrics_cache: RwLock<FlowMetrics>,
     proxies_cache: RwLock<Vec<UpstreamProxy>>,
+    rules_corrupted: AtomicBool,
+    whitelist_corrupted: AtomicBool,
+    metrics_corrupted: AtomicBool,
+    proxies_corrupted: AtomicBool,
 }
 
 impl FileStorageAdapter {
@@ -32,6 +36,10 @@ impl FileStorageAdapter {
             whitelist_cache: RwLock::new(Vec::new()),
             metrics_cache: RwLock::new(FlowMetrics::new(3.5)),
             proxies_cache: RwLock::new(Vec::new()),
+            rules_corrupted: AtomicBool::new(false),
+            whitelist_corrupted: AtomicBool::new(false),
+            metrics_corrupted: AtomicBool::new(false),
+            proxies_corrupted: AtomicBool::new(false),
         };
 
         adapter.load_persisted_state();
@@ -83,35 +91,107 @@ impl FileStorageAdapter {
     }
 
     fn load_persisted_state(&self) {
-        if let Ok(data) = fs::read_to_string(self.rules_file()) {
-            if let Ok(loaded) = serde_json::from_str::<Vec<Rule>>(&data) {
-                if let Ok(mut lock) = self.rules_cache.write() {
-                    *lock = loaded;
+        let rules_path = self.rules_file();
+        match fs::read_to_string(&rules_path) {
+            Ok(data) => match serde_json::from_str::<Vec<Rule>>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.rules_cache.write() {
+                        *lock = loaded;
+                    }
                 }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse rules file {:?}: {e}",
+                        rules_path
+                    );
+                    self.rules_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read rules file {:?}: {e}",
+                    rules_path
+                );
+                self.rules_corrupted.store(true, Ordering::SeqCst);
             }
         }
 
-        if let Ok(data) = fs::read_to_string(self.whitelist_file()) {
-            if let Ok(loaded) = serde_json::from_str::<Vec<String>>(&data) {
-                if let Ok(mut lock) = self.whitelist_cache.write() {
-                    *lock = loaded;
+        let wl_path = self.whitelist_file();
+        match fs::read_to_string(&wl_path) {
+            Ok(data) => match serde_json::from_str::<Vec<String>>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.whitelist_cache.write() {
+                        *lock = loaded;
+                    }
                 }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse whitelist file {:?}: {e}",
+                        wl_path
+                    );
+                    self.whitelist_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read whitelist file {:?}: {e}",
+                    wl_path
+                );
+                self.whitelist_corrupted.store(true, Ordering::SeqCst);
             }
         }
 
-        if let Ok(data) = fs::read_to_string(self.metrics_file()) {
-            if let Ok(loaded) = serde_json::from_str::<FlowMetrics>(&data) {
-                if let Ok(mut lock) = self.metrics_cache.write() {
-                    *lock = loaded;
+        let metrics_path = self.metrics_file();
+        match fs::read_to_string(&metrics_path) {
+            Ok(data) => match serde_json::from_str::<FlowMetrics>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.metrics_cache.write() {
+                        *lock = loaded;
+                    }
                 }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse metrics file {:?}: {e}",
+                        metrics_path
+                    );
+                    self.metrics_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read metrics file {:?}: {e}",
+                    metrics_path
+                );
+                self.metrics_corrupted.store(true, Ordering::SeqCst);
             }
         }
 
-        if let Ok(data) = fs::read_to_string(self.proxies_file()) {
-            if let Ok(loaded) = serde_json::from_str::<Vec<UpstreamProxy>>(&data) {
-                if let Ok(mut lock) = self.proxies_cache.write() {
-                    *lock = loaded;
+        let proxies_path = self.proxies_file();
+        match fs::read_to_string(&proxies_path) {
+            Ok(data) => match serde_json::from_str::<Vec<UpstreamProxy>>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.proxies_cache.write() {
+                        *lock = loaded;
+                    }
                 }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse proxies file {:?}: {e}",
+                        proxies_path
+                    );
+                    self.proxies_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read proxies file {:?}: {e}",
+                    proxies_path
+                );
+                self.proxies_corrupted.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -126,6 +206,12 @@ impl RuleRepositoryPort for FileStorageAdapter {
     }
 
     fn save_rules(&self, rules: &[Rule]) -> Result<(), String> {
+        if self.rules_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted rules file {:?}; manual recovery required",
+                self.rules_file()
+            ));
+        }
         let mut lock = self
             .rules_cache
             .write()
@@ -144,6 +230,12 @@ impl RuleRepositoryPort for FileStorageAdapter {
     }
 
     fn save_whitelist(&self, whitelist: &[String]) -> Result<(), String> {
+        if self.whitelist_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted whitelist file {:?}; manual recovery required",
+                self.whitelist_file()
+            ));
+        }
         let mut lock = self
             .whitelist_cache
             .write()
@@ -164,6 +256,12 @@ impl MetricsStoragePort for FileStorageAdapter {
     }
 
     fn save_metrics(&self, metrics: &FlowMetrics) -> Result<(), String> {
+        if self.metrics_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted metrics file {:?}; manual recovery required",
+                self.metrics_file()
+            ));
+        }
         let mut lock = self
             .metrics_cache
             .write()
@@ -184,6 +282,12 @@ impl ProxyPoolStoragePort for FileStorageAdapter {
     }
 
     fn save_proxies(&self, proxies: &[UpstreamProxy]) -> Result<(), String> {
+        if self.proxies_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted proxies file {:?}; manual recovery required",
+                self.proxies_file()
+            ));
+        }
         let mut lock = self
             .proxies_cache
             .write()

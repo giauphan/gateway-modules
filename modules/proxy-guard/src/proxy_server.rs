@@ -169,15 +169,16 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 fn extract_proxy_query_from_headers(header_str: &str) -> ProxySelectionQuery {
     let mut query = ProxySelectionQuery::default();
     for line in header_str.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(val) = lower.strip_prefix("x-proxy-session:") {
-            query.session_id = Some(val.trim().to_string());
-        } else if let Some(val) = lower.strip_prefix("x-proxy-country:") {
-            query.country = Some(val.trim().to_string());
-        } else if let Some(val) = lower.strip_prefix("x-proxy-tag:") {
-            query.tag = Some(val.trim().to_string());
-        } else if let Some(val) = lower.strip_prefix("x-proxy-id:") {
-            query.preferred_id = Some(val.trim().to_string());
+        if let Some((name, val)) = line.split_once(':') {
+            let name_lower = name.trim().to_ascii_lowercase();
+            let val_trimmed = val.trim();
+            match name_lower.as_str() {
+                "x-proxy-session" => query.session_id = Some(val_trimmed.to_string()),
+                "x-proxy-country" => query.country = Some(val_trimmed.to_string()),
+                "x-proxy-tag" => query.tag = Some(val_trimmed.to_string()),
+                "x-proxy-id" => query.preferred_id = Some(val_trimmed.to_string()),
+                _ => {}
+            }
         }
     }
     query
@@ -199,8 +200,8 @@ fn handle_https_connect(
         return;
     }
 
-    let (mut upstream, proxy_opt) =
-        match dial_upstream(service, query, fallback_upstream.as_deref(), host_port) {
+    let (mut upstream, leftover) =
+        match dial_connect_tunnel(service, query, fallback_upstream.as_deref(), host_port) {
             Some(res) => res,
             None => {
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
@@ -208,75 +209,18 @@ fn handle_https_connect(
             }
         };
 
-    // If forwarded via upstream proxy, perform CONNECT handshake
-    if let Some(ref proxy) = proxy_opt {
-        let auth_hdr = match &proxy.auth {
-            Some(a) => {
-                let creds = format!("{}:{}", a.username, a.password);
-                format!(
-                    "Proxy-Authorization: Basic {}\r\n",
-                    base64_encode(creds.as_bytes())
-                )
-            }
-            None => String::new(),
-        };
-
-        let connect_req =
-            format!("CONNECT {host_port} HTTP/1.1\r\nHost: {host_port}\r\n{auth_hdr}\r\n");
-        if upstream.write_all(connect_req.as_bytes()).is_err() {
-            service.record_proxy_result(&proxy.id, false);
-            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            return;
-        }
-
-        let mut resp_header_buf = Vec::with_capacity(1024);
-        let mut chunk = [0u8; 512];
-        let mut resp_header_end = None;
-
-        while resp_header_buf.len() < 16384 {
-            match upstream.read(&mut chunk) {
-                Ok(0) | Err(_) => {
-                    service.record_proxy_result(&proxy.id, false);
-                    let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-                    return;
-                }
-                Ok(n) => {
-                    resp_header_buf.extend_from_slice(&chunk[..n]);
-                    if let Some(pos) = find_header_end(&resp_header_buf) {
-                        resp_header_end = Some(pos);
-                        break;
-                    }
-                }
-            }
-        }
-
-        let resp_end = match resp_header_end {
-            Some(idx) => idx,
-            None => {
-                service.record_proxy_result(&proxy.id, false);
-                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-                return;
-            }
-        };
-
-        let header_str = String::from_utf8_lossy(&resp_header_buf[..resp_end]);
-        let first_line = header_str.lines().next().unwrap_or("");
-        if !first_line.contains(" 200") {
-            service.record_proxy_result(&proxy.id, false);
-            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            return;
-        }
-
-        service.record_proxy_result(&proxy.id, true);
-
-        // Forward any leftover bytes after CONNECT response headers to client
-        let leftover = &resp_header_buf[resp_end..];
-        if !leftover.is_empty() && client.write_all(leftover).is_err() {
-            return;
-        }
+    // RFC 9110: Write complete success response to client FIRST
+    if client
+        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        .is_err()
+    {
+        return;
     }
 
-    let _ = client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+    // Only after 200 success succeeds, forward buffered leftover bytes
+    if !leftover.is_empty() && client.write_all(&leftover).is_err() {
+        return;
+    }
 
     // Clear initial request timeouts for the established tunnel
     let _ = client.set_read_timeout(None);
@@ -285,6 +229,132 @@ fn handle_https_connect(
     let _ = upstream.set_write_timeout(None);
 
     bidirectional_splice(client, &mut upstream);
+}
+
+fn perform_connect_handshake(
+    mut stream: TcpStream,
+    host_port: &str,
+    auth: Option<&crate::domain::ProxyAuth>,
+) -> Result<(TcpStream, Vec<u8>), ()> {
+    let auth_hdr = match auth {
+        Some(a) => {
+            let creds = format!("{}:{}", a.username, a.password);
+            format!(
+                "Proxy-Authorization: Basic {}\r\n",
+                base64_encode(creds.as_bytes())
+            )
+        }
+        None => String::new(),
+    };
+
+    let connect_req =
+        format!("CONNECT {host_port} HTTP/1.1\r\nHost: {host_port}\r\n{auth_hdr}\r\n");
+    if stream.write_all(connect_req.as_bytes()).is_err() {
+        return Err(());
+    }
+
+    let mut resp_header_buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 512];
+    let mut resp_header_end = None;
+
+    while resp_header_buf.len() < 16384 {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return Err(()),
+            Ok(n) => {
+                resp_header_buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = find_header_end(&resp_header_buf) {
+                    resp_header_end = Some(pos);
+                    break;
+                }
+            }
+        }
+    }
+
+    let resp_end = resp_header_end.ok_or(())?;
+    let header_str = String::from_utf8_lossy(&resp_header_buf[..resp_end]);
+    let first_line = header_str.lines().next().unwrap_or("");
+    if !first_line.contains(" 200") {
+        return Err(());
+    }
+
+    let leftover = resp_header_buf[resp_end..].to_vec();
+    Ok((stream, leftover))
+}
+
+fn dial_connect_tunnel(
+    service: &ProxyGuardService,
+    query: &ProxySelectionQuery,
+    fallback_url: Option<&str>,
+    host_port: &str,
+) -> Option<(TcpStream, Vec<u8>)> {
+    // 1. Try pool proxy selection
+    if let Some(proxy) = service.select_proxy(query) {
+        let addr = format!("{}:{}", proxy.host, proxy.port);
+        let primary_result = if let Some(stream) = try_connect_socket(&addr) {
+            perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
+        } else {
+            Err(())
+        };
+
+        match primary_result {
+            Ok((stream, leftover)) => {
+                service.record_proxy_result(&proxy.id, true);
+                return Some((stream, leftover));
+            }
+            Err(()) => {
+                // Handshake or TCP connect failed on primary: record failure and try backup
+                service.record_proxy_result(&proxy.id, false);
+                if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
+                    let fb_addr = format!("{}:{}", fallback_proxy.host, fallback_proxy.port);
+                    let fallback_result = if let Some(stream) = try_connect_socket(&fb_addr) {
+                        perform_connect_handshake(stream, host_port, fallback_proxy.auth.as_ref())
+                    } else {
+                        Err(())
+                    };
+
+                    match fallback_result {
+                        Ok((stream, leftover)) => {
+                            service.record_proxy_result(&fallback_proxy.id, true);
+                            return Some((stream, leftover));
+                        }
+                        Err(()) => {
+                            service.record_proxy_result(&fallback_proxy.id, false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Try static fallback CLI proxy if provided
+    if let Some(up) = fallback_url {
+        let addr = extract_host_port(up, 8080);
+        if let Some(stream) = try_connect_socket(&addr) {
+            let parsed = UpstreamProxy::parse(up, None, None, None).ok();
+            if let Ok((s, leftover)) = perform_connect_handshake(
+                stream,
+                host_port,
+                parsed.as_ref().and_then(|p| p.auth.as_ref()),
+            ) {
+                return Some((s, leftover));
+            }
+        }
+    }
+
+    // 3. Direct connection to target
+    try_connect_socket(host_port).map(|s| (s, Vec::new()))
+}
+
+fn parse_content_length(header_bytes: &[u8]) -> Option<usize> {
+    let s = std::str::from_utf8(header_bytes).ok()?;
+    for line in s.lines() {
+        if let Some((name, val)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                return val.trim().parse::<usize>().ok();
+            }
+        }
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -363,20 +433,75 @@ fn handle_http_request(
         }
     }
 
-    let _ = upstream.write_all(&optimized_headers);
-    if !body_prefix.is_empty() {
-        let _ = upstream.write_all(body_prefix);
+    // Write headers to upstream with error accounting
+    if upstream.write_all(&optimized_headers).is_err() {
+        if let Some(ref proxy) = proxy_opt {
+            service.record_proxy_result(&proxy.id, false);
+        }
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
+    }
+
+    // Forward the evaluated body prefix
+    if !body_prefix.is_empty() && upstream.write_all(body_prefix).is_err() {
+        if let Some(ref proxy) = proxy_opt {
+            service.record_proxy_result(&proxy.id, false);
+        }
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
+    }
+
+    // Forward any remaining body bytes according to Content-Length
+    let content_len = parse_content_length(header_bytes).unwrap_or(0);
+    if body_prefix.len() < content_len {
+        let mut remaining = content_len - body_prefix.len();
+        let mut buf = [0u8; 8192];
+        while remaining > 0 {
+            let to_read = remaining.min(buf.len());
+            match client.read(&mut buf[..to_read]) {
+                Ok(0) | Err(_) => {
+                    if let Some(ref proxy) = proxy_opt {
+                        service.record_proxy_result(&proxy.id, false);
+                    }
+                    let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                    return;
+                }
+                Ok(n) => {
+                    if upstream.write_all(&buf[..n]).is_err() {
+                        if let Some(ref proxy) = proxy_opt {
+                            service.record_proxy_result(&proxy.id, false);
+                        }
+                        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                        return;
+                    }
+                    remaining -= n;
+                }
+            }
+        }
     }
 
     if let Some(ref proxy) = proxy_opt {
         service.record_proxy_result(&proxy.id, true);
     }
 
-    // Clear request reception timeouts before streaming response
-    let _ = client.set_read_timeout(None);
-    let _ = client.set_write_timeout(None);
+    // Enforce HTTP request boundary: stop reading further requests from client
+    let _ = client.shutdown(Shutdown::Read);
+    let _ = upstream.shutdown(Shutdown::Write);
 
-    bidirectional_splice(client, &mut upstream);
+    // Stream upstream response back to client until EOF
+    let mut resp_buf = [0u8; 8192];
+    loop {
+        match upstream.read(&mut resp_buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if client.write_all(&resp_buf[..n]).is_err() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = client.flush();
 }
 
 /// Connects to upstream with multi-proxy selection and automatic failover retry.
@@ -473,7 +598,8 @@ fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) {
     loop {
         match b_reader.read(&mut buf) {
             Ok(0) => {
-                let _ = a_writer.shutdown(Shutdown::Write);
+                let _ = a_writer.flush();
+                let _ = a_writer.shutdown(Shutdown::Both);
                 break;
             }
             Err(_) => {
@@ -489,6 +615,7 @@ fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) {
         }
     }
 
+    let _ = stream_a.set_read_timeout(Some(Duration::from_millis(50)));
     let _ = t1.join();
 }
 

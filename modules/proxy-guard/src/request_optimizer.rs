@@ -62,8 +62,6 @@ static STRIPPED_QUERY_PARAMS: &[&str] = &[
     // Iterable
     "_itm",
     // Generic click tracking
-    "ref",
-    "source",
     "s_kwcid",
     "ef_id",
     "pcrid",
@@ -90,6 +88,8 @@ static STRIPPED_REQUEST_HEADERS: &[&str] = &[
     "sec-ch-ua-wow64",
     "sec-ch-prefers-color-scheme",
     "sec-ch-prefers-reduced-motion",
+    // Downstream proxy authorization (never leak client credentials to upstream)
+    "proxy-authorization",
     // No referrer sent - reduces analytics triggering
     "referer",
     // Privacy / tracking headers
@@ -152,10 +152,16 @@ pub fn optimize_request_headers(raw_headers: &[u8]) -> Vec<u8> {
         let lower_line = line.to_ascii_lowercase();
 
         // Detect and handle Accept-Encoding
-        if lower_line.starts_with("accept-encoding:") {
+        if let Some(val) = lower_line.strip_prefix("accept-encoding:") {
             has_accept_encoding = true;
-            // Replace whatever value with gzip to maximize compression
-            output.extend_from_slice(b"Accept-Encoding: gzip, deflate\r\n");
+            if client_excludes_gzip(val) {
+                // Preserve client's explicit exclusion or identity-only coding
+                output.extend_from_slice(line.as_bytes());
+                output.extend_from_slice(b"\r\n");
+            } else {
+                // Normalize accepted compression to standard gzip/deflate
+                output.extend_from_slice(b"Accept-Encoding: gzip, deflate\r\n");
+            }
             continue;
         }
 
@@ -198,6 +204,24 @@ fn should_strip_header(lower_line: &str) -> bool {
         }
     }
     false
+}
+
+/// Checks if the client explicitly excludes gzip or only accepts identity coding.
+fn client_excludes_gzip(val: &str) -> bool {
+    let trimmed = val.trim();
+    if trimmed.contains("gzip;q=0") || trimmed.contains("gzip; q=0") {
+        return true;
+    }
+    let parts: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
+    let has_identity = parts
+        .iter()
+        .any(|&p| p == "identity" || p.starts_with("identity;"));
+    let has_gzip = parts.iter().any(|&p| p == "gzip" || p.starts_with("gzip;"));
+    let has_wildcard = parts
+        .iter()
+        .any(|&p| p == "*" || (p.starts_with("*;") && !p.contains("q=0")));
+
+    has_identity && !has_gzip && !has_wildcard
 }
 
 /// Strips known tracking query parameters from the HTTP request line.
@@ -273,12 +297,12 @@ mod tests {
 
     #[test]
     fn test_strip_utm_params() {
-        let url = "/page?id=123&utm_source=google&utm_medium=cpc&ref=home";
+        let url = "/page?id=123&utm_source=google&utm_medium=cpc&utm_campaign=promo";
         let cleaned = strip_tracking_params_from_url(url);
         assert_eq!(cleaned, "/page?id=123");
         assert!(!cleaned.contains("utm_source"));
         assert!(!cleaned.contains("utm_medium"));
-        assert!(!cleaned.contains("ref="));
+        assert!(!cleaned.contains("utm_campaign"));
     }
 
     #[test]
@@ -320,6 +344,42 @@ mod tests {
         assert!(s.contains("Accept-Encoding: gzip, deflate"));
         // Should not have duplicate accept-encoding
         assert_eq!(s.matches("Accept-Encoding").count(), 1);
+    }
+
+    #[test]
+    fn test_optimize_preserves_identity_accept_encoding() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: identity\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(s.contains("Accept-Encoding: identity"));
+        assert!(!s.contains("gzip"));
+    }
+
+    #[test]
+    fn test_optimize_preserves_explicit_gzip_exclusion() {
+        let raw =
+            b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: gzip;q=0, identity\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(s.contains("Accept-Encoding: gzip;q=0, identity"));
+    }
+
+    #[test]
+    fn test_optimize_strips_proxy_authorization() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(!s.to_ascii_lowercase().contains("proxy-authorization"));
+    }
+
+    #[test]
+    fn test_generic_source_and_ref_params_preserved() {
+        let url = "/api/v1/inventory?source=warehouse_north&ref=pos_terminal_1";
+        let cleaned = strip_tracking_params_from_url(url);
+        assert_eq!(
+            cleaned,
+            "/api/v1/inventory?source=warehouse_north&ref=pos_terminal_1"
+        );
     }
 
     #[test]

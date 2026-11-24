@@ -14,6 +14,7 @@ use crate::ports::{
 use crate::proxy_pool::ProxyPool;
 use crate::rules_engine::RulesEngine;
 use crate::script_generator::ScriptGenerator;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub struct ProxyGuardService {
@@ -22,6 +23,8 @@ pub struct ProxyGuardService {
     proxy_pool: Arc<ProxyPool>,
     cost_per_gb_usd: RwLock<f64>,
     cached_engine: RwLock<RulesEngine>,
+    cached_metrics: RwLock<FlowMetrics>,
+    dirty_metrics_count: AtomicU64,
     rule_edit_lock: Mutex<()>,
     metrics_lock: Mutex<()>,
 }
@@ -36,6 +39,8 @@ impl ProxyGuardService {
         let rules = rule_repo.load_rules();
         let whitelist = rule_repo.load_whitelist();
         let engine = RulesEngine::new(rules, whitelist);
+        let mut metrics = metrics_repo.load_metrics();
+        metrics.cost_per_gb_usd = cost_per_gb_usd;
 
         Self {
             rule_repo,
@@ -43,6 +48,8 @@ impl ProxyGuardService {
             proxy_pool,
             cost_per_gb_usd: RwLock::new(cost_per_gb_usd),
             cached_engine: RwLock::new(engine),
+            cached_metrics: RwLock::new(metrics),
+            dirty_metrics_count: AtomicU64::new(0),
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
         }
@@ -50,6 +57,18 @@ impl ProxyGuardService {
 
     pub fn proxy_pool(&self) -> &Arc<ProxyPool> {
         &self.proxy_pool
+    }
+
+    pub fn flush_metrics(&self) -> Result<(), String> {
+        let _guard = self.metrics_lock.lock().map_err(|e| e.to_string())?;
+        let metrics = self
+            .cached_metrics
+            .read()
+            .map(|m| m.clone())
+            .map_err(|e| e.to_string())?;
+        self.metrics_repo.save_metrics(&metrics)?;
+        self.dirty_metrics_count.store(0, Ordering::Relaxed);
+        Ok(())
     }
 
     fn rebuild_engine_locked(&self) {
@@ -77,6 +96,7 @@ impl FlowOptimizerPort for ProxyGuardService {
 
     fn optimize_flow(&self, requests: &[FlowRequestDto]) -> FlowOptimizationResult {
         let mut decisions = Vec::with_capacity(requests.len());
+        let mut recorded_items = Vec::with_capacity(requests.len());
         let mut original_bytes: u64 = 0;
         let mut optimized_bytes: u64 = 0;
         let mut blocked_count: usize = 0;
@@ -104,8 +124,19 @@ impl FlowOptimizerPort for ProxyGuardService {
                 optimized_bytes = optimized_bytes.saturating_add(req_size);
             }
 
-            self.record_decision(&decision, Some(req_size));
+            recorded_items.push((decision.clone(), req_size));
             decisions.push(decision);
+        }
+
+        // Aggregate flow decisions into metrics once per flow (off hot path)
+        if let Ok(mut metrics) = self.cached_metrics.write() {
+            for (d, sz) in &recorded_items {
+                metrics.record_decision(d, Some(*sz));
+            }
+            let snapshot = metrics.clone();
+            drop(metrics);
+            let _ = self.metrics_repo.save_metrics(&snapshot);
+            self.dirty_metrics_count.store(0, Ordering::Relaxed);
         }
 
         let orig_mb = (original_bytes as f64) / 1_048_576.0;
@@ -217,17 +248,23 @@ impl RuleManagementPort for ProxyGuardService {
 
 impl MetricsPort for ProxyGuardService {
     fn record_decision(&self, decision: &FilterDecision, actual_bytes: Option<u64>) {
-        if let Ok(_guard) = self.metrics_lock.lock() {
-            let rate = self.cost_per_gb_usd.read().map(|r| *r).unwrap_or(3.5);
-            let mut metrics = self.metrics_repo.load_metrics();
-            metrics.cost_per_gb_usd = rate;
+        if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_decision(decision, actual_bytes);
-            let _ = self.metrics_repo.save_metrics(&metrics);
+            let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
+            if count >= 64 {
+                self.dirty_metrics_count.store(0, Ordering::Relaxed);
+                let snapshot = metrics.clone();
+                drop(metrics);
+                let _ = self.metrics_repo.save_metrics(&snapshot);
+            }
         }
     }
 
     fn get_metrics(&self) -> FlowMetrics {
-        self.metrics_repo.load_metrics()
+        self.cached_metrics
+            .read()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| self.metrics_repo.load_metrics())
     }
 
     fn set_cost_per_gb(&self, rate: f64) -> Result<(), String> {
@@ -235,23 +272,41 @@ impl MetricsPort for ProxyGuardService {
             return Err("cost_per_gb_usd must be a non-negative finite number".to_string());
         }
         let _guard = self.metrics_lock.lock().map_err(|e| e.to_string())?;
+        let mut metrics_lock = self.cached_metrics.write().map_err(|e| e.to_string())?;
+        let mut updated = metrics_lock.clone();
+        updated.cost_per_gb_usd = rate;
+        let gb_saved = updated.bytes_saved as f64 / (1024.0 * 1024.0 * 1024.0);
+        updated.estimated_cost_saved_usd = gb_saved * rate;
+
+        // Save to persistence first
+        self.metrics_repo.save_metrics(&updated)?;
+
+        // Commit in-memory only after save succeeds
+        *metrics_lock = updated;
         if let Ok(mut lock) = self.cost_per_gb_usd.write() {
             *lock = rate;
         }
-        let mut metrics = self.metrics_repo.load_metrics();
-        metrics.cost_per_gb_usd = rate;
-        let gb_saved = metrics.bytes_saved as f64 / (1024.0 * 1024.0 * 1024.0);
-        metrics.estimated_cost_saved_usd = gb_saved * rate;
-        self.metrics_repo.save_metrics(&metrics)?;
+        self.dirty_metrics_count.store(0, Ordering::Relaxed);
         Ok(())
     }
 
     fn reset_metrics(&self) {
         if let Ok(_guard) = self.metrics_lock.lock() {
-            let rate = self.cost_per_gb_usd.read().map(|r| *r).unwrap_or(3.5);
-            let blank = FlowMetrics::new(rate);
-            let _ = self.metrics_repo.save_metrics(&blank);
+            if let Ok(mut metrics_lock) = self.cached_metrics.write() {
+                let rate = self.cost_per_gb_usd.read().map(|r| *r).unwrap_or(3.5);
+                let blank = FlowMetrics::new(rate);
+                if self.metrics_repo.save_metrics(&blank).is_ok() {
+                    *metrics_lock = blank;
+                    self.dirty_metrics_count.store(0, Ordering::Relaxed);
+                }
+            }
         }
+    }
+}
+
+impl Drop for ProxyGuardService {
+    fn drop(&mut self) {
+        let _ = self.flush_metrics();
     }
 }
 

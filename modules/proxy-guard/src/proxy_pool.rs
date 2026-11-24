@@ -186,8 +186,16 @@ impl ProxyPoolManagementPort for ProxyPool {
                 best
             }
             ProxyRotationStrategy::Random => {
-                let pseudo_random = self.rr_counter.fetch_add(7, Ordering::Relaxed);
-                let idx = pseudo_random % candidates.len();
+                if candidates.len() <= 1 {
+                    return candidates.first().cloned();
+                }
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as usize)
+                    .unwrap_or(0);
+                let count = self.rr_counter.fetch_add(1, Ordering::Relaxed);
+                let mixed = (nanos.rotate_left(17) ^ count).wrapping_mul(0x9e3779b97f4a7c15);
+                let idx = mixed % candidates.len();
                 Some(candidates[idx].clone())
             }
             ProxyRotationStrategy::RoundRobin => {
