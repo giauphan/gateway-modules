@@ -3,8 +3,8 @@
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 //! Implements RuleRepositoryPort and MetricsStoragePort with atomic file replacement.
 
-use crate::domain::{FlowMetrics, Rule};
-use crate::ports::{MetricsStoragePort, RuleRepositoryPort};
+use crate::domain::{FlowMetrics, Rule, UpstreamProxy};
+use crate::ports::{MetricsStoragePort, ProxyPoolStoragePort, RuleRepositoryPort};
 use crate::rules_engine::RulesEngine;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ pub struct FileStorageAdapter {
     rules_cache: RwLock<Vec<Rule>>,
     whitelist_cache: RwLock<Vec<String>>,
     metrics_cache: RwLock<FlowMetrics>,
+    proxies_cache: RwLock<Vec<UpstreamProxy>>,
 }
 
 impl FileStorageAdapter {
@@ -30,6 +31,7 @@ impl FileStorageAdapter {
             rules_cache: RwLock::new(RulesEngine::builtin_rules()),
             whitelist_cache: RwLock::new(Vec::new()),
             metrics_cache: RwLock::new(FlowMetrics::new(3.5)),
+            proxies_cache: RwLock::new(Vec::new()),
         };
 
         adapter.load_persisted_state();
@@ -46,6 +48,10 @@ impl FileStorageAdapter {
 
     fn metrics_file(&self) -> PathBuf {
         self.base_dir.join(".state").join("metrics.json")
+    }
+
+    fn proxies_file(&self) -> PathBuf {
+        self.base_dir.join(".state").join("proxies.json")
     }
 
     fn atomic_write_file(&self, target_path: &Path, content: &str) -> Result<(), String> {
@@ -96,6 +102,14 @@ impl FileStorageAdapter {
         if let Ok(data) = fs::read_to_string(self.metrics_file()) {
             if let Ok(loaded) = serde_json::from_str::<FlowMetrics>(&data) {
                 if let Ok(mut lock) = self.metrics_cache.write() {
+                    *lock = loaded;
+                }
+            }
+        }
+
+        if let Ok(data) = fs::read_to_string(self.proxies_file()) {
+            if let Ok(loaded) = serde_json::from_str::<Vec<UpstreamProxy>>(&data) {
+                if let Ok(mut lock) = self.proxies_cache.write() {
                     *lock = loaded;
                 }
             }
@@ -157,6 +171,26 @@ impl MetricsStoragePort for FileStorageAdapter {
         let json = serde_json::to_string_pretty(metrics).map_err(|e| e.to_string())?;
         self.atomic_write_file(&self.metrics_file(), &json)?;
         *lock = metrics.clone();
+        Ok(())
+    }
+}
+
+impl ProxyPoolStoragePort for FileStorageAdapter {
+    fn load_proxies(&self) -> Vec<UpstreamProxy> {
+        self.proxies_cache
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_default()
+    }
+
+    fn save_proxies(&self, proxies: &[UpstreamProxy]) -> Result<(), String> {
+        let mut lock = self
+            .proxies_cache
+            .write()
+            .map_err(|e| format!("Lock acquisition error: {e}"))?;
+        let json = serde_json::to_string_pretty(proxies).map_err(|e| e.to_string())?;
+        self.atomic_write_file(&self.proxies_file(), &json)?;
+        *lock = proxies.to_vec();
         Ok(())
     }
 }

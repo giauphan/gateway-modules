@@ -4,12 +4,14 @@
 //! Orchestrates the domain rules engine, metrics recording, and storage ports.
 
 use crate::domain::{
-    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType, Rule,
-    RuleAction, RuleCategory,
+    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType,
+    ProxyRotationStrategy, ProxySelectionQuery, Rule, RuleAction, RuleCategory, UpstreamProxy,
 };
 use crate::ports::{
-    FlowOptimizerPort, MetricsPort, MetricsStoragePort, RuleManagementPort, RuleRepositoryPort,
+    FlowOptimizerPort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
+    RuleManagementPort, RuleRepositoryPort,
 };
+use crate::proxy_pool::ProxyPool;
 use crate::rules_engine::RulesEngine;
 use crate::script_generator::ScriptGenerator;
 use std::sync::{Arc, Mutex, RwLock};
@@ -17,6 +19,7 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct ProxyGuardService {
     rule_repo: Arc<dyn RuleRepositoryPort>,
     metrics_repo: Arc<dyn MetricsStoragePort>,
+    proxy_pool: Arc<ProxyPool>,
     cost_per_gb_usd: RwLock<f64>,
     cached_engine: RwLock<RulesEngine>,
     rule_edit_lock: Mutex<()>,
@@ -27,6 +30,7 @@ impl ProxyGuardService {
     pub fn new(
         rule_repo: Arc<dyn RuleRepositoryPort>,
         metrics_repo: Arc<dyn MetricsStoragePort>,
+        proxy_pool: Arc<ProxyPool>,
         cost_per_gb_usd: f64,
     ) -> Self {
         let rules = rule_repo.load_rules();
@@ -36,11 +40,16 @@ impl ProxyGuardService {
         Self {
             rule_repo,
             metrics_repo,
+            proxy_pool,
             cost_per_gb_usd: RwLock::new(cost_per_gb_usd),
             cached_engine: RwLock::new(engine),
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
         }
+    }
+
+    pub fn proxy_pool(&self) -> &Arc<ProxyPool> {
+        &self.proxy_pool
     }
 
     fn rebuild_engine_locked(&self) {
@@ -243,5 +252,43 @@ impl MetricsPort for ProxyGuardService {
             let blank = FlowMetrics::new(rate);
             let _ = self.metrics_repo.save_metrics(&blank);
         }
+    }
+}
+
+impl ProxyPoolManagementPort for ProxyGuardService {
+    fn add_proxy(&self, proxy: UpstreamProxy) -> Result<String, String> {
+        self.proxy_pool.add_proxy(proxy)
+    }
+
+    fn remove_proxy(&self, id: &str) -> Result<(), String> {
+        self.proxy_pool.remove_proxy(id)
+    }
+
+    fn list_proxies(&self) -> Vec<UpstreamProxy> {
+        self.proxy_pool.list_proxies()
+    }
+
+    fn select_proxy(&self, query: &ProxySelectionQuery) -> Option<UpstreamProxy> {
+        self.proxy_pool.select_proxy(query)
+    }
+
+    fn select_fallback(
+        &self,
+        failed_id: &str,
+        query: &ProxySelectionQuery,
+    ) -> Option<UpstreamProxy> {
+        self.proxy_pool.select_fallback(failed_id, query)
+    }
+
+    fn record_proxy_result(&self, id: &str, success: bool) {
+        self.proxy_pool.record_proxy_result(id, success);
+    }
+
+    fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String> {
+        self.proxy_pool.set_strategy(strategy)
+    }
+
+    fn get_strategy(&self) -> ProxyRotationStrategy {
+        self.proxy_pool.get_strategy()
     }
 }

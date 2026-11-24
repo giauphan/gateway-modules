@@ -1,3 +1,5 @@
+use proxy_guard::domain::ProxyRotationStrategy;
+use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::proxy_server::ProxyServer;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
@@ -12,9 +14,14 @@ use std::time::Duration;
 fn test_proxy_server_intercepts_http_and_https_connect() {
     let temp_dir = std::env::temp_dir().join(format!("pg_srv_test_{}", std::process::id()));
     let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
     let service = Arc::new(ProxyGuardService::new(
         Arc::clone(&storage) as Arc<_>,
         Arc::clone(&storage) as Arc<_>,
+        pool,
         3.5,
     ));
 

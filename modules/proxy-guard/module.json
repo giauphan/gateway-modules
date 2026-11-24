@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard & Traffic Optimizer",
   "short_name": "Proxy Guard",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -171,6 +171,70 @@
             "items": { "type": "string" }
           }
         }
+      }
+    },
+    {
+      "name": "add_upstream_proxy",
+      "description": "Registers one or multiple upstream proxies into the multi-proxy pool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)" },
+          "name": { "type": "string", "description": "Friendly name" },
+          "country": { "type": "string", "description": "ISO country code (e.g. US, VN, SG)" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "proxies": {
+            "type": "array",
+            "description": "Batch list of proxies to add at once"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_upstream_proxies",
+      "description": "Lists all registered upstream proxies in the pool with their health and failure status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_next_proxy",
+      "description": "Selects the next upstream proxy from the pool according to rotation strategy (round-robin, sticky, country). Returns Playwright/Puppeteer ready configs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": { "type": "string", "description": "Optional session key for sticky routing" },
+          "country": { "type": "string", "description": "Optional country filter (e.g. US)" },
+          "tag": { "type": "string", "description": "Optional tag filter" },
+          "preferred_id": { "type": "string", "description": "Optional preferred proxy ID" }
+        }
+      }
+    },
+    {
+      "name": "remove_upstream_proxy",
+      "description": "Removes an upstream proxy from the multi-proxy pool by ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Proxy ID to remove" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "set_rotation_strategy",
+      "description": "Configures proxy rotation strategy (round_robin, random, sticky_session, lowest_failures).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": ["round_robin", "random", "sticky_session", "lowest_failures"],
+            "description": "Rotation strategy"
+          }
+        },
+        "required": ["strategy"]
       }
     }
   ]

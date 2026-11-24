@@ -3,10 +3,12 @@
 //! Clean Architecture: Interface Adapters Layer.
 
 pub mod evaluate;
+pub mod proxy_pool;
 pub mod rules;
 pub mod stats;
 
 pub use evaluate::*;
+pub use proxy_pool::*;
 pub use rules::*;
 pub use stats::*;
 
@@ -92,6 +94,39 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
 
     if clean_path.ends_with("/metrics") {
         return handle_get_metrics(service);
+    }
+
+    if clean_path.ends_with("/proxies/list") {
+        return handle_list_proxies(service);
+    }
+
+    if clean_path.ends_with("/proxies/add") {
+        let body = match extract_request_body(&req) {
+            Ok(b) => b,
+            Err(e) => return make_error_resp(400, &e),
+        };
+        return handle_add_proxy(&body, service);
+    }
+
+    if clean_path.ends_with("/proxies/remove") {
+        let body = match extract_request_body(&req) {
+            Ok(b) => b,
+            Err(e) => return make_error_resp(400, &e),
+        };
+        return handle_remove_proxy(&body, service);
+    }
+
+    if clean_path.ends_with("/proxies/next") {
+        let body = extract_request_body(&req).unwrap_or_else(|_| json!({}));
+        return handle_get_next_proxy(&body, service);
+    }
+
+    if clean_path.ends_with("/proxies/strategy") {
+        let body = match extract_request_body(&req) {
+            Ok(b) => b,
+            Err(e) => return make_error_resp(400, &e),
+        };
+        return handle_set_strategy(&body, service);
     }
 
     if let Some(target) = clean_path.strip_prefix("/custom/proxy-guard/scripts/") {
@@ -202,6 +237,70 @@ fn get_mcp_tools_list() -> Value {
                         "items": { "type": "string" }
                     }
                 }
+            }
+        },
+        {
+            "name": "proxy-guard__add_upstream_proxy",
+            "description": "Registers one or multiple upstream proxies into the multi-proxy pool.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)" },
+                    "name": { "type": "string", "description": "Optional friendly name" },
+                    "country": { "type": "string", "description": "Optional ISO country code (e.g. US, VN, SG)" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "proxies": {
+                        "type": "array",
+                        "description": "Batch list of proxies to add at once"
+                    }
+                }
+            }
+        },
+        {
+            "name": "proxy-guard__list_upstream_proxies",
+            "description": "Lists all registered upstream proxies in the pool with their health and failure status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "proxy-guard__get_next_proxy",
+            "description": "Selects the next upstream proxy from the pool according to rotation strategy (round-robin, sticky, country). Returns Playwright/Puppeteer ready configs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Optional session key for sticky routing" },
+                    "country": { "type": "string", "description": "Optional country filter (e.g. US)" },
+                    "tag": { "type": "string", "description": "Optional tag filter" },
+                    "preferred_id": { "type": "string", "description": "Optional preferred proxy ID" }
+                }
+            }
+        },
+        {
+            "name": "proxy-guard__remove_upstream_proxy",
+            "description": "Removes an upstream proxy from the multi-proxy pool by ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Proxy ID to remove" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "proxy-guard__set_rotation_strategy",
+            "description": "Configures proxy rotation strategy (round_robin, random, sticky_session, lowest_failures).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["round_robin", "random", "sticky_session", "lowest_failures"],
+                        "description": "Rotation strategy"
+                    }
+                },
+                "required": ["strategy"]
             }
         }
     ])

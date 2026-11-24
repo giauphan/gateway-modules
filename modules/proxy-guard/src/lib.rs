@@ -18,6 +18,7 @@ pub mod handlers;
 pub mod mcp;
 pub mod mock_factory;
 pub mod ports;
+pub mod proxy_pool;
 pub mod proxy_server;
 pub mod request_optimizer;
 pub mod rpc;
@@ -28,4 +29,5 @@ pub mod storage;
 
 pub use domain::*;
 pub use ports::*;
+pub use proxy_pool::*;
 pub use service::*;

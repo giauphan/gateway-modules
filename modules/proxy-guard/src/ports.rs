@@ -4,7 +4,8 @@
 //! Ensures high-level business logic is decoupled from transport, frameworks, and storage.
 
 use crate::domain::{
-    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, Rule, RuleCategory,
+    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, ProxyRotationStrategy,
+    ProxySelectionQuery, Rule, RuleCategory, UpstreamProxy,
 };
 
 /// Inbound Port: Application operations for analyzing and optimizing traffic flows.
@@ -71,4 +72,44 @@ pub trait MetricsStoragePort: Send + Sync {
 
     /// Persists metrics to storage.
     fn save_metrics(&self, metrics: &FlowMetrics) -> Result<(), String>;
+}
+
+/// Inbound Port: Managing upstream multi-proxy pool and rotation strategies.
+pub trait ProxyPoolManagementPort: Send + Sync {
+    /// Adds or updates an upstream proxy in the pool.
+    fn add_proxy(&self, proxy: UpstreamProxy) -> Result<String, String>;
+
+    /// Removes an upstream proxy from the pool by ID.
+    fn remove_proxy(&self, id: &str) -> Result<(), String>;
+
+    /// Lists all registered upstream proxies with their health status.
+    fn list_proxies(&self) -> Vec<UpstreamProxy>;
+
+    /// Selects an upstream proxy from the pool based on criteria (Round-Robin, Sticky, Country, Tag).
+    fn select_proxy(&self, query: &ProxySelectionQuery) -> Option<UpstreamProxy>;
+
+    /// Returns a fallback proxy if the primary proxy fails.
+    fn select_fallback(
+        &self,
+        failed_id: &str,
+        query: &ProxySelectionQuery,
+    ) -> Option<UpstreamProxy>;
+
+    /// Records the success or failure outcome of forwarding through a proxy.
+    fn record_proxy_result(&self, id: &str, success: bool);
+
+    /// Updates the rotation strategy (e.g. round_robin, random, sticky_session, lowest_failures).
+    fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String>;
+
+    /// Returns the current rotation strategy.
+    fn get_strategy(&self) -> ProxyRotationStrategy;
+}
+
+/// Outward Port: Storage abstraction for upstream proxy pool persistence.
+pub trait ProxyPoolStoragePort: Send + Sync {
+    /// Loads configured upstream proxies from storage.
+    fn load_proxies(&self) -> Vec<UpstreamProxy>;
+
+    /// Persists upstream proxies to storage.
+    fn save_proxies(&self, proxies: &[UpstreamProxy]) -> Result<(), String>;
 }

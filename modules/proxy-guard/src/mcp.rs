@@ -3,8 +3,10 @@
 //! Clean Architecture: Interface Adapters (MCP).
 //! Exposes domain capabilities directly to AI agents via Toolcase Gateway.
 
-use crate::domain::{FlowRequestDto, RuleCategory};
-use crate::ports::{FlowOptimizerPort, MetricsPort, RuleManagementPort};
+use crate::domain::{
+    FlowRequestDto, ProxyRotationStrategy, ProxySelectionQuery, RuleCategory, UpstreamProxy,
+};
+use crate::ports::{FlowOptimizerPort, MetricsPort, ProxyPoolManagementPort, RuleManagementPort};
 use crate::service::ProxyGuardService;
 use serde_json::{json, Value};
 
@@ -150,6 +152,147 @@ pub fn handle_mcp_tool_request(
                 "status": "success",
                 "message": "Rules configuration updated successfully"
             }))
+        }
+        "add_upstream_proxy" => {
+            if let Some(arr) = arguments.get("proxies").and_then(|v| v.as_array()) {
+                let mut added_ids = Vec::with_capacity(arr.len());
+                let mut errors = Vec::new();
+
+                for (idx, item) in arr.iter().enumerate() {
+                    let proxy_res = match item {
+                        Value::String(s) => UpstreamProxy::parse(s, None, None, None),
+                        Value::Object(obj) => {
+                            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            let name = obj.get("name").and_then(|v| v.as_str());
+                            let country = obj.get("country").and_then(|v| v.as_str());
+                            let tags = obj.get("tags").and_then(|v| v.as_array()).map(|t| {
+                                t.iter()
+                                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            });
+                            UpstreamProxy::parse(url, name, country, tags)
+                        }
+                        _ => Err(format!("Item at index {idx} has invalid format")),
+                    };
+
+                    match proxy_res {
+                        Ok(proxy) => match service.add_proxy(proxy) {
+                            Ok(id) => added_ids.push(id),
+                            Err(e) => errors.push(format!("Index {idx}: {e}")),
+                        },
+                        Err(e) => errors.push(format!("Index {idx}: {e}")),
+                    }
+                }
+
+                make_mcp_success(&json!({
+                    "status": "success",
+                    "added_count": added_ids.len(),
+                    "added_ids": added_ids,
+                    "errors": errors
+                }))
+            } else {
+                let url = match arguments.get("url").and_then(|v| v.as_str()) {
+                    Some(u) => u,
+                    None => return make_mcp_error("Missing required parameter 'url'"),
+                };
+                let name = arguments.get("name").and_then(|v| v.as_str());
+                let country = arguments.get("country").and_then(|v| v.as_str());
+                let tags = arguments.get("tags").and_then(|v| v.as_array()).map(|t| {
+                    t.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                });
+
+                match UpstreamProxy::parse(url, name, country, tags) {
+                    Ok(proxy) => match service.add_proxy(proxy) {
+                        Ok(id) => make_mcp_success(&json!({
+                            "status": "success",
+                            "message": "Proxy registered in pool",
+                            "id": id
+                        })),
+                        Err(e) => make_mcp_error(&e),
+                    },
+                    Err(e) => make_mcp_error(&format!("Invalid proxy URL: {e}")),
+                }
+            }
+        }
+        "list_upstream_proxies" => {
+            let list = service.list_proxies();
+            let strategy = service.get_strategy();
+            make_mcp_success(&json!({
+                "status": "success",
+                "strategy": strategy,
+                "total_proxies": list.len(),
+                "proxies": list
+            }))
+        }
+        "get_next_proxy" => {
+            let query = ProxySelectionQuery {
+                session_id: arguments
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                country: arguments
+                    .get("country")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                tag: arguments
+                    .get("tag")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                preferred_id: arguments
+                    .get("preferred_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            };
+
+            match service.select_proxy(&query) {
+                Some(proxy) => {
+                    let playwright_cfg = proxy.to_playwright_config();
+                    make_mcp_success(&json!({
+                        "status": "success",
+                        "proxy": proxy,
+                        "playwright_config": playwright_cfg,
+                        "curl_arg": format!("-x {}", proxy.url)
+                    }))
+                }
+                None => make_mcp_error("No available upstream proxy in pool"),
+            }
+        }
+        "remove_upstream_proxy" => {
+            let id = match arguments.get("id").and_then(|v| v.as_str()) {
+                Some(i) => i,
+                None => return make_mcp_error("Missing required parameter 'id'"),
+            };
+            match service.remove_proxy(id) {
+                Ok(_) => make_mcp_success(&json!({
+                    "status": "success",
+                    "message": format!("Proxy '{id}' removed from pool")
+                })),
+                Err(e) => make_mcp_error(&e),
+            }
+        }
+        "set_rotation_strategy" => {
+            let strat_str = match arguments.get("strategy").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return make_mcp_error("Missing parameter 'strategy'"),
+            };
+
+            let strat = match strat_str.to_ascii_lowercase().as_str() {
+                "round_robin" => ProxyRotationStrategy::RoundRobin,
+                "random" => ProxyRotationStrategy::Random,
+                "sticky_session" | "sticky" => ProxyRotationStrategy::StickySession,
+                "lowest_failures" | "health" => ProxyRotationStrategy::LowestFailures,
+                _ => return make_mcp_error("Invalid strategy. Options: round_robin, random, sticky_session, lowest_failures"),
+            };
+
+            match service.set_strategy(strat) {
+                Ok(_) => make_mcp_success(&json!({
+                    "status": "success",
+                    "message": format!("Strategy set to {:?}", strat)
+                })),
+                Err(e) => make_mcp_error(&e),
+            }
         }
         _ => make_mcp_error(&format!("Unknown MCP tool '{tool_name}'")),
     }

@@ -1,18 +1,29 @@
+use proxy_guard::domain::ProxyRotationStrategy;
 use proxy_guard::handlers::handle_request;
+use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
 use serde_json::json;
 use std::sync::Arc;
 
+fn make_test_service(temp_dir: &std::path::Path) -> ProxyGuardService {
+    let storage = Arc::new(FileStorageAdapter::new(temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    )
+}
+
 #[test]
 fn test_rpc_health_endpoint() {
     let temp_dir = std::env::temp_dir().join(format!("pg_rpc_test_{}", std::process::id()));
-    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
-    let service = ProxyGuardService::new(
-        Arc::clone(&storage) as Arc<_>,
-        Arc::clone(&storage) as Arc<_>,
-        3.5,
-    );
+    let service = make_test_service(&temp_dir);
 
     let req = json!({
         "method": "GET",
@@ -29,12 +40,7 @@ fn test_rpc_health_endpoint() {
 #[test]
 fn test_rpc_evaluate_url() {
     let temp_dir = std::env::temp_dir().join(format!("pg_rpc_eval_{}", std::process::id()));
-    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
-    let service = ProxyGuardService::new(
-        Arc::clone(&storage) as Arc<_>,
-        Arc::clone(&storage) as Arc<_>,
-        3.5,
-    );
+    let service = make_test_service(&temp_dir);
 
     let req = json!({
         "method": "POST",
@@ -55,12 +61,7 @@ fn test_rpc_evaluate_url() {
 #[test]
 fn test_mcp_tool_invocation() {
     let temp_dir = std::env::temp_dir().join(format!("pg_mcp_test_{}", std::process::id()));
-    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
-    let service = ProxyGuardService::new(
-        Arc::clone(&storage) as Arc<_>,
-        Arc::clone(&storage) as Arc<_>,
-        3.5,
-    );
+    let service = make_test_service(&temp_dir);
 
     let req = json!({
         "method": "POST",

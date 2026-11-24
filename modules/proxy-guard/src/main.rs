@@ -4,7 +4,10 @@
 //! Reads JSON requests from stdin, dispatches to interface adapter handlers,
 //! and writes JSON responses to stdout.
 
+use proxy_guard::domain::{ProxyRotationStrategy, UpstreamProxy};
 use proxy_guard::handlers::handle_request;
+use proxy_guard::ports::ProxyPoolManagementPort;
+use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::proxy_server::ProxyServer;
 use proxy_guard::rpc::make_json_resp;
 use proxy_guard::service::ProxyGuardService;
@@ -53,9 +56,15 @@ fn main() {
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(3.5);
 
+    let proxy_pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+
     let service = Arc::new(ProxyGuardService::new(
         Arc::clone(&storage) as Arc<_>,
         Arc::clone(&storage) as Arc<_>,
+        proxy_pool,
         cost_usd,
     ));
 
@@ -75,6 +84,14 @@ fn main() {
             i += 2;
         } else {
             i += 1;
+        }
+    }
+
+    if let Some(ref up) = upstream_proxy {
+        if service.list_proxies().is_empty() {
+            if let Ok(parsed) = UpstreamProxy::parse(up, Some("default-upstream"), None, None) {
+                let _ = service.add_proxy(parsed);
+            }
         }
     }
 

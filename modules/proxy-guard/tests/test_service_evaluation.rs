@@ -1,5 +1,6 @@
-use proxy_guard::domain::FlowRequestDto;
+use proxy_guard::domain::{FlowRequestDto, ProxyRotationStrategy};
 use proxy_guard::ports::{FlowOptimizerPort, MetricsPort};
+use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
 use std::sync::Arc;
@@ -8,9 +9,14 @@ use std::sync::Arc;
 fn test_flow_optimization_drastic_reduction() {
     let temp_dir = std::env::temp_dir().join(format!("pg_test_{}", std::process::id()));
     let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
     let service = ProxyGuardService::new(
         Arc::clone(&storage) as Arc<_>,
         Arc::clone(&storage) as Arc<_>,
+        pool,
         3.5,
     );
 

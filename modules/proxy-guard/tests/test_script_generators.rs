@@ -1,4 +1,6 @@
+use proxy_guard::domain::ProxyRotationStrategy;
 use proxy_guard::ports::FlowOptimizerPort;
+use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
 use std::sync::Arc;
@@ -7,9 +9,14 @@ use std::sync::Arc;
 fn test_script_generation_targets() {
     let temp_dir = std::env::temp_dir().join(format!("pg_script_test_{}", std::process::id()));
     let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
     let service = ProxyGuardService::new(
         Arc::clone(&storage) as Arc<_>,
         Arc::clone(&storage) as Arc<_>,
+        pool,
         3.5,
     );
 
