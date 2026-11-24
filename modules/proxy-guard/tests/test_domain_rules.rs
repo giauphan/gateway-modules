@@ -157,3 +157,152 @@ fn test_builtin_rules_intercept_browser_noise() {
     );
     assert!(d6.is_blocked());
 }
+
+#[test]
+fn test_all_pattern_types_matching() {
+    let exact = Rule::new(
+        "exact-1",
+        "Exact Match",
+        RuleCategory::Custom,
+        PatternType::ExactDomain,
+        "api.example.com",
+        RuleAction::Block403,
+        100,
+        "Exact domain only",
+    );
+    assert!(exact.matches("api.example.com", "https://api.example.com/data"));
+    assert!(exact.matches("api.example.com:443", "https://api.example.com/data"));
+    assert!(!exact.matches("sub.api.example.com", "https://sub.api.example.com/data"));
+
+    let suffix = Rule::new(
+        "suffix-1",
+        "Suffix Match",
+        RuleCategory::Custom,
+        PatternType::DomainSuffix,
+        "example.com",
+        RuleAction::Block403,
+        100,
+        "Domain suffix match",
+    );
+    assert!(suffix.matches("example.com", "https://example.com/"));
+    assert!(suffix.matches("api.example.com", "https://api.example.com/"));
+    assert!(!suffix.matches("badexample.com", "https://badexample.com/"));
+
+    let url_contains = Rule::new(
+        "url-1",
+        "URL Contains",
+        RuleCategory::Custom,
+        PatternType::UrlContains,
+        "/telemetry/v2",
+        RuleAction::Block204,
+        100,
+        "Path snippet",
+    );
+    assert!(url_contains.matches("any.com", "https://any.com/api/telemetry/v2?id=1"));
+    assert!(!url_contains.matches("any.com", "https://any.com/api/telemetry/v1?id=1"));
+
+    let ext = Rule::new(
+        "ext-1",
+        "Extension Match",
+        RuleCategory::Custom,
+        PatternType::Extension,
+        ".webm",
+        RuleAction::Block204,
+        100,
+        "Video extension",
+    );
+    assert!(ext.matches("cdn.net", "https://cdn.net/video/sample.webm"));
+    assert!(ext.matches("cdn.net", "https://cdn.net/video/sample.webm?token=abc"));
+    assert!(!ext.matches("cdn.net", "https://cdn.net/video/sample.mp4"));
+}
+
+#[test]
+fn test_disabled_rule_and_priority_order() {
+    let mut disabled = Rule::new(
+        "dis-1",
+        "Disabled Rule",
+        RuleCategory::Custom,
+        PatternType::ExactDomain,
+        "tracker.com",
+        RuleAction::Block403,
+        100,
+        "Should not match",
+    );
+    disabled.enabled = false;
+    assert!(!disabled.matches("tracker.com", "https://tracker.com/"));
+
+    let r_low = Rule::new(
+        "low",
+        "Low Priority",
+        RuleCategory::Custom,
+        PatternType::DomainSuffix,
+        "priority-test.com",
+        RuleAction::Block403,
+        10,
+        "Low priority",
+    );
+    let r_high = Rule::new(
+        "high",
+        "High Priority",
+        RuleCategory::Custom,
+        PatternType::DomainSuffix,
+        "priority-test.com",
+        RuleAction::BypassDirect,
+        100,
+        "High priority",
+    );
+
+    let engine = RulesEngine::new(vec![r_low, r_high], Vec::new());
+    let decision = engine.evaluate("https://api.priority-test.com/data", "GET", None);
+    assert_eq!(decision.matched_rule_id.as_deref(), Some("high"));
+    assert_eq!(decision.action, RuleAction::BypassDirect);
+}
+
+#[test]
+fn test_resource_type_inference_and_sizes() {
+    assert_eq!(
+        ResourceType::infer("https://a.com/script.mjs", None),
+        ResourceType::Script
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/style.css", None),
+        ResourceType::Stylesheet
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/pic.webp", None),
+        ResourceType::Image
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/font.ttf", None),
+        ResourceType::Font
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/clip.mp3", None),
+        ResourceType::MediaVideo
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/unknown", None),
+        ResourceType::Other
+    );
+
+    // Explicit hints override extensions
+    assert_eq!(
+        ResourceType::infer("https://a.com/asset", Some("script")),
+        ResourceType::Script
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/asset", Some("beacon")),
+        ResourceType::Beacon
+    );
+    assert_eq!(
+        ResourceType::infer("https://a.com/asset", Some("document")),
+        ResourceType::Document
+    );
+
+    assert_eq!(ResourceType::MediaVideo.typical_byte_size(), 8_000_000);
+    assert_eq!(ResourceType::Image.typical_byte_size(), 250_000);
+    assert_eq!(ResourceType::Font.typical_byte_size(), 120_000);
+    assert_eq!(ResourceType::Script.typical_byte_size(), 85_000);
+    assert_eq!(ResourceType::Stylesheet.typical_byte_size(), 45_000);
+    assert_eq!(ResourceType::Beacon.typical_byte_size(), 500);
+}

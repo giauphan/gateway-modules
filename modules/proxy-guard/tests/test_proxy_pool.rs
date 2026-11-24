@@ -311,3 +311,71 @@ fn test_mcp_proxy_tools() {
         serde_json::from_str(resp_get["body"].as_str().unwrap()).unwrap();
     assert_eq!(mcp_res["isError"], false);
 }
+
+#[test]
+fn test_lowest_failures_rotation_strategy() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_pool_lf_{}", std::process::id()));
+    let service = make_service_with_pool(&temp_dir);
+
+    service
+        .set_strategy(ProxyRotationStrategy::LowestFailures)
+        .unwrap();
+    assert_eq!(
+        service.get_strategy(),
+        ProxyRotationStrategy::LowestFailures
+    );
+
+    service
+        .add_proxy(UpstreamProxy::parse("http://1.1.1.1:8080", Some("p1"), None, None).unwrap())
+        .unwrap();
+    service
+        .add_proxy(UpstreamProxy::parse("http://2.2.2.2:8080", Some("p2"), None, None).unwrap())
+        .unwrap();
+    service
+        .add_proxy(UpstreamProxy::parse("http://3.3.3.3:8080", Some("p3"), None, None).unwrap())
+        .unwrap();
+
+    // Record failures for p1 and p2
+    service.record_proxy_result("1.1.1.1:8080", false);
+    service.record_proxy_result("1.1.1.1:8080", false);
+    service.record_proxy_result("2.2.2.2:8080", false);
+    // p3 has 0 failures
+
+    let q = ProxySelectionQuery::default();
+    let sel = service.select_proxy(&q).unwrap();
+    assert_eq!(
+        sel.id, "3.3.3.3:8080",
+        "Lowest failures proxy must be selected"
+    );
+
+    // Fail p3 twice, p2 now has lowest failures (1 failure vs 2)
+    service.record_proxy_result("3.3.3.3:8080", false);
+    service.record_proxy_result("3.3.3.3:8080", false);
+    let sel2 = service.select_proxy(&q).unwrap();
+    assert_eq!(sel2.id, "2.2.2.2:8080");
+}
+
+#[test]
+fn test_proxy_removal_and_invalid_inputs() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_pool_remove_{}", std::process::id()));
+    let service = make_service_with_pool(&temp_dir);
+
+    service
+        .add_proxy(UpstreamProxy::parse("http://10.0.0.1:8080", Some("p1"), None, None).unwrap())
+        .unwrap();
+    assert_eq!(service.list_proxies().len(), 1);
+
+    // Remove existing
+    assert!(service.remove_proxy("10.0.0.1:8080").is_ok());
+    assert_eq!(service.list_proxies().len(), 0);
+
+    // Remove non-existent returns Err
+    assert!(service.remove_proxy("10.0.0.1:8080").is_err());
+
+    // Invalid proxy formats return Err
+    assert!(UpstreamProxy::parse("", None, None, None).is_err());
+    assert!(UpstreamProxy::parse("invalid_no_port", None, None, None).is_err());
+    assert!(UpstreamProxy::parse("http://host:not_a_port", None, None, None).is_err());
+    assert!(UpstreamProxy::parse("10.0.0.1:99999", None, None, None).is_err());
+    assert!(UpstreamProxy::parse("[::1", None, None, None).is_err());
+}
