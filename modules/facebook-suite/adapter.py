@@ -75,35 +75,22 @@ def _handle_api_resp(res: dict, success_code: int = 200) -> dict:
     return json_resp(success_code, res)
 
 
-def _is_safe_video_path(p: Path) -> bool:
-    """Verifies that the target path stays strictly within allowed directories (no path traversal)."""
-    try:
-        resolved = p.resolve(strict=True)
-        allowed_roots = [
-            Path(tempfile.gettempdir()).resolve(),
-            Path("/tmp").resolve(),
-            Path.cwd().resolve(),
-        ]
-        media_env = os.environ.get("MEDIA_DIR")
-        if media_env:
-            allowed_roots.append(Path(media_env).resolve())
-        return any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots)
-    except (ValueError, RuntimeError, OSError):
-        return False
-
-
 def _extract_video_bytes(body: dict) -> Tuple[Optional[bytes], str]:
     """Extracts raw video bytes and filename from video_path, file_path, or video_base64."""
     video_bytes = None
     file_name = str(body.get("file_name") or "")
     if "video_path" in body or "file_path" in body:
         path_str = str(body.get("video_path") or body.get("file_path"))
-        if ".." not in path_str and not path_str.startswith("\x00"):
-            p = Path(path_str)
-            if p.is_file() and _is_safe_video_path(p):
+        try:
+            p = Path(path_str).resolve()
+            allowed_base = Path(os.environ.get("MEDIA_DIR") or Path.cwd()).resolve()
+            temp_dir = Path(tempfile.gettempdir()).resolve()
+            if p.is_file() and (p.is_relative_to(allowed_base) or p.is_relative_to(temp_dir)):
                 video_bytes = p.read_bytes()
                 if not file_name:
                     file_name = p.name
+        except (ValueError, OSError, RuntimeError):
+            pass
     elif "video_base64" in body and body["video_base64"]:
         video_bytes = base64.b64decode(str(body["video_base64"]))
     return video_bytes, file_name or "video.mp4"
