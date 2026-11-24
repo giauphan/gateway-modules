@@ -5,6 +5,7 @@
 
 use crate::mock_factory::MockFactory;
 use crate::ports::FlowOptimizerPort;
+use crate::request_optimizer::optimize_request_headers;
 use crate::service::ProxyGuardService;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
@@ -349,11 +350,12 @@ fn handle_http_request(
         }
     };
 
-    let _ = upstream.write_all(header_bytes);
+    // Optimize headers: strip tracking fingerprinting headers and compress
+    let optimized_headers = optimize_request_headers(header_bytes);
+    let _ = upstream.write_all(&optimized_headers);
     if !body_prefix.is_empty() {
         let _ = upstream.write_all(body_prefix);
     }
-
     // Clear request reception timeouts before streaming response
     let _ = client.set_read_timeout(None);
     let _ = client.set_write_timeout(None);

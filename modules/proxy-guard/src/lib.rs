@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod mock_factory;
 pub mod ports;
 pub mod proxy_server;
+pub mod request_optimizer;
 pub mod rpc;
 pub mod rules_engine;
 pub mod script_generator;
