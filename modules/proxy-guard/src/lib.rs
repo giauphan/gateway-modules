@@ -26,6 +26,7 @@ pub mod rules_engine;
 pub mod script_generator;
 pub mod service;
 pub mod storage;
+pub mod ui;
 
 pub use domain::*;
 pub use ports::*;

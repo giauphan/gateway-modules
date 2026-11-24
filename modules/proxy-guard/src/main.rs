@@ -68,36 +68,68 @@ fn main() {
         cost_usd,
     ));
 
-    // Check optional proxy server port from args or env
+    // Check optional proxy server port and upstream proxies from args or env
     let mut proxy_port: Option<u16> = std::env::var("PROXY_GUARD_PROXY_PORT")
         .ok()
         .and_then(|p| p.parse().ok());
-    let mut upstream_proxy: Option<String> = std::env::var("PROXY_GUARD_UPSTREAM").ok();
+
+    let mut raw_upstream_inputs: Vec<String> = Vec::new();
+    if let Ok(pool_env) = std::env::var("PROXY_GUARD_UPSTREAM_POOL") {
+        raw_upstream_inputs.push(pool_env);
+    }
+    if let Ok(up_env) = std::env::var("PROXY_GUARD_UPSTREAM") {
+        raw_upstream_inputs.push(up_env);
+    }
+
+    let mut configured_strategy = std::env::var("PROXY_GUARD_ROTATION_STRATEGY").ok();
 
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--proxy-port" && i + 1 < args.len() {
             proxy_port = args[i + 1].parse().ok();
             i += 2;
-        } else if args[i] == "--upstream" && i + 1 < args.len() {
-            upstream_proxy = Some(args[i + 1].clone());
+        } else if (args[i] == "--upstream" || args[i] == "--upstream-pool") && i + 1 < args.len() {
+            raw_upstream_inputs.push(args[i + 1].clone());
+            i += 2;
+        } else if (args[i] == "--strategy" || args[i] == "--rotation-strategy")
+            && i + 1 < args.len()
+        {
+            configured_strategy = Some(args[i + 1].clone());
             i += 2;
         } else {
             i += 1;
         }
     }
 
-    if let Some(ref up) = upstream_proxy {
-        if service.list_proxies().is_empty() {
-            if let Ok(parsed) = UpstreamProxy::parse(up, Some("default-upstream"), None, None) {
-                let _ = service.add_proxy(parsed);
+    // Configure rotation strategy if specified
+    if let Some(ref strat_str) = configured_strategy {
+        let strat = match strat_str.to_ascii_lowercase().as_str() {
+            "round_robin" => ProxyRotationStrategy::RoundRobin,
+            "random" => ProxyRotationStrategy::Random,
+            "sticky_session" | "sticky" => ProxyRotationStrategy::StickySession,
+            "lowest_failures" | "health" => ProxyRotationStrategy::LowestFailures,
+            _ => ProxyRotationStrategy::RoundRobin,
+        };
+        let _ = service.set_strategy(strat);
+    }
+
+    // Populate upstream proxies (split by newline, comma, semicolon)
+    for raw in raw_upstream_inputs {
+        for line in raw.split(['\n', ',', ';']) {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                if let Ok(parsed) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    let _ = service.add_proxy(parsed);
+                }
             }
         }
     }
 
+    let default_upstream = service.list_proxies().first().map(|p| p.url.clone());
+
     if let Some(port) = proxy_port {
         if port > 0 {
-            let server = ProxyServer::new(port, upstream_proxy, Arc::clone(&service));
+            let server = ProxyServer::new(port, default_upstream, Arc::clone(&service));
             match server.start_background() {
                 Ok((_handle, bound_port)) => {
                     eprintln!(

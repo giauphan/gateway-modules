@@ -23,11 +23,26 @@
     "namespace": "/custom/proxy-guard",
     "fields": [
       {
+        "key": "upstream_proxy_pool",
+        "label": "Upstream Multi-Proxy Pool (1 per line)",
+        "type": "textarea",
+        "placeholder": "http://user1:pass1@us-proxy.com:8080\nsocks5://user2:pass2@de-proxy.com:1080\n10.0.0.1:9000:user3:pass3",
+        "description": "Enter multiple upstream proxies (one per line or comma-separated). Automatically balanced and rotated."
+      },
+      {
+        "key": "rotation_strategy",
+        "label": "Proxy Rotation Strategy",
+        "type": "text",
+        "default": "round_robin",
+        "placeholder": "round_robin, sticky_session, lowest_failures, random",
+        "description": "Load balancing algorithm: round_robin, sticky_session, lowest_failures, or random"
+      },
+      {
         "key": "upstream_proxy_url",
-        "label": "Upstream Paid Proxy URL",
+        "label": "Single Upstream Proxy URL (Fallback)",
         "type": "text",
         "placeholder": "http://user:pass@pr.oxylabs.io:7777",
-        "description": "Upstream residential/datacenter proxy endpoint that costs bandwidth"
+        "description": "Single upstream proxy URL fallback if multi-proxy pool is empty"
       },
       {
         "key": "proxy_listener_port",

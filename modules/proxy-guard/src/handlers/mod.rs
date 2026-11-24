@@ -48,7 +48,7 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
         return make_json_resp(200, json!({ "tools": get_mcp_tools_list() }));
     }
 
-    // 2. Health Check
+    // 2. Health Check & Interactive UI Dashboard
     if path == "/health" || path == "/custom/proxy-guard/health" || path.ends_with("/health") {
         return make_json_resp(
             200,
@@ -58,6 +58,11 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
                 "version": env!("CARGO_PKG_VERSION")
             }),
         );
+    }
+
+    if path == "/ui" || path == "/custom/proxy-guard/ui" || path.ends_with("/ui") {
+        let html = crate::ui::render_dashboard_html(service);
+        return crate::rpc::make_text_resp(200, "text/html; charset=utf-8", &html);
     }
 
     // 3. OpenAI-Compatible Capabilities (models, chat_completions)

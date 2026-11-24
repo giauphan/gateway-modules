@@ -284,3 +284,20 @@ fn test_not_found_and_bad_request_routes() {
     let bad_resp = handle_request(bad_req, &service);
     assert_eq!(bad_resp["status"], 400);
 }
+
+#[test]
+fn test_dashboard_ui_endpoint() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_ui_test_{}", std::process::id()));
+    let service = make_test_service(&temp_dir);
+
+    let req = json!({
+        "method": "GET",
+        "path": "/custom/proxy-guard/ui"
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    let body_str = resp["body"].as_str().unwrap();
+    assert!(body_str.contains("Proxy Guard Dashboard"));
+    assert!(body_str.contains("Registered Upstream Proxies"));
+    assert!(body_str.contains("Add Multiple Upstream Proxies"));
+}
