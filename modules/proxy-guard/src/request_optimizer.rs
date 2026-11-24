@@ -88,8 +88,9 @@ static STRIPPED_REQUEST_HEADERS: &[&str] = &[
     "sec-ch-ua-wow64",
     "sec-ch-prefers-color-scheme",
     "sec-ch-prefers-reduced-motion",
-    // Downstream proxy authorization (never leak client credentials to upstream)
+    // Downstream proxy headers (never leak client credentials or connection state to upstream)
     "proxy-authorization",
+    "proxy-connection",
     // No referrer sent - reduces analytics triggering
     "referer",
     // Privacy / tracking headers

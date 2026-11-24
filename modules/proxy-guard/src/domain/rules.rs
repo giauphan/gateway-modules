@@ -193,7 +193,11 @@ impl Rule {
         match self.pattern_type {
             PatternType::ExactDomain => clean_host == self.pattern,
             PatternType::DomainSuffix => {
-                clean_host == self.pattern || clean_host.ends_with(&format!(".{}", self.pattern))
+                clean_host == self.pattern
+                    || (clean_host.ends_with(&self.pattern)
+                        && clean_host
+                            .strip_suffix(&self.pattern)
+                            .is_some_and(|prefix| prefix.ends_with('.')))
             }
             PatternType::UrlContains => full_url.to_ascii_lowercase().contains(&self.pattern),
             PatternType::Extension => {

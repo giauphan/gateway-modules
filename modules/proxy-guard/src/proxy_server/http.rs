@@ -2,8 +2,11 @@
 //!
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 
-use super::utils::{base64_encode, extract_host_port, parse_content_length, try_connect_socket};
-use crate::domain::{ProxySelectionQuery, UpstreamProxy};
+use super::utils::{
+    base64_encode, extract_host_port, is_chunked_transfer_encoding, parse_content_length,
+    perform_socks5_connect, try_connect_socket, try_connect_target_socket,
+};
+use crate::domain::{ProxyProtocol, ProxySelectionQuery, UpstreamProxy};
 use crate::mock_factory::MockFactory;
 use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
 use crate::request_optimizer::optimize_request_headers;
@@ -67,22 +70,24 @@ pub fn handle_http_request(
     // Optimize headers: strip tracking fingerprinting headers and compress
     let mut optimized_headers = optimize_request_headers(header_bytes);
 
-    // If upstream proxy has auth, inject Proxy-Authorization
+    // If upstream proxy has auth and is HTTP, inject Proxy-Authorization
     if let Some(ref proxy) = proxy_opt {
-        if let Some(ref a) = proxy.auth {
-            let creds = format!("{}:{}", a.username, a.password);
-            let auth_line = format!(
-                "Proxy-Authorization: Basic {}\r\n",
-                base64_encode(creds.as_bytes())
-            );
-            // Insert auth line right before trailing \r\n
-            if optimized_headers.ends_with(b"\r\n\r\n") {
-                let insert_pos = optimized_headers.len() - 2;
-                let mut new_hdr = Vec::with_capacity(optimized_headers.len() + auth_line.len());
-                new_hdr.extend_from_slice(&optimized_headers[..insert_pos]);
-                new_hdr.extend_from_slice(auth_line.as_bytes());
-                new_hdr.extend_from_slice(b"\r\n");
-                optimized_headers = new_hdr;
+        if proxy.protocol == ProxyProtocol::Http {
+            if let Some(ref a) = proxy.auth {
+                let creds = format!("{}:{}", a.username, a.password);
+                let auth_line = format!(
+                    "Proxy-Authorization: Basic {}\r\n",
+                    base64_encode(creds.as_bytes())
+                );
+                // Insert auth line right before trailing \r\n
+                if optimized_headers.ends_with(b"\r\n\r\n") {
+                    let insert_pos = optimized_headers.len() - 2;
+                    let mut new_hdr = Vec::with_capacity(optimized_headers.len() + auth_line.len());
+                    new_hdr.extend_from_slice(&optimized_headers[..insert_pos]);
+                    new_hdr.extend_from_slice(auth_line.as_bytes());
+                    new_hdr.extend_from_slice(b"\r\n");
+                    optimized_headers = new_hdr;
+                }
             }
         }
     }
@@ -105,18 +110,36 @@ pub fn handle_http_request(
         return;
     }
 
-    // Forward any remaining body bytes according to Content-Length
+    // Forward request body according to Content-Length or Transfer-Encoding: chunked
     let content_len = parse_content_length(header_bytes).unwrap_or(0);
-    if body_prefix.len() < content_len {
+    if is_chunked_transfer_encoding(header_bytes) {
+        let mut body_tracker = body_prefix.to_vec();
+        let mut chunk_buf = [0u8; 4096];
+        while !body_tracker.windows(5).any(|w| w == b"0\r\n\r\n")
+            && !body_tracker.ends_with(b"0\r\n\r\n")
+        {
+            match client.read(&mut chunk_buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if upstream.write_all(&chunk_buf[..n]).is_err() {
+                        if let Some(ref proxy) = proxy_opt {
+                            service.record_proxy_result(&proxy.id, false);
+                        }
+                        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                        return;
+                    }
+                    body_tracker.extend_from_slice(&chunk_buf[..n]);
+                }
+            }
+        }
+    } else if body_prefix.len() < content_len {
         let mut remaining = content_len - body_prefix.len();
         let mut buf = [0u8; 8192];
         while remaining > 0 {
             let to_read = remaining.min(buf.len());
             match client.read(&mut buf[..to_read]) {
                 Ok(0) | Err(_) => {
-                    if let Some(ref proxy) = proxy_opt {
-                        service.record_proxy_result(&proxy.id, false);
-                    }
+                    // Client disconnected early; do not misattribute to proxy failure
                     let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
                     return;
                 }
@@ -169,7 +192,19 @@ fn dial_upstream(
     if let Some(proxy) = service.select_proxy(query) {
         let addr = format!("{}:{}", proxy.host, proxy.port);
         if let Some(stream) = try_connect_socket(&addr) {
-            return Some((stream, Some(proxy)));
+            if proxy.protocol == ProxyProtocol::Socks5 {
+                let (th, tp) = target_host_port
+                    .split_once(':')
+                    .unwrap_or((target_host_port, "80"));
+                let port_num = tp.parse::<u16>().unwrap_or(80);
+                if let Some(socks_stream) =
+                    perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
+                {
+                    return Some((socks_stream, Some(proxy)));
+                }
+            } else {
+                return Some((stream, Some(proxy)));
+            }
         }
 
         // Connection failed! Record failure and try fallback proxy
@@ -177,7 +212,19 @@ fn dial_upstream(
         if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
             let fb_addr = format!("{}:{}", fallback_proxy.host, fallback_proxy.port);
             if let Some(stream) = try_connect_socket(&fb_addr) {
-                return Some((stream, Some(fallback_proxy)));
+                if fallback_proxy.protocol == ProxyProtocol::Socks5 {
+                    let (th, tp) = target_host_port
+                        .split_once(':')
+                        .unwrap_or((target_host_port, "80"));
+                    let port_num = tp.parse::<u16>().unwrap_or(80);
+                    if let Some(socks_stream) =
+                        perform_socks5_connect(stream, th, port_num, fallback_proxy.auth.as_ref())
+                    {
+                        return Some((socks_stream, Some(fallback_proxy)));
+                    }
+                } else {
+                    return Some((stream, Some(fallback_proxy)));
+                }
             }
             service.record_proxy_result(&fallback_proxy.id, false);
         }
@@ -192,6 +239,6 @@ fn dial_upstream(
         }
     }
 
-    // 3. Fallback direct connection to target
-    try_connect_socket(target_host_port).map(|s| (s, None))
+    // 3. Fallback direct connection to target with strict SSRF protection
+    try_connect_target_socket(target_host_port).map(|s| (s, None))
 }

@@ -11,7 +11,11 @@ use serde_json::{json, Value};
 
 /// GET /proxies/list
 pub fn handle_list_proxies(service: &ProxyGuardService) -> Value {
-    let list = service.list_proxies();
+    let list: Vec<_> = service
+        .list_proxies()
+        .into_iter()
+        .map(|p| p.to_masked())
+        .collect();
     let strategy = service.get_strategy();
     make_json_resp(
         200,

@@ -10,21 +10,24 @@ pub mod utils;
 
 use http::handle_http_request;
 use tunnel::handle_https_connect;
-use utils::{extract_proxy_query_from_headers, find_header_end};
+use utils::{extract_host_from_headers, extract_proxy_query_from_headers, find_header_end};
 
 use crate::service::ProxyGuardService;
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+const MAX_ACTIVE_CONNECTIONS: usize = 256;
 
 pub struct ProxyServer {
     listener_port: u16,
     upstream_proxy: Option<String>,
     service: Arc<ProxyGuardService>,
     shutdown_flag: Arc<AtomicBool>,
+    active_connections: Arc<AtomicUsize>,
 }
 
 impl ProxyServer {
@@ -38,6 +41,7 @@ impl ProxyServer {
             upstream_proxy,
             service,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            active_connections: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -56,6 +60,7 @@ impl ProxyServer {
         let shutdown = Arc::clone(&self.shutdown_flag);
         let service = Arc::clone(&self.service);
         let upstream = self.upstream_proxy.clone();
+        let active_conns = Arc::clone(&self.active_connections);
 
         let handle = thread::spawn(move || loop {
             if shutdown.load(Ordering::Relaxed) {
@@ -64,9 +69,24 @@ impl ProxyServer {
 
             match listener.accept() {
                 Ok((client_stream, _)) => {
+                    let current = active_conns.load(Ordering::Relaxed);
+                    if current >= MAX_ACTIVE_CONNECTIONS {
+                        // Throttled: drop socket to prevent thread exhaustion
+                        continue;
+                    }
+                    active_conns.fetch_add(1, Ordering::Relaxed);
+
                     let svc = Arc::clone(&service);
                     let up = upstream.clone();
+                    let conns_counter = Arc::clone(&active_conns);
                     thread::spawn(move || {
+                        struct ConnGuard(Arc<AtomicUsize>);
+                        impl Drop for ConnGuard {
+                            fn drop(&mut self) {
+                                self.0.fetch_sub(1, Ordering::Relaxed);
+                            }
+                        }
+                        let _guard = ConnGuard(conns_counter);
                         handle_client_connection(client_stream, svc, up);
                     });
                 }
@@ -133,13 +153,25 @@ fn handle_client_connection(
     }
 
     let method = parts[0];
-    let target = parts[1];
+    let raw_target = parts[1];
     let proxy_query = extract_proxy_query_from_headers(header_str);
+
+    // If origin-form request target (e.g. GET /index.html), reconstruct absolute target from Host header
+    let target = if raw_target.starts_with('/') {
+        if let Some(host) = extract_host_from_headers(header_bytes) {
+            format!("http://{host}{raw_target}")
+        } else {
+            raw_target.to_string()
+        }
+    } else {
+        raw_target.to_string()
+    };
 
     if method.eq_ignore_ascii_case("CONNECT") {
         handle_https_connect(
             &mut client,
-            target,
+            &target,
+            body_prefix,
             &service,
             &proxy_query,
             fallback_upstream,
@@ -148,7 +180,7 @@ fn handle_client_connection(
         handle_http_request(
             &mut client,
             method,
-            target,
+            &target,
             header_bytes,
             body_prefix,
             &service,

@@ -217,7 +217,11 @@ pub fn handle_mcp_tool_request(
             }
         }
         "list_upstream_proxies" => {
-            let list = service.list_proxies();
+            let list: Vec<_> = service
+                .list_proxies()
+                .into_iter()
+                .map(|p| p.to_masked())
+                .collect();
             let strategy = service.get_strategy();
             make_mcp_success(&json!({
                 "status": "success",

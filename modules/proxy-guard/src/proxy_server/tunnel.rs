@@ -2,8 +2,11 @@
 //!
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 
-use super::utils::{base64_encode, extract_host_port, find_header_end, try_connect_socket};
-use crate::domain::{ProxySelectionQuery, UpstreamProxy};
+use super::utils::{
+    base64_encode, extract_host_port, find_header_end, perform_socks5_connect, try_connect_socket,
+    try_connect_target_socket,
+};
+use crate::domain::{ProxyProtocol, ProxySelectionQuery, UpstreamProxy};
 use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
 use crate::service::ProxyGuardService;
 use std::io::{Read, Write};
@@ -14,6 +17,7 @@ use std::time::Duration;
 pub fn handle_https_connect(
     client: &mut TcpStream,
     host_port: &str,
+    client_prefix: &[u8],
     service: &ProxyGuardService,
     query: &ProxySelectionQuery,
     fallback_upstream: Option<String>,
@@ -44,16 +48,22 @@ pub fn handle_https_connect(
         return;
     }
 
-    // Only after 200 success succeeds, forward buffered leftover bytes
+    // Forward buffered leftover bytes from upstream handshake if any
     if !leftover.is_empty() && client.write_all(&leftover).is_err() {
         return;
     }
 
-    // Clear initial request timeouts for the established tunnel
-    let _ = client.set_read_timeout(None);
-    let _ = client.set_write_timeout(None);
-    let _ = upstream.set_read_timeout(None);
-    let _ = upstream.set_write_timeout(None);
+    // Forward pipelined client data (e.g. TLS ClientHello) to upstream
+    if !client_prefix.is_empty() && upstream.write_all(client_prefix).is_err() {
+        return;
+    }
+
+    // Set a reasonable idle timeout (120s) to prevent permanent thread/socket leaks
+    let idle_timeout = Some(Duration::from_secs(120));
+    let _ = client.set_read_timeout(idle_timeout);
+    let _ = client.set_write_timeout(idle_timeout);
+    let _ = upstream.set_read_timeout(idle_timeout);
+    let _ = upstream.set_write_timeout(idle_timeout);
 
     bidirectional_splice(client, &mut upstream);
 }
@@ -117,8 +127,17 @@ fn dial_connect_tunnel(
     // 1. Try pool proxy selection
     if let Some(proxy) = service.select_proxy(query) {
         let addr = format!("{}:{}", proxy.host, proxy.port);
+        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
+        let port_num = tp.parse::<u16>().unwrap_or(443);
+
         let primary_result = if let Some(stream) = try_connect_socket(&addr) {
-            perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
+            if proxy.protocol == ProxyProtocol::Socks5 {
+                perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
+                    .map(|s| (s, Vec::new()))
+                    .ok_or(())
+            } else {
+                perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
+            }
         } else {
             Err(())
         };
@@ -134,7 +153,22 @@ fn dial_connect_tunnel(
                 if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
                     let fb_addr = format!("{}:{}", fallback_proxy.host, fallback_proxy.port);
                     let fallback_result = if let Some(stream) = try_connect_socket(&fb_addr) {
-                        perform_connect_handshake(stream, host_port, fallback_proxy.auth.as_ref())
+                        if fallback_proxy.protocol == ProxyProtocol::Socks5 {
+                            perform_socks5_connect(
+                                stream,
+                                th,
+                                port_num,
+                                fallback_proxy.auth.as_ref(),
+                            )
+                            .map(|s| (s, Vec::new()))
+                            .ok_or(())
+                        } else {
+                            perform_connect_handshake(
+                                stream,
+                                host_port,
+                                fallback_proxy.auth.as_ref(),
+                            )
+                        }
                     } else {
                         Err(())
                     };
@@ -168,8 +202,8 @@ fn dial_connect_tunnel(
         }
     }
 
-    // 3. Direct connection to target
-    try_connect_socket(host_port).map(|s| (s, Vec::new()))
+    // 3. Direct connection to target with SSRF protection
+    try_connect_target_socket(host_port).map(|s| (s, Vec::new()))
 }
 
 pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) {
@@ -233,6 +267,7 @@ pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) 
         }
     }
 
-    let _ = stream_a.set_read_timeout(Some(Duration::from_millis(50)));
+    let _ = stream_a.shutdown(Shutdown::Both);
+    let _ = stream_b.shutdown(Shutdown::Both);
     let _ = t1.join();
 }

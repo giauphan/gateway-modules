@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard & Traffic Optimizer",
   "short_name": "Proxy Guard",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",

@@ -110,6 +110,30 @@ impl UpstreamProxy {
         })
     }
 
+    /// Returns the canonical proxy URL with passwords masked (safe for logging & MCP outputs).
+    pub fn masked_url(&self) -> String {
+        match &self.auth {
+            Some(a) => format!(
+                "{}://{}:***@{}:{}",
+                self.protocol.scheme(),
+                a.username,
+                self.host,
+                self.port
+            ),
+            None => format!("{}://{}:{}", self.protocol.scheme(), self.host, self.port),
+        }
+    }
+
+    /// Returns a copy of the proxy entity with credentials masked for safe serialization.
+    pub fn to_masked(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.url = self.masked_url();
+        if let Some(ref mut a) = cloned.auth {
+            a.password = "***".to_string();
+        }
+        cloned
+    }
+
     /// Formats this proxy into a standard format for client tools (Playwright, Puppeteer).
     pub fn to_playwright_config(&self) -> PlaywrightProxyConfig {
         PlaywrightProxyConfig {

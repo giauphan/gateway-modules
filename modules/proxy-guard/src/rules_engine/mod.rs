@@ -15,7 +15,9 @@ pub struct RulesEngine {
 }
 
 impl RulesEngine {
-    pub fn new(rules: Vec<Rule>, whitelist: Vec<String>) -> Self {
+    pub fn new(mut rules: Vec<Rule>, whitelist: Vec<String>) -> Self {
+        // Pre-sort rules descending by priority once at engine creation
+        rules.sort_by_key(|a| std::cmp::Reverse(a.priority));
         Self { rules, whitelist }
     }
 
@@ -38,7 +40,10 @@ impl RulesEngine {
         for wl in &self.whitelist {
             let clean_wl = wl.trim().to_ascii_lowercase();
             if host.eq_ignore_ascii_case(&clean_wl)
-                || host.to_ascii_lowercase().ends_with(&format!(".{clean_wl}"))
+                || (host.ends_with(&clean_wl)
+                    && host
+                        .strip_suffix(&clean_wl)
+                        .is_some_and(|p| p.ends_with('.')))
             {
                 return FilterDecision {
                     url: clean_url.to_string(),
@@ -54,11 +59,8 @@ impl RulesEngine {
             }
         }
 
-        // 2. Iterate through rules sorted by priority (higher priority first)
-        let mut sorted_rules = self.rules.clone();
-        sorted_rules.sort_by_key(|a| std::cmp::Reverse(a.priority));
-
-        for rule in &sorted_rules {
+        // 2. Iterate through pre-sorted rules (higher priority first) with zero cloning
+        for rule in &self.rules {
             if rule.matches(&host, clean_url) {
                 let mock = MockFactory::create_mock(&rule.action, clean_url);
                 let saved = match rule.category {

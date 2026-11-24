@@ -11,7 +11,6 @@ use crate::ports::{
     FlowOptimizerPort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
     RuleManagementPort, RuleRepositoryPort,
 };
-use crate::proxy_pool::ProxyPool;
 use crate::rules_engine::RulesEngine;
 use crate::script_generator::ScriptGenerator;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,7 +19,7 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct ProxyGuardService {
     rule_repo: Arc<dyn RuleRepositoryPort>,
     metrics_repo: Arc<dyn MetricsStoragePort>,
-    proxy_pool: Arc<ProxyPool>,
+    proxy_pool: Arc<dyn ProxyPoolManagementPort>,
     cost_per_gb_usd: RwLock<f64>,
     cached_engine: RwLock<RulesEngine>,
     cached_metrics: RwLock<FlowMetrics>,
@@ -33,7 +32,7 @@ impl ProxyGuardService {
     pub fn new(
         rule_repo: Arc<dyn RuleRepositoryPort>,
         metrics_repo: Arc<dyn MetricsStoragePort>,
-        proxy_pool: Arc<ProxyPool>,
+        proxy_pool: Arc<dyn ProxyPoolManagementPort>,
         cost_per_gb_usd: f64,
     ) -> Self {
         let rules = rule_repo.load_rules();
@@ -55,7 +54,7 @@ impl ProxyGuardService {
         }
     }
 
-    pub fn proxy_pool(&self) -> &Arc<ProxyPool> {
+    pub fn proxy_pool(&self) -> &Arc<dyn ProxyPoolManagementPort> {
         &self.proxy_pool
     }
 
@@ -135,7 +134,9 @@ impl FlowOptimizerPort for ProxyGuardService {
             }
             let snapshot = metrics.clone();
             drop(metrics);
-            let _ = self.metrics_repo.save_metrics(&snapshot);
+            if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
+                eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
+            }
             self.dirty_metrics_count.store(0, Ordering::Relaxed);
         }
 
@@ -255,7 +256,9 @@ impl MetricsPort for ProxyGuardService {
                 self.dirty_metrics_count.store(0, Ordering::Relaxed);
                 let snapshot = metrics.clone();
                 drop(metrics);
-                let _ = self.metrics_repo.save_metrics(&snapshot);
+                if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
+                    eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
+                }
             }
         }
     }
