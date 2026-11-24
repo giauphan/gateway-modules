@@ -70,6 +70,20 @@ impl ProxyGuardService {
         Ok(())
     }
 
+    /// Persists the latest in-memory metrics under the metrics lock, preventing
+    /// out-of-order writes or stale snapshots overwriting newer state.
+    fn persist_latest_metrics(&self) {
+        if let Ok(_guard) = self.metrics_lock.lock() {
+            if let Ok(metrics) = self.cached_metrics.read() {
+                let snapshot = metrics.clone();
+                drop(metrics);
+                if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
+                    eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
+                }
+            }
+        }
+    }
+
     fn rebuild_engine_locked(&self) {
         let rules = self.rule_repo.load_rules();
         let whitelist = self.rule_repo.load_whitelist();
@@ -132,13 +146,9 @@ impl FlowOptimizerPort for ProxyGuardService {
             for (d, sz) in &recorded_items {
                 metrics.record_decision(d, Some(*sz));
             }
-            let snapshot = metrics.clone();
-            drop(metrics);
-            if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
-                eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
-            }
-            self.dirty_metrics_count.store(0, Ordering::Relaxed);
         }
+        self.persist_latest_metrics();
+        self.dirty_metrics_count.store(0, Ordering::Relaxed);
 
         let orig_mb = (original_bytes as f64) / 1_048_576.0;
         let opt_mb = (optimized_bytes as f64) / 1_048_576.0;
@@ -249,17 +259,17 @@ impl RuleManagementPort for ProxyGuardService {
 
 impl MetricsPort for ProxyGuardService {
     fn record_decision(&self, decision: &FilterDecision, actual_bytes: Option<u64>) {
-        if let Ok(mut metrics) = self.cached_metrics.write() {
+        let should_persist = if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_decision(decision, actual_bytes);
             let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
-            if count >= 64 {
-                self.dirty_metrics_count.store(0, Ordering::Relaxed);
-                let snapshot = metrics.clone();
-                drop(metrics);
-                if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
-                    eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
-                }
-            }
+            count >= 64
+        } else {
+            false
+        };
+
+        if should_persist {
+            self.dirty_metrics_count.store(0, Ordering::Relaxed);
+            self.persist_latest_metrics();
         }
     }
 

@@ -159,8 +159,8 @@ fn parse_proxy_components(
             let creds: Vec<&str> = auth_part.splitn(2, ':').collect();
             let auth = if creds.len() == 2 {
                 Some(ProxyAuth {
-                    username: creds[0].to_string(),
-                    password: creds[1].to_string(),
+                    username: url_decode(creds[0]),
+                    password: url_decode(creds[1]),
                 })
             } else {
                 None
@@ -247,4 +247,27 @@ pub struct ProxySelectionQuery {
     pub country: Option<String>,
     pub tag: Option<String>,
     pub preferred_id: Option<String>,
+}
+
+fn url_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut bytes = s.as_bytes().iter();
+    while let Some(&b) = bytes.next() {
+        if b == b'%' {
+            if let (Some(&h1), Some(&h2)) = (bytes.next(), bytes.next()) {
+                let hex_str = [h1, h2];
+                if let Ok(hex) = std::str::from_utf8(&hex_str) {
+                    if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                        out.push(byte as char);
+                        continue;
+                    }
+                }
+            }
+        } else if b == b'+' {
+            out.push(' ');
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
 }

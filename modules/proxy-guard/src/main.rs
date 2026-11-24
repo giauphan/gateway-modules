@@ -99,9 +99,9 @@ fn main() {
         if port > 0 {
             let server = ProxyServer::new(port, upstream_proxy, Arc::clone(&service));
             match server.start_background() {
-                Ok(_) => {
+                Ok((_handle, bound_port)) => {
                     eprintln!(
-                        "[proxy-guard] Local intercepting proxy listening on 127.0.0.1:{port}"
+                        "[proxy-guard] Local intercepting proxy listening on 127.0.0.1:{bound_port}"
                     );
                 }
                 Err(e) => {

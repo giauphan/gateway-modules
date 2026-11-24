@@ -232,10 +232,25 @@ fn dial_upstream(
 
     // 2. Try static fallback CLI proxy if provided
     if let Some(up) = fallback_url {
+        let parsed = UpstreamProxy::parse(up, None, None, None).ok();
         let addr = extract_host_port(up, 8080);
+        let (th, tp) = target_host_port
+            .split_once(':')
+            .unwrap_or((target_host_port, "80"));
+        let port_num = tp.parse::<u16>().unwrap_or(80);
+
         if let Some(stream) = try_connect_socket(&addr) {
-            let parsed = UpstreamProxy::parse(up, None, None, None).ok();
-            return Some((stream, parsed));
+            let is_socks5 = parsed
+                .as_ref()
+                .is_some_and(|p| p.protocol == ProxyProtocol::Socks5);
+            if is_socks5 {
+                let auth = parsed.as_ref().and_then(|p| p.auth.as_ref());
+                if let Some(socks_stream) = perform_socks5_connect(stream, th, port_num, auth) {
+                    return Some((socks_stream, parsed));
+                }
+            } else {
+                return Some((stream, parsed));
+            }
         }
     }
 

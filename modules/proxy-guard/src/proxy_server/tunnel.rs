@@ -189,14 +189,22 @@ fn dial_connect_tunnel(
 
     // 2. Try static fallback CLI proxy if provided
     if let Some(up) = fallback_url {
+        let parsed = UpstreamProxy::parse(up, None, None, None).ok();
         let addr = extract_host_port(up, 8080);
+        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
+        let port_num = tp.parse::<u16>().unwrap_or(443);
+
         if let Some(stream) = try_connect_socket(&addr) {
-            let parsed = UpstreamProxy::parse(up, None, None, None).ok();
-            if let Ok((s, leftover)) = perform_connect_handshake(
-                stream,
-                host_port,
-                parsed.as_ref().and_then(|p| p.auth.as_ref()),
-            ) {
+            let auth = parsed.as_ref().and_then(|p| p.auth.as_ref());
+            let is_socks5 = parsed
+                .as_ref()
+                .is_some_and(|p| p.protocol == ProxyProtocol::Socks5);
+
+            if is_socks5 {
+                if let Some(s) = perform_socks5_connect(stream, th, port_num, auth) {
+                    return Some((s, Vec::new()));
+                }
+            } else if let Ok((s, leftover)) = perform_connect_handshake(stream, host_port, auth) {
                 return Some((s, leftover));
             }
         }

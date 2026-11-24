@@ -58,7 +58,7 @@ static STRIPPED_QUERY_PARAMS: &[&str] = &[
     "vero_id",
     "vero_conv",
     // Omnisend
-    "omnisendContactID",
+    "omnisendcontactid",
     // Iterable
     "_itm",
     // Generic click tracking
@@ -88,9 +88,14 @@ static STRIPPED_REQUEST_HEADERS: &[&str] = &[
     "sec-ch-ua-wow64",
     "sec-ch-prefers-color-scheme",
     "sec-ch-prefers-reduced-motion",
-    // Downstream proxy headers (never leak client credentials or connection state to upstream)
+    // Downstream proxy and hop-by-hop headers (RFC 9110)
     "proxy-authorization",
+    "proxy-authenticate",
     "proxy-connection",
+    "keep-alive",
+    "te",
+    "trailer",
+    "upgrade",
     // No referrer sent - reduces analytics triggering
     "referer",
     // Privacy / tracking headers
@@ -263,7 +268,9 @@ pub fn strip_tracking_params_from_url(url: &str) -> String {
         .filter(|param| {
             let key = param.split('=').next().unwrap_or(*param);
             let lower_key = key.to_ascii_lowercase();
-            !STRIPPED_QUERY_PARAMS.iter().any(|&s| s == lower_key)
+            !STRIPPED_QUERY_PARAMS
+                .iter()
+                .any(|&s| s.eq_ignore_ascii_case(&lower_key))
         })
         .collect();
 
@@ -287,7 +294,9 @@ pub fn count_stripped_params(url: &str) -> usize {
         .filter(|param| {
             let key = param.split('=').next().unwrap_or(*param);
             let lower_key = key.to_ascii_lowercase();
-            STRIPPED_QUERY_PARAMS.iter().any(|&s| s == lower_key)
+            STRIPPED_QUERY_PARAMS
+                .iter()
+                .any(|&s| s.eq_ignore_ascii_case(&lower_key))
         })
         .count()
 }
@@ -311,6 +320,14 @@ mod tests {
         let url = "/checkout?product=42&fbclid=IwAR123abc&gclid=xyz";
         let cleaned = strip_tracking_params_from_url(url);
         assert_eq!(cleaned, "/checkout?product=42");
+    }
+
+    #[test]
+    fn test_strip_omnisend_parameter() {
+        let url = "/product/view?id=99&omnisendContactID=abc123xyz";
+        let cleaned = strip_tracking_params_from_url(url);
+        assert_eq!(cleaned, "/product/view?id=99");
+        assert_eq!(count_stripped_params(url), 1);
     }
 
     #[test]

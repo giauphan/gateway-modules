@@ -8,20 +8,27 @@ use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// Returns true if an IP address belongs to loopback, private, link-local,
-/// or cloud instance metadata ranges (SSRF protection).
+/// cloud instance metadata, carrier-grade NAT, or multicast ranges (SSRF protection).
 pub fn is_private_or_restricted(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let octets = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_documentation()
-                || v4.octets()[0] == 0
+                || v4.is_multicast()
+                || octets[0] == 0
+                || (octets[0] == 100 && (octets[1] & 0xc0) == 64) // 100.64.0.0/10 (CG-NAT)
         }
         IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_or_restricted(&IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
+                || v6.is_multicast()
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
