@@ -58,6 +58,25 @@ fn test_proxy_parsing_formats() {
     .unwrap();
     assert_eq!(p3.host, "192.168.1.50");
     assert_eq!(p3.port, 9000);
+
+    // 4. Bracketed IPv6 format
+    let p4 = UpstreamProxy::parse("http://[2001:db8::1]:8080", None, None, None).unwrap();
+    assert_eq!(p4.host, "[2001:db8::1]");
+    assert_eq!(p4.port, 8080);
+
+    // 5. Credentials with percent-encoding, reserved chars, multibyte UTF-8 and literal '+'
+    let p5 = UpstreamProxy::parse(
+        "http://user%201:pass%2Bword%2F123%C3%A9@[2001:db8::1]:9090",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let auth = p5.auth.as_ref().unwrap();
+    assert_eq!(auth.username, "user 1");
+    assert_eq!(auth.password, "pass+word/123é");
+    // Canonical URL percent-encodes userinfo so authority parsing remains valid
+    assert!(p5.url.contains("pass%2Bword%2F123%C3%A9"));
     assert_eq!(p3.country.as_deref(), Some("VN"));
     assert_eq!(p3.auth.as_ref().unwrap().username, "myuser");
 

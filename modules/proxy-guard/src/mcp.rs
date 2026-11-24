@@ -47,20 +47,51 @@ pub fn handle_mcp_tool_request(
 
             let mut req_dtos = Vec::with_capacity(requests_val.len());
             for item in requests_val {
-                if let Some(url) = item.get("url").and_then(|v| v.as_str()) {
-                    req_dtos.push(FlowRequestDto {
-                        url: url.to_string(),
-                        method: item
-                            .get("method")
+                let url = item.get("url").and_then(|v| v.as_str()).or_else(|| {
+                    item.get("request")
+                        .and_then(|r| r.get("url"))
+                        .and_then(|v| v.as_str())
+                });
+
+                let url = match url {
+                    Some(u) => u,
+                    None => {
+                        return make_mcp_error(
+                            "Invalid request entry: missing 'url' or nested HAR 'request.url'",
+                        );
+                    }
+                };
+
+                let method = item
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        item.get("request")
+                            .and_then(|r| r.get("method"))
                             .and_then(|v| v.as_str())
-                            .map(str::to_string),
-                        resource_type: item
-                            .get("resource_type")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string),
-                        size_bytes: item.get("size_bytes").and_then(|v| v.as_u64()),
-                    });
-                }
+                    })
+                    .map(str::to_string);
+
+                let resource_type = item
+                    .get("resource_type")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+
+                let size_bytes = item.get("size_bytes").and_then(|v| v.as_u64()).or_else(|| {
+                    item.get("response")
+                        .and_then(|resp| {
+                            resp.get("bodySize")
+                                .or_else(|| resp.get("content").and_then(|c| c.get("size")))
+                        })
+                        .and_then(|v| v.as_u64())
+                });
+
+                req_dtos.push(FlowRequestDto {
+                    url: url.to_string(),
+                    method,
+                    resource_type,
+                    size_bytes,
+                });
             }
 
             let result = service.optimize_flow(&req_dtos);

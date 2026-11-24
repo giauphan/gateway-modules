@@ -106,3 +106,54 @@ fn test_custom_rule_matching() {
     assert!(d.is_blocked());
     assert_eq!(d.action, RuleAction::Block403);
 }
+
+#[test]
+fn test_builtin_rules_intercept_browser_noise() {
+    let engine = RulesEngine::with_builtin_rules();
+
+    // 1. Chrome Widevine / Component updater
+    let d1 = engine.evaluate(
+        "https://edgedl.me.gvt1.com/edgedl/widevine/cdm.crx",
+        "GET",
+        None,
+    );
+    assert!(d1.is_blocked());
+    assert_eq!(d1.action, RuleAction::Block204);
+
+    // 2. Firefox OpenH264 binary codec download
+    let d2 = engine.evaluate(
+        "https://ciscobinary.openh264.org/openh264-win64-2.3.1.zip",
+        "GET",
+        None,
+    );
+    assert!(d2.is_blocked());
+    assert_eq!(d2.action, RuleAction::Block204);
+
+    // 3. Chrome update check
+    let d3 = engine.evaluate(
+        "https://update.googleapis.com/service/update2/json",
+        "POST",
+        None,
+    );
+    assert!(d3.is_blocked());
+
+    // 4. Firefox AUS update check
+    let d4 = engine.evaluate(
+        "https://aus5.mozilla.org/update/6/Firefox/120.0.xml",
+        "GET",
+        None,
+    );
+    assert!(d4.is_blocked());
+
+    // 5. ThreatMetrix profiling
+    let d5 = engine.evaluate("https://h64.online-metrix.net/fp/tags.js", "GET", None);
+    assert!(d5.is_blocked());
+
+    // 6. LaunchDarkly telemetry
+    let d6 = engine.evaluate(
+        "https://events.launchdarkly.com/events/diagnostic",
+        "POST",
+        None,
+    );
+    assert!(d6.is_blocked());
+}

@@ -5,15 +5,17 @@
 
 pub mod advertising;
 pub mod analytics;
+pub mod browser_noise;
 pub mod media_fonts;
 
 use crate::domain::Rule;
 
 /// Comprehensive built-in rules catalog aggregating all domain categories.
 pub fn builtin_rules() -> Vec<Rule> {
-    let mut rules = Vec::with_capacity(70);
+    let mut rules = Vec::with_capacity(80);
     rules.extend(analytics::analytics_rules());
     rules.extend(advertising::advertising_rules());
     rules.extend(media_fonts::media_and_font_rules());
+    rules.extend(browser_noise::browser_noise_rules());
     rules
 }

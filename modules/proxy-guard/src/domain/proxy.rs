@@ -85,8 +85,8 @@ impl UpstreamProxy {
             Some(a) => format!(
                 "{}://{}:{}@{}:{}",
                 protocol.scheme(),
-                a.username,
-                a.password,
+                url_encode_userinfo(&a.username),
+                url_encode_userinfo(&a.password),
                 host,
                 port
             ),
@@ -116,7 +116,7 @@ impl UpstreamProxy {
             Some(a) => format!(
                 "{}://{}:***@{}:{}",
                 self.protocol.scheme(),
-                a.username,
+                url_encode_userinfo(&a.username),
                 self.host,
                 self.port
             ),
@@ -171,20 +171,39 @@ fn parse_proxy_components(
         };
 
         let clean_hp = host_port.split('/').next().unwrap_or(host_port);
-        let hp_parts: Vec<&str> = clean_hp.split(':').collect();
-        if hp_parts.is_empty() {
-            return Err("Invalid proxy host".to_string());
-        }
-        let host = hp_parts[0].to_string();
-        let port: u16 = if hp_parts.len() > 1 {
-            hp_parts[1]
-                .parse()
-                .map_err(|_| "Invalid proxy port".to_string())?
-        } else {
-            8080
-        };
+        let (host, port) = parse_host_port(clean_hp)?;
 
         Ok((protocol, host, port, auth))
+    } else if s.starts_with('[') {
+        let (host, remainder) = if let Some(close_idx) = s.find(']') {
+            (s[..=close_idx].to_string(), &s[close_idx + 1..])
+        } else {
+            return Err("Mismatched brackets in IPv6 address".to_string());
+        };
+        let rest = remainder.strip_prefix(':').unwrap_or(remainder);
+        let segments: Vec<&str> = rest.split(':').collect();
+        match segments.len() {
+            1 => {
+                let port: u16 = segments[0]
+                    .parse()
+                    .map_err(|_| "Invalid proxy port".to_string())?;
+                Ok((ProxyProtocol::Http, host, port, None))
+            }
+            3 => {
+                let port: u16 = segments[0]
+                    .parse()
+                    .map_err(|_| "Invalid proxy port".to_string())?;
+                let auth = Some(ProxyAuth {
+                    username: segments[1].to_string(),
+                    password: segments[2].to_string(),
+                });
+                Ok((ProxyProtocol::Http, host, port, auth))
+            }
+            _ => Err(
+                "Invalid IPv6 proxy format. Expected '[ipv6]:port' or '[ipv6]:port:user:pass'"
+                    .to_string(),
+            ),
+        }
     } else {
         // Vendor format: host:port:user:pass or host:port
         let segments: Vec<&str> = s.split(':').collect();
@@ -212,6 +231,39 @@ fn parse_proxy_components(
                     .to_string(),
             ),
         }
+    }
+}
+
+fn parse_host_port(hp: &str) -> Result<(String, u16), String> {
+    if hp.starts_with('[') {
+        if let Some(close_idx) = hp.find(']') {
+            let host = hp[..=close_idx].to_string();
+            let remainder = &hp[close_idx + 1..];
+            let port = if let Some(stripped) = remainder.strip_prefix(':') {
+                stripped
+                    .parse::<u16>()
+                    .map_err(|_| "Invalid proxy port".to_string())?
+            } else {
+                8080
+            };
+            Ok((host, port))
+        } else {
+            Err("Mismatched brackets in IPv6 address".to_string())
+        }
+    } else {
+        let hp_parts: Vec<&str> = hp.split(':').collect();
+        if hp_parts.is_empty() || hp_parts[0].is_empty() {
+            return Err("Invalid proxy host".to_string());
+        }
+        let host = hp_parts[0].to_string();
+        let port: u16 = if hp_parts.len() > 1 {
+            hp_parts[1]
+                .parse()
+                .map_err(|_| "Invalid proxy port".to_string())?
+        } else {
+            8080
+        };
+        Ok((host, port))
     }
 }
 
@@ -250,7 +302,7 @@ pub struct ProxySelectionQuery {
 }
 
 fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut decoded = Vec::with_capacity(s.len());
     let mut bytes = s.as_bytes().iter();
     while let Some(&b) = bytes.next() {
         if b == b'%' {
@@ -258,15 +310,36 @@ fn url_decode(s: &str) -> String {
                 let hex_str = [h1, h2];
                 if let Ok(hex) = std::str::from_utf8(&hex_str) {
                     if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                        out.push(byte as char);
+                        decoded.push(byte);
                         continue;
                     }
                 }
+                decoded.push(b'%');
+                decoded.push(h1);
+                decoded.push(h2);
+            } else {
+                decoded.push(b'%');
             }
-        } else if b == b'+' {
-            out.push(' ');
         } else {
-            out.push(b as char);
+            decoded.push(b);
+        }
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| s.to_string())
+}
+
+fn url_encode_userinfo(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+                out.push(HEX_CHARS[(b >> 4) as usize] as char);
+                out.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+            }
         }
     }
     out

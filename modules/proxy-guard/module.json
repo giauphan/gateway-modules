@@ -111,16 +111,41 @@
         "properties": {
           "requests": {
             "type": "array",
-            "description": "List of HTTP request objects with 'url', optional 'method', 'resource_type', and 'size_bytes'",
+            "description": "List of HTTP request objects or HAR entries with 'url' (or nested 'request.url')",
             "items": {
-              "type": "object",
-              "properties": {
-                "url": { "type": "string" },
-                "method": { "type": "string" },
-                "resource_type": { "type": "string" },
-                "size_bytes": { "type": "number" }
-              },
-              "required": ["url"]
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string" },
+                    "method": { "type": "string" },
+                    "resource_type": { "type": "string" },
+                    "size_bytes": { "type": "number" }
+                  },
+                  "required": ["url"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "request": {
+                      "type": "object",
+                      "properties": {
+                        "url": { "type": "string" },
+                        "method": { "type": "string" }
+                      },
+                      "required": ["url"]
+                    },
+                    "response": {
+                      "type": "object",
+                      "properties": {
+                        "bodySize": { "type": "number" },
+                        "content": { "type": "object" }
+                      }
+                    }
+                  },
+                  "required": ["request"]
+                }
+              ]
             }
           }
         },

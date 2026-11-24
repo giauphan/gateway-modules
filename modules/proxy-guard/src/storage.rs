@@ -7,6 +7,9 @@ use crate::domain::{FlowMetrics, Rule, UpstreamProxy};
 use crate::ports::{MetricsStoragePort, ProxyPoolStoragePort, RuleRepositoryPort};
 use crate::rules_engine::RulesEngine;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::RwLock;
@@ -77,15 +80,53 @@ impl FileStorageAdapter {
         );
         let temp_path = parent.join(temp_filename);
 
-        fs::write(&temp_path, content).map_err(|e| {
-            let _ = fs::remove_file(&temp_path);
-            format!("Failed to write temporary state file {temp_path:?}: {e}")
-        })?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+
+        let mut file = options
+            .open(&temp_path)
+            .map_err(|e| format!("Failed to create temporary state file {temp_path:?}: {e}"))?;
+
+        if let Err(e) = file.write_all(content.as_bytes()) {
+            if let Err(cleanup_err) = fs::remove_file(&temp_path) {
+                if cleanup_err.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("[proxy-guard] Warning: Failed to remove temp file {temp_path:?}: {cleanup_err}");
+                }
+            }
+            return Err(format!(
+                "Failed to write temporary state file {temp_path:?}: {e}"
+            ));
+        }
+
+        if let Err(e) = file.sync_all() {
+            if let Err(cleanup_err) = fs::remove_file(&temp_path) {
+                if cleanup_err.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("[proxy-guard] Warning: Failed to remove temp file {temp_path:?}: {cleanup_err}");
+                }
+            }
+            return Err(format!(
+                "Failed to sync temporary state file {temp_path:?}: {e}"
+            ));
+        }
+        drop(file);
 
         fs::rename(&temp_path, target_path).map_err(|e| {
-            let _ = fs::remove_file(&temp_path);
+            if let Err(cleanup_err) = fs::remove_file(&temp_path) {
+                if cleanup_err.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("[proxy-guard] Warning: Failed to remove temp file {temp_path:?}: {cleanup_err}");
+                }
+            }
             format!("Failed to atomically rename {temp_path:?} to {target_path:?}: {e}")
         })?;
+
+        #[cfg(unix)]
+        if let Err(e) = fs::set_permissions(target_path, fs::Permissions::from_mode(0o600)) {
+            eprintln!(
+                "[proxy-guard] Warning: Failed to set private permissions on {target_path:?}: {e}"
+            );
+        }
 
         Ok(())
     }

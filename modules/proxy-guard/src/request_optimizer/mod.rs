@@ -4,120 +4,8 @@
 //! Strips unnecessary headers and query parameters before forwarding to paid upstream proxies,
 //! directly reducing bytes-on-wire and therefore proxy bandwidth costs.
 
-/// Tracking-only query parameters that should be stripped before forwarding.
-/// These contribute zero value to automation flows but can add hundreds of bytes to URLs
-/// and cause tracking systems to wake up and phone home.
-static STRIPPED_QUERY_PARAMS: &[&str] = &[
-    // Google / Universal Analytics
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "utm_id",
-    "utm_source_platform",
-    "utm_creative_format",
-    "utm_marketing_tactic",
-    // Google Ads
-    "gclid",
-    "gclsrc",
-    "gbraid",
-    "wbraid",
-    "dclid",
-    // Meta / Facebook
-    "fbclid",
-    "fb_action_ids",
-    "fb_action_types",
-    "fb_source",
-    "fb_ref",
-    // TikTok
-    "ttclid",
-    // Microsoft Ads
-    "msclkid",
-    // HubSpot
-    "_hsenc",
-    "_hsmi",
-    "hsa_acc",
-    "hsa_cam",
-    "hsa_grp",
-    "hsa_ad",
-    "hsa_src",
-    "hsa_tgt",
-    "hsa_kw",
-    "hsa_mt",
-    "hsa_net",
-    "hsa_ver",
-    // MailChimp
-    "mc_cid",
-    "mc_eid",
-    // Klaviyo
-    "_kx",
-    // Drip
-    "__s",
-    // Vero
-    "vero_id",
-    "vero_conv",
-    // Omnisend
-    "omnisendcontactid",
-    // Iterable
-    "_itm",
-    // Generic click tracking
-    "s_kwcid",
-    "ef_id",
-    "pcrid",
-    "pd_rd_r",
-    "pd_rd_w",
-    "pd_rd_wg",
-    "pf_rd_p",
-    "pf_rd_r",
-];
-
-/// HTTP request headers that should be dropped before forwarding to upstream.
-/// These either identify the browser fingerprint, trigger telemetry pipelines,
-/// or are unnecessary for headless automation flows.
-static STRIPPED_REQUEST_HEADERS: &[&str] = &[
-    // Browser fingerprinting headers
-    "sec-ch-ua",
-    "sec-ch-ua-mobile",
-    "sec-ch-ua-platform",
-    "sec-ch-ua-arch",
-    "sec-ch-ua-bitness",
-    "sec-ch-ua-full-version",
-    "sec-ch-ua-full-version-list",
-    "sec-ch-ua-model",
-    "sec-ch-ua-wow64",
-    "sec-ch-prefers-color-scheme",
-    "sec-ch-prefers-reduced-motion",
-    // Downstream proxy and hop-by-hop headers (RFC 9110)
-    "proxy-authorization",
-    "proxy-authenticate",
-    "proxy-connection",
-    "keep-alive",
-    "te",
-    "trailer",
-    "upgrade",
-    // No referrer sent - reduces analytics triggering
-    "referer",
-    // Privacy / tracking headers
-    "x-forwarded-for",
-    "x-real-ip",
-    "x-request-id",
-    "traceparent",
-    "tracestate",
-    "baggage",
-    // Browser performance hints that waste bytes
-    "save-data",
-    "device-memory",
-    "downlink",
-    "ect",
-    "rtt",
-    "viewport-width",
-    "width",
-    "dpr",
-    "content-dpr",
-    // Service Worker header (triggers SW registration which downloads more scripts)
-    "service-worker",
-];
+pub mod constants;
+pub use constants::*;
 
 /// Rewrites an HTTP header block to minimize bytes-on-wire to the upstream proxy.
 ///
@@ -146,36 +34,53 @@ pub fn optimize_request_headers(raw_headers: &[u8]) -> Vec<u8> {
     output.extend_from_slice(rewritten_request_line.as_bytes());
     output.extend_from_slice(b"\r\n");
 
-    let mut has_accept_encoding = false;
-    let mut has_connection = false;
+    // Pass 1: Collect connection options named by original Connection headers
+    let mut connection_options = Vec::new();
+    let mut header_lines = Vec::new();
 
     for line in lines {
-        // Empty line = end of headers
         if line.is_empty() || line == "\r" {
             break;
         }
+        let lower = line.to_ascii_lowercase();
+        if let Some(val) = lower.strip_prefix("connection:") {
+            for token in val.split(',') {
+                let trimmed = token.trim();
+                if !trimmed.is_empty() {
+                    connection_options.push(trimmed.to_string());
+                }
+            }
+        }
+        header_lines.push(line);
+    }
 
+    // Pass 2: Emit filtered and optimized headers
+    let mut has_accept_encoding = false;
+
+    for line in header_lines {
         let lower_line = line.to_ascii_lowercase();
+        let header_name = get_header_name(&lower_line);
+
+        // Strip headers named by client Connection options
+        if connection_options.iter().any(|opt| opt == header_name) {
+            continue;
+        }
+
+        // Connection header will be emitted as "Connection: close" at the end
+        if header_name == "connection" {
+            continue;
+        }
 
         // Detect and handle Accept-Encoding
         if let Some(val) = lower_line.strip_prefix("accept-encoding:") {
             has_accept_encoding = true;
-            if client_excludes_gzip(val) {
-                // Preserve client's explicit exclusion or identity-only coding
+            if let Some(optimized) = compute_optimized_accept_encoding(val) {
+                output.extend_from_slice(optimized.as_bytes());
+            } else {
+                // Preserve client's explicit exclusion or unhandled coding
                 output.extend_from_slice(line.as_bytes());
                 output.extend_from_slice(b"\r\n");
-            } else {
-                // Normalize accepted compression to standard gzip/deflate
-                output.extend_from_slice(b"Accept-Encoding: gzip, deflate\r\n");
             }
-            continue;
-        }
-
-        // Detect Connection header
-        if lower_line.starts_with("connection:") {
-            has_connection = true;
-            // Force Connection: close to avoid keeping connections alive to paid proxy
-            output.extend_from_slice(b"Connection: close\r\n");
             continue;
         }
 
@@ -192,15 +97,15 @@ pub fn optimize_request_headers(raw_headers: &[u8]) -> Vec<u8> {
     if !has_accept_encoding {
         output.extend_from_slice(b"Accept-Encoding: gzip, deflate\r\n");
     }
-    if !has_connection {
-        output.extend_from_slice(b"Connection: close\r\n");
-    }
+    output.extend_from_slice(b"Connection: close\r\n\r\n");
 
-    output.extend_from_slice(b"\r\n");
     output
 }
 
-/// Returns true if the header line should be stripped from outgoing requests.
+fn get_header_name(lower_line: &str) -> &str {
+    lower_line.split(':').next().unwrap_or("").trim()
+}
+
 fn should_strip_header(lower_line: &str) -> bool {
     for &header in STRIPPED_REQUEST_HEADERS {
         if let Some(rest) = lower_line.strip_prefix(header) {
@@ -212,22 +117,62 @@ fn should_strip_header(lower_line: &str) -> bool {
     false
 }
 
-/// Checks if the client explicitly excludes gzip or only accepts identity coding.
-fn client_excludes_gzip(val: &str) -> bool {
-    let trimmed = val.trim();
-    if trimmed.contains("gzip;q=0") || trimmed.contains("gzip; q=0") {
-        return true;
-    }
-    let parts: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
-    let has_identity = parts
-        .iter()
-        .any(|&p| p == "identity" || p.starts_with("identity;"));
-    let has_gzip = parts.iter().any(|&p| p == "gzip" || p.starts_with("gzip;"));
-    let has_wildcard = parts
-        .iter()
-        .any(|&p| p == "*" || (p.starts_with("*;") && !p.contains("q=0")));
+struct AcceptCoding {
+    name: String,
+    q: f32,
+}
 
-    has_identity && !has_gzip && !has_wildcard
+fn parse_accept_encoding(val: &str) -> Vec<AcceptCoding> {
+    let mut codings = Vec::new();
+    for part in val.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let mut subparts = part.split(';');
+        let name = subparts.next().unwrap_or("").trim().to_string();
+        let mut q = 1.0f32;
+        for param in subparts {
+            let param = param.trim();
+            if let Some(q_str) = param.strip_prefix("q=") {
+                if let Ok(parsed_q) = q_str.trim().parse::<f32>() {
+                    q = parsed_q;
+                }
+            }
+        }
+        codings.push(AcceptCoding { name, q });
+    }
+    codings
+}
+
+fn is_coding_acceptable(codings: &[AcceptCoding], target: &str) -> bool {
+    let mut wildcard_q = None;
+    for c in codings {
+        if c.name == target {
+            return c.q > 0.0;
+        }
+        if c.name == "*" {
+            wildcard_q = Some(c.q > 0.0);
+        }
+    }
+    wildcard_q.unwrap_or(false)
+}
+
+fn compute_optimized_accept_encoding(val: &str) -> Option<String> {
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let codings = parse_accept_encoding(trimmed);
+    let gzip_ok = is_coding_acceptable(&codings, "gzip");
+    let deflate_ok = is_coding_acceptable(&codings, "deflate");
+
+    match (gzip_ok, deflate_ok) {
+        (true, true) => Some("Accept-Encoding: gzip, deflate\r\n".to_string()),
+        (true, false) => Some("Accept-Encoding: gzip\r\n".to_string()),
+        (false, true) => Some("Accept-Encoding: deflate\r\n".to_string()),
+        (false, false) => None,
+    }
 }
 
 /// Strips known tracking query parameters from the HTTP request line.
@@ -356,12 +301,49 @@ mod tests {
 
     #[test]
     fn test_optimize_replaces_accept_encoding_with_gzip() {
-        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: br, zstd, gzip\r\n\r\n";
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: br, zstd, gzip, deflate\r\n\r\n";
         let optimized = optimize_request_headers(raw);
         let s = std::str::from_utf8(&optimized).unwrap();
         assert!(s.contains("Accept-Encoding: gzip, deflate"));
         // Should not have duplicate accept-encoding
         assert_eq!(s.matches("Accept-Encoding").count(), 1);
+    }
+
+    #[test]
+    fn test_optimize_accept_encoding_excludes_unadvertised_deflate() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: br, gzip\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(s.contains("Accept-Encoding: gzip\r\n"));
+        assert!(!s.contains("deflate"));
+    }
+
+    #[test]
+    fn test_optimize_accept_encoding_respects_q0() {
+        let raw =
+            b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: gzip, deflate;q=0\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(s.contains("Accept-Encoding: gzip\r\n"));
+        assert!(!s.contains("deflate\r\n"));
+    }
+
+    #[test]
+    fn test_optimize_accept_encoding_preserves_br_only() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: br\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(s.contains("Accept-Encoding: br\r\n"));
+        assert!(!s.contains("gzip"));
+    }
+
+    #[test]
+    fn test_optimize_strips_headers_named_in_connection_header() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nX-Hop-Token: secret\r\nConnection: X-Hop-Token\r\n\r\n";
+        let optimized = optimize_request_headers(raw);
+        let s = std::str::from_utf8(&optimized).unwrap();
+        assert!(!s.contains("X-Hop-Token"));
+        assert!(s.contains("Connection: close"));
     }
 
     #[test]
