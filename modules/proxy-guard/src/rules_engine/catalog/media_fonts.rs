@@ -67,6 +67,26 @@ pub fn media_and_font_rules() -> Vec<Rule> {
             70,
             "Blocks AVI video files",
         ),
+        Rule::new(
+            "media-fbcdn",
+            "Facebook CDN Heavy Media & Video",
+            RuleCategory::HeavyMedia,
+            PatternType::DomainSuffix,
+            "fbcdn.net",
+            RuleAction::Block204,
+            75,
+            "Blocks Facebook CDN images and video streaming assets (saves 180MB+ per flow)",
+        ),
+        Rule::new(
+            "media-metaaivm",
+            "Meta AI VM Heavy Assets",
+            RuleCategory::HeavyMedia,
+            PatternType::DomainSuffix,
+            "metaaivm.com",
+            RuleAction::Block204,
+            70,
+            "Blocks Meta AI VM heavy hatch assets",
+        ),
         // ── Heavy Web Fonts ───────────────────────────────────────────────────
         Rule::new(
             "fonts-woff2",

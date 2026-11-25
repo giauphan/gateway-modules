@@ -52,9 +52,15 @@ impl ProxyServer {
     /// Spawns the TCP proxy listener in a background worker thread.
     /// Returns the join handle and the actual bound port (useful when port 0 is used).
     pub fn start_background(self) -> Result<(thread::JoinHandle<()>, u16), String> {
-        let addr = format!("127.0.0.1:{}", self.listener_port);
+        let addr = format!("0.0.0.0:{}", self.listener_port);
         let listener = TcpListener::bind(&addr)
-            .map_err(|e| format!("Failed to bind Proxy Guard listener on {addr}: {e}"))?;
+            .or_else(|_| TcpListener::bind(format!("127.0.0.1:{}", self.listener_port)))
+            .map_err(|e| {
+                format!(
+                    "Failed to bind Proxy Guard listener on port {}: {e}",
+                    self.listener_port
+                )
+            })?;
         let bound_port = listener
             .local_addr()
             .map(|a| a.port())

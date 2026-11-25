@@ -100,9 +100,11 @@ fn init_proxies(
     service: &ProxyGuardService,
     raw_inputs: Vec<String>,
     strategy: Option<String>,
+    proxy_port: Option<u16>,
     base_dir: &std::path::Path,
-) {
+) -> Option<u16> {
     let mut effective_strategy = strategy;
+    let mut effective_port = proxy_port;
 
     let config_candidates = [
         base_dir.join("config.json"),
@@ -115,6 +117,15 @@ fn init_proxies(
         if cfg_path.is_file() {
             if let Ok(content) = std::fs::read_to_string(cfg_path) {
                 if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                    if effective_port.is_none() {
+                        if let Some(port_num) =
+                            val.get("proxy_listener_port").and_then(|v| v.as_u64())
+                        {
+                            if port_num > 0 && port_num <= 65535 {
+                                effective_port = Some(port_num as u16);
+                            }
+                        }
+                    }
                     if effective_strategy.is_none() {
                         if let Some(strat_str) =
                             val.get("rotation_strategy").and_then(|v| v.as_str())
@@ -179,6 +190,8 @@ fn init_proxies(
             }
         }
     }
+
+    effective_port
 }
 
 fn start_optional_proxy_server(proxy_port: Option<u16>, service: Arc<ProxyGuardService>) {
@@ -189,7 +202,7 @@ fn start_optional_proxy_server(proxy_port: Option<u16>, service: Arc<ProxyGuardS
             match server.start_background() {
                 Ok((_handle, bound_port)) => {
                     eprintln!(
-                        "[proxy-guard] Local intercepting proxy listening on 127.0.0.1:{bound_port}"
+                        "[proxy-guard] Intercepting traffic optimizer proxy listening on 0.0.0.0:{bound_port}"
                     );
                 }
                 Err(e) => {
@@ -253,12 +266,13 @@ fn main() {
         cost_usd,
     ));
 
-    init_proxies(
+    let effective_port = init_proxies(
         &service,
         config.raw_upstream_inputs,
         config.configured_strategy,
+        config.proxy_port,
         &base_dir,
     );
-    start_optional_proxy_server(config.proxy_port, Arc::clone(&service));
+    start_optional_proxy_server(effective_port, Arc::clone(&service));
     run_stdio_loop(&service);
 }
