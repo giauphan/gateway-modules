@@ -92,21 +92,63 @@ curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/add \
   }'
 ```
 
-### 2.3 Rotation Strategies
+### 2.3 Rotation Strategies (Global & Per-Request)
 
-You can configure the rotation strategy on the fly:
+#### Global Strategy Configuration
+You can configure the pool's default rotation strategy on the fly:
 
 ```bash
 curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/strategy \
   -H "Content-Type: application/json" \
-  -d '{"strategy": "sticky_session"}'
+  -d '{"strategy": "lowest_failures"}'
 ```
 
 Available strategies:
 - `round_robin` (Default): Distributes requests equally across all enabled, healthy proxies.
-- `sticky_session`: Routes requests with the same session identifier (e.g. browser profile or user session) to the same proxy IP. Automatically fails over if that proxy encounters consecutive errors.
+- `sticky_session`: Routes requests with the same session identifier (`X-Proxy-Session-Id`) to the same proxy IP. Automatically fails over if that proxy encounters consecutive errors.
 - `lowest_failures`: Prioritizes proxies with the highest success rate and lowest error counts.
 - `random`: Random selection from healthy proxies in the pool.
+
+#### Per-Request Strategy Override (v1.4.0+)
+Instead of changing the global strategy for all workers, individual requests or browser contexts can override the rotation strategy on the fly:
+
+1. **Via HTTP Header (`X-Proxy-Strategy`)**:
+   Pass `X-Proxy-Strategy: lowest_failures` (or `round_robin`, `sticky_session`, `random`) in your request or Playwright `extraHTTPHeaders`. Proxy Guard routes the request using that strategy and automatically strips the header before forwarding upstream.
+
+2. **Via REST API (`/proxies/next`)**:
+   Query parameters or request body take immediate precedence:
+   ```bash
+   # Query parameter
+   curl -s "http://127.0.0.1:3128/custom/proxy-guard/proxies/next?strategy=lowest_failures&country=US"
+
+   # POST JSON Body
+   curl -s -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/next \
+     -H "Content-Type: application/json" \
+     -d '{"strategy": "sticky_session", "session_id": "profile-99"}'
+   ```
+
+3. **Via MCP Tool**:
+   Call `proxy-guard__get_next_proxy` with argument `"strategy": "lowest_failures"`.
+
+---
+
+### 2.4 Managing Proxies in the UI
+
+You can manage and save multi-proxies in two places within the user interface:
+
+#### Method A: Toolcase Gateway Settings UI (Configuration Page)
+- **Path**: Navigate to **Modules** > **proxy-guard** > **Configuration** (or open `http://<host>:<port>/modules/proxy-guard/config`).
+- **Field**: In the **"Upstream Multi-Proxy Pool (1 per line)"** textarea, paste multiple proxies (one per line). Supported formats include standard URLs with credentials (`http://user:pass@host:port`), SOCKS5 (`socks5://user:pass@host:port`), or shorthand vendor syntax (`host:port:user:pass`).
+- **Rotation Strategy**: Set the default strategy in the **"Proxy Rotation Strategy"** input (`round_robin`, `sticky_session`, `lowest_failures`, `random`).
+- **Save**: Click **Save Settings**. Proxy Guard saves the pool to disk (`data/proxies.json`) and instantly reloads the pool into memory.
+
+#### Method B: Interactive Proxy Guard Dashboard
+- **Path**: Open `http://<host>:<port>/custom/proxy-guard/ui` in your browser.
+- **Features**:
+  - Live metrics: Total active proxies, current rotation strategy, MB saved, and estimated cost savings in USD.
+  - Proxy health table: Protocol, masked auth, host:port, country, tags, success/failure counts, and real-time status badges (`Healthy`, `Recovering`, `Failing`).
+  - **➕ Add Multiple Upstream Proxies**: Enter proxies in the multi-line textarea with optional batch Country Code and Tags, then click **Add to Proxy Pool**.
+  - One-click removal via the **Remove** button on any table row.
 
 ---
 
@@ -156,9 +198,11 @@ async function run() {
   });
 
   const context = await browser.newContext({
-    // Optional: Pass session header for sticky proxy routing
+    // Optional: Pass session and per-request strategy headers
     extraHTTPHeaders: {
+      'X-Proxy-Strategy': 'lowest_failures', // or 'sticky_session', 'round_robin', 'random'
       'X-Proxy-Session-Id': 'session-worker-42',
+      'X-Proxy-Country': 'US',
     },
   });
 

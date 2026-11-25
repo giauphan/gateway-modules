@@ -86,8 +86,9 @@ Proxy Guard manages a pool of paid upstream proxies with automatic rotation:
 - **Sticky Session**: Ties `X-Proxy-Session-Id` header to a dedicated proxy until failure.
 - **Lowest Failures**: Dynamically routes through the healthiest proxy in the pool.
 - **Random**: Randomly selects a proxy from the pool.
+- **Per-Request Strategy Setting**: Override strategy per request via `X-Proxy-Strategy` header or `GET /proxies/next?strategy=lowest_failures`.
 
-Add proxies via API:
+Manage proxies via API, Gateway Settings UI (`/modules/proxy-guard/config`), or Interactive Dashboard (`/custom/proxy-guard/ui`):
 ```bash
 curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/add \
   -H "Content-Type: application/json" \
@@ -101,6 +102,7 @@ Integrated out of the box with Toolcase Gateway via `stdio-stream`:
   - `proxy-guard__optimize_flow`: Analyze an entire batch of requests / HAR 1.2 log entries and calculate exact bandwidth & dollar savings.
   - `proxy-guard__add_upstream_proxy`: Dynamically add upstream proxies to the pool.
   - `proxy-guard__list_upstream_proxies`: List registered proxies with credentials securely masked.
+  - `proxy-guard__get_next_proxy`: Selects the next upstream proxy from the pool according to rotation strategy (round-robin, sticky, lowest-failures, country) and returns ready-to-use Playwright/Puppeteer configurations.
   - `proxy-guard__remove_upstream_proxy`: Remove an upstream proxy by ID.
   - `proxy-guard__set_rotation_strategy`: Set rotation strategy (`round_robin`, `sticky_session`, `lowest_failures`, `random`).
   - `proxy-guard__generate_script`: Output ready-to-run automation interceptors.
@@ -122,4 +124,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 57 integration tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 89 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
