@@ -88,6 +88,14 @@ pub static STRIPPED_REQUEST_HEADERS: &[&str] = &[
     "te",
     "trailer",
     "upgrade",
+    // Internal proxy routing headers (must not leak to upstream targets)
+    "x-proxy-session",
+    "x-proxy-session-id",
+    "x-proxy-country",
+    "x-proxy-tag",
+    "x-proxy-id",
+    "x-proxy-strategy",
+    "x-proxy-rotation-strategy",
     // No referrer sent - reduces analytics triggering
     "referer",
     // Privacy / tracking headers

@@ -48,3 +48,19 @@ pub fn extract_request_body(req: &Value) -> Result<Value, String> {
     }
     Ok(json!({}))
 }
+
+pub fn parse_query_params(query_str: &str) -> serde_json::Map<String, Value> {
+    let mut map = serde_json::Map::new();
+    if query_str.is_empty() {
+        return map;
+    }
+    for pair in query_str.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            let key = k.trim();
+            if !key.is_empty() {
+                map.insert(key.to_string(), Value::String(v.trim().to_string()));
+            }
+        }
+    }
+    map
+}

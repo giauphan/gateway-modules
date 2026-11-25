@@ -27,20 +27,24 @@ pub fn handle_request(req: Value, service: &ProxyGuardService) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("GET")
         .to_ascii_uppercase();
-    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("/");
-    let clean_path = path.trim_end_matches('/');
+    let raw_path = req.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+    let (path_only, query_str) = match raw_path.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (raw_path, ""),
+    };
+    let clean_path = path_only.trim_end_matches('/');
 
-    if let Some(resp) = handle_mcp_route(&req, path, service) {
+    if let Some(resp) = handle_mcp_route(&req, path_only, service) {
         return resp;
     }
     if let Some(resp) = handle_core_route(&req, clean_path, &method, service) {
         return resp;
     }
-    if let Some(resp) = handle_custom_route(&req, clean_path, &method, service) {
+    if let Some(resp) = handle_custom_route(&req, clean_path, query_str, &method, service) {
         return resp;
     }
 
-    make_error_resp(404, &format!("Not Found: {method} {path}"))
+    make_error_resp(404, &format!("Not Found: {method} {raw_path}"))
 }
 
 fn handle_mcp_route(req: &Value, path: &str, service: &ProxyGuardService) -> Option<Value> {
@@ -126,6 +130,7 @@ fn handle_core_route(
 fn handle_custom_route(
     req: &Value,
     clean_path: &str,
+    query_str: &str,
     method: &str,
     service: &ProxyGuardService,
 ) -> Option<Value> {
@@ -164,12 +169,13 @@ fn handle_custom_route(
         return Some(handle_get_metrics(service));
     }
 
-    handle_proxy_subroutes(req, clean_path, service)
+    handle_proxy_subroutes(req, clean_path, query_str, service)
 }
 
 fn handle_proxy_subroutes(
     req: &Value,
     clean_path: &str,
+    query_str: &str,
     service: &ProxyGuardService,
 ) -> Option<Value> {
     if clean_path.ends_with("/proxies/list") {
@@ -193,7 +199,26 @@ fn handle_proxy_subroutes(
     }
 
     if clean_path.ends_with("/proxies/next") {
-        let body = extract_request_body(req).unwrap_or_else(|_| json!({}));
+        let mut body = extract_request_body(req).unwrap_or_else(|_| json!({}));
+        if !query_str.is_empty() {
+            let q_map = crate::rpc::parse_query_params(query_str);
+            if let Some(obj) = body.as_object_mut() {
+                for (k, v) in q_map {
+                    obj.entry(k).or_insert(v);
+                }
+            } else {
+                body = Value::Object(q_map);
+            }
+        }
+        if let Some(q_obj) = req.get("query").and_then(|v| v.as_object()) {
+            if let Some(obj) = body.as_object_mut() {
+                for (k, v) in q_obj {
+                    obj.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            } else {
+                body = Value::Object(q_obj.clone());
+            }
+        }
         return Some(handle_get_next_proxy(&body, service));
     }
 
@@ -346,6 +371,7 @@ fn get_mcp_tools_list() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "strategy": { "type": "string", "description": "Optional rotation strategy override: round_robin, sticky_session, lowest_failures, or random" },
                     "session_id": { "type": "string", "description": "Optional session key for sticky routing" },
                     "country": { "type": "string", "description": "Optional country filter (e.g. US)" },
                     "tag": { "type": "string", "description": "Optional tag filter" },

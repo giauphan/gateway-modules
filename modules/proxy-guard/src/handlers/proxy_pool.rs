@@ -124,6 +124,11 @@ pub fn handle_remove_proxy(body: &Value, service: &ProxyGuardService) -> Value {
 /// GET /proxies/next
 /// Selects an upstream proxy according to pool rotation strategy and optional query filters.
 pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> Value {
+    let strategy_override = query_val
+        .get("strategy")
+        .and_then(|v| v.as_str())
+        .and_then(ProxyRotationStrategy::parse);
+
     let query = ProxySelectionQuery {
         session_id: query_val
             .get("session_id")
@@ -141,15 +146,20 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
             .get("preferred_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        strategy: strategy_override,
     };
 
     match service.select_proxy(&query) {
         Some(proxy) => {
             let playwright_cfg = proxy.to_playwright_config();
+            let applied_strategy = strategy_override
+                .unwrap_or_else(|| service.get_strategy())
+                .as_str();
             make_json_resp(
                 200,
                 json!({
                     "status": "ok",
+                    "strategy_applied": applied_strategy,
                     "proxy": proxy,
                     "playwright_config": playwright_cfg,
                     "puppeteer_args": [

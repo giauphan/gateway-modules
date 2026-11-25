@@ -103,6 +103,8 @@ async function main() {
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     extraHTTPHeaders: {
+      // Per-request rotation strategy: round_robin, sticky_session, lowest_failures, or random
+      'X-Proxy-Strategy': 'lowest_failures',
       // Pin session to a consistent upstream IP in Proxy Guard's multi-proxy pool
       'X-Proxy-Session-Id': 'worker-profile-42',
       // Optional: Filter proxy pool by ISO country code
@@ -146,6 +148,7 @@ def scrape_with_proxy_guard():
 
         context = browser.new_context(
             extra_http_headers={
+                "X-Proxy-Strategy": "lowest_failures",
                 "X-Proxy-Session-Id": "python-worker-01",
                 "X-Proxy-Country": "US",
             }
@@ -298,9 +301,9 @@ interface PlaywrightProxyConfig {
   password?: string;
 }
 
-async function getNextProxy(country = 'US', sessionId = 'session-1'): Promise<PlaywrightProxyConfig> {
+async function getNextProxy(country = 'US', sessionId = 'session-1', strategy = 'lowest_failures'): Promise<PlaywrightProxyConfig> {
   const response = await fetch(
-    `http://127.0.0.1:28130/custom/proxy-guard/proxies/next?country=${country}&session_id=${sessionId}`
+    `http://127.0.0.1:28130/custom/proxy-guard/proxies/next?country=${country}&session_id=${sessionId}&strategy=${strategy}`
   );
   const data = await response.json();
   if (data.status !== 'success' || !data.playwright_config) {

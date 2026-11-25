@@ -277,6 +277,11 @@ fn tool_list_upstream_proxies(service: &ProxyGuardService) -> Value {
 }
 
 fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService) -> Value {
+    let strategy_override = arguments
+        .get("strategy")
+        .and_then(|v| v.as_str())
+        .and_then(ProxyRotationStrategy::parse);
+
     let query = ProxySelectionQuery {
         session_id: arguments
             .get("session_id")
@@ -294,13 +299,18 @@ fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService) -> Value 
             .get("preferred_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        strategy: strategy_override,
     };
 
     match service.select_proxy(&query) {
         Some(proxy) => {
             let playwright_cfg = proxy.to_playwright_config();
+            let applied_strategy = strategy_override
+                .unwrap_or_else(|| service.get_strategy())
+                .as_str();
             make_mcp_success(&json!({
                 "status": "success",
+                "strategy_applied": applied_strategy,
                 "proxy": proxy,
                 "playwright_config": playwright_cfg,
                 "curl_arg": format!("-x {}", proxy.url)

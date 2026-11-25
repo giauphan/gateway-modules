@@ -292,6 +292,27 @@ pub enum ProxyRotationStrategy {
     LowestFailures,
 }
 
+impl ProxyRotationStrategy {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "round_robin" | "roundrobin" => Some(Self::RoundRobin),
+            "random" => Some(Self::Random),
+            "sticky_session" | "sticky" => Some(Self::StickySession),
+            "lowest_failures" | "health" | "healthy" => Some(Self::LowestFailures),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RoundRobin => "round_robin",
+            Self::Random => "random",
+            Self::StickySession => "sticky_session",
+            Self::LowestFailures => "lowest_failures",
+        }
+    }
+}
+
 /// Query criteria when selecting an upstream proxy from the pool.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxySelectionQuery {
@@ -299,6 +320,7 @@ pub struct ProxySelectionQuery {
     pub country: Option<String>,
     pub tag: Option<String>,
     pub preferred_id: Option<String>,
+    pub strategy: Option<ProxyRotationStrategy>,
 }
 
 fn url_decode(s: &str) -> String {

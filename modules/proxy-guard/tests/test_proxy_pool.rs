@@ -379,3 +379,77 @@ fn test_proxy_removal_and_invalid_inputs() {
     assert!(UpstreamProxy::parse("10.0.0.1:99999", None, None, None).is_err());
     assert!(UpstreamProxy::parse("[::1", None, None, None).is_err());
 }
+
+#[test]
+fn test_per_request_rotation_strategy_override() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_pool_per_req_{}", std::process::id()));
+    let service = make_service_with_pool(&temp_dir);
+
+    // Global strategy is RoundRobin
+    service
+        .set_strategy(ProxyRotationStrategy::RoundRobin)
+        .unwrap();
+
+    service
+        .add_proxy(UpstreamProxy::parse("http://1.1.1.1:8080", Some("p1"), None, None).unwrap())
+        .unwrap();
+    service
+        .add_proxy(UpstreamProxy::parse("http://2.2.2.2:8080", Some("p2"), None, None).unwrap())
+        .unwrap();
+
+    // Mark p1 with failures
+    service.record_proxy_result("1.1.1.1:8080", false);
+    service.record_proxy_result("1.1.1.1:8080", false);
+
+    // 1. Without per-request override: uses global RoundRobin (first round selects p1)
+    let q_default = ProxySelectionQuery::default();
+    let p_rr = service.select_proxy(&q_default).unwrap();
+    assert_eq!(p_rr.id, "1.1.1.1:8080");
+
+    // 2. With per-request override to LowestFailures: overrides RoundRobin and picks p2
+    let q_override = ProxySelectionQuery {
+        strategy: Some(ProxyRotationStrategy::LowestFailures),
+        ..Default::default()
+    };
+    let p_lf = service.select_proxy(&q_override).unwrap();
+    assert_eq!(
+        p_lf.id, "2.2.2.2:8080",
+        "Per-request strategy override must take precedence"
+    );
+
+    // 3. Header extraction test for X-Proxy-Strategy and X-Proxy-Session-Id
+    let raw_headers = "Host: example.com\r\nX-Proxy-Strategy: lowest_failures\r\nX-Proxy-Session-Id: test-worker-1\r\n";
+    let q_headers = proxy_guard::proxy_server::utils::extract_proxy_query_from_headers(raw_headers);
+    assert_eq!(
+        q_headers.strategy,
+        Some(ProxyRotationStrategy::LowestFailures)
+    );
+    assert_eq!(q_headers.session_id.as_deref(), Some("test-worker-1"));
+
+    // 4. API GET /proxies/next with query parameter ?strategy=lowest_failures
+    let req_get = json!({
+        "method": "GET",
+        "path": "/proxies/next?strategy=lowest_failures"
+    });
+    let resp_get = handle_request(req_get, &service);
+    assert_eq!(resp_get["status"], 200);
+    let get_body: serde_json::Value =
+        serde_json::from_str(resp_get["body"].as_str().unwrap()).unwrap();
+    assert_eq!(get_body["strategy_applied"], "lowest_failures");
+    assert_eq!(get_body["proxy"]["id"], "2.2.2.2:8080");
+
+    // 5. API POST /proxies/next with body strategy
+    let req_post = json!({
+        "method": "POST",
+        "path": "/proxies/next",
+        "body": {
+            "strategy": "sticky_session",
+            "session_id": "sticky-sess-99"
+        }
+    });
+    let resp_post = handle_request(req_post, &service);
+    assert_eq!(resp_post["status"], 200);
+    let post_body: serde_json::Value =
+        serde_json::from_str(resp_post["body"].as_str().unwrap()).unwrap();
+    assert_eq!(post_body["strategy_applied"], "sticky_session");
+}

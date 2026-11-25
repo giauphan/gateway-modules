@@ -217,11 +217,12 @@ impl ProxyPoolManagementPort for ProxyPool {
             return None;
         }
 
-        let strategy = self
-            .strategy
-            .read()
-            .map(|s| *s)
-            .unwrap_or(ProxyRotationStrategy::RoundRobin);
+        let strategy = query.strategy.unwrap_or_else(|| {
+            self.strategy
+                .read()
+                .map(|s| *s)
+                .unwrap_or(ProxyRotationStrategy::RoundRobin)
+        });
 
         self.apply_strategy(strategy, &candidates, query.session_id.as_ref())
     }

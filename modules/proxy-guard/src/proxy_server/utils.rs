@@ -2,7 +2,7 @@
 //!
 //! Clean Architecture: Infrastructure Adapter Layer.
 
-use crate::domain::{ProxyAuth, ProxySelectionQuery};
+use crate::domain::{ProxyAuth, ProxyRotationStrategy, ProxySelectionQuery};
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -54,10 +54,15 @@ pub fn extract_proxy_query_from_headers(header_str: &str) -> ProxySelectionQuery
             let name_lower = name.trim().to_ascii_lowercase();
             let val_trimmed = val.trim();
             match name_lower.as_str() {
-                "x-proxy-session" => query.session_id = Some(val_trimmed.to_string()),
+                "x-proxy-session" | "x-proxy-session-id" => {
+                    query.session_id = Some(val_trimmed.to_string())
+                }
                 "x-proxy-country" => query.country = Some(val_trimmed.to_string()),
                 "x-proxy-tag" => query.tag = Some(val_trimmed.to_string()),
                 "x-proxy-id" => query.preferred_id = Some(val_trimmed.to_string()),
+                "x-proxy-strategy" | "x-proxy-rotation-strategy" => {
+                    query.strategy = ProxyRotationStrategy::parse(val_trimmed);
+                }
                 _ => {}
             }
         }
