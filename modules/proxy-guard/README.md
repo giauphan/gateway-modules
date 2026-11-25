@@ -63,7 +63,8 @@ modules/proxy-guard/
 ```
 
 > [!NOTE]
-> Detailed integration guide available at [docs/PROXY_GUARD_INTEGRATION.md](../../docs/PROXY_GUARD_INTEGRATION.md).
+> Detailed integration guide: [docs/PROXY_GUARD_INTEGRATION.md](../../docs/PROXY_GUARD_INTEGRATION.md)  
+> Complete API & payload specifications: [docs/PROXY_GUARD_API_PAYLOAD_REFERENCE.md](../../docs/PROXY_GUARD_API_PAYLOAD_REFERENCE.md)
 
 ---
 

@@ -109,26 +109,48 @@ Available strategies:
 - `lowest_failures`: Prioritizes proxies with the highest success rate and lowest error counts.
 - `random`: Random selection from healthy proxies in the pool.
 
-#### Per-Request Strategy Override (v1.4.0+)
-Instead of changing the global strategy for all workers, individual requests or browser contexts can override the rotation strategy on the fly:
+#### Per-Request Strategy & Country Selection (v1.5.1+)
+Instead of changing the global strategy for all workers, individual requests or browser contexts can override the rotation strategy and filter by country on the fly:
 
-1. **Via HTTP Header (`X-Proxy-Strategy`)**:
-   Pass `X-Proxy-Strategy: lowest_failures` (or `round_robin`, `sticky_session`, `random`) in your request or Playwright `extraHTTPHeaders`. Proxy Guard routes the request using that strategy and automatically strips the header before forwarding upstream.
+> 📘 **Full API Reference**: For exhaustive field schemas, JSON response payloads, and error codes, see [**API Payload Reference Guide**](./PROXY_GUARD_API_PAYLOAD_REFERENCE.md).
+
+1. **Via HTTP Header (`X-Proxy-Strategy` & `X-Proxy-Country`)**:
+   Pass `X-Proxy-Strategy: lowest_failures` and `X-Proxy-Country: VN` in your request or Playwright `extraHTTPHeaders`. Proxy Guard routes the request using that strategy and country filter, then automatically strips the headers before forwarding upstream.
 
 2. **Via REST API (`/proxies/next`)**:
    Query parameters or request body take immediate precedence:
    ```bash
-   # Query parameter
-   curl -s "http://127.0.0.1:3128/custom/proxy-guard/proxies/next?strategy=lowest_failures&country=US"
-
-   # POST JSON Body
+   # POST JSON Body (Recommended)
    curl -s -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/next \
      -H "Content-Type: application/json" \
-     -d '{"strategy": "sticky_session", "session_id": "profile-99"}'
+     -d '{
+       "country": "VN",
+       "strategy": "lowest_failures",
+       "session_id": "profile-99"
+     }'
+
+   # Query parameter (GET)
+   curl -s "http://127.0.0.1:3128/custom/proxy-guard/proxies/next?country=VN&strategy=lowest_failures"
    ```
 
+   **Payload Fields for `POST /proxies/next`**:
+   | Field | Type | Description |
+   | :--- | :--- | :--- |
+   | `country` | `string` (Optional) | Two-letter ISO country code (`"VN"`, `"US"`, etc.). Case-insensitive. |
+   | `strategy` | `string` (Optional) | Balancing mode: `"round_robin"`, `"sticky_session"`, `"lowest_failures"`, `"random"`. |
+   | `session_id` | `string` (Optional) | Sticky session key. Binds consecutive requests to the same proxy IP. |
+   | `tag` | `string` (Optional) | Tag filter (e.g. `"residential"`, `"mobile"`). |
+   | `preferred_id` | `string` (Optional) | Preferred proxy ID (`host:port`) if healthy. |
+
 3. **Via MCP Tool**:
-   Call `proxy-guard__get_next_proxy` with argument `"strategy": "lowest_failures"`.
+   Call `proxy-guard__get_next_proxy` with arguments:
+   ```json
+   {
+     "country": "VN",
+     "strategy": "lowest_failures",
+     "session_id": "profile-99"
+   }
+   ```
 
 ---
 
