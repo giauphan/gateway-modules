@@ -168,7 +168,13 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
                 }),
             )
         }
-        None => make_error_resp(404, "No healthy upstream proxy available in pool"),
+        None => {
+            let msg = match &query.country {
+                Some(c) => format!("No healthy upstream proxy available for country '{c}' in pool"),
+                None => "No healthy upstream proxy available in pool".to_string(),
+            };
+            make_error_resp(404, &msg)
+        }
     }
 }
 

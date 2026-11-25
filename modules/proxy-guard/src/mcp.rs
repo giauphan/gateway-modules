@@ -354,7 +354,13 @@ fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService) -> Value 
                 "curl_arg": format!("-x {}", proxy.url)
             }))
         }
-        None => make_mcp_error("No available upstream proxy in pool"),
+        None => {
+            let msg = match &query.country {
+                Some(c) => format!("No available upstream proxy for country '{c}' in pool"),
+                None => "No available upstream proxy in pool".to_string(),
+            };
+            make_mcp_error(&msg)
+        }
     }
 }
 

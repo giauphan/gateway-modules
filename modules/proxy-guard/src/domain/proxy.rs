@@ -78,7 +78,10 @@ impl UpstreamProxy {
 
         let (protocol, host, port, auth) = parse_proxy_components(trimmed)?;
 
-        let id = format!("{}:{}", host, port);
+        let id = match &auth {
+            Some(a) => format!("{}:{}:{}", host, port, a.username),
+            None => format!("{}:{}", host, port),
+        };
         let proxy_name = name.unwrap_or(&id).to_string();
 
         let canonical_url = match &auth {
@@ -146,6 +149,33 @@ impl UpstreamProxy {
             username: self.auth.as_ref().map(|a| a.username.clone()),
             password: self.auth.as_ref().map(|a| a.password.clone()),
         }
+    }
+
+    /// Dynamically adapts a residential proxy to target another country if supported by its auth scheme.
+    /// E.g., for Oxylabs/BrightData residential pools (`-cc-vn` -> `-cc-us`).
+    pub fn adapt_country(&self, target_country: &str) -> Option<Self> {
+        let a = self.auth.as_ref()?;
+        let new_username = replace_country_in_username(&a.username, target_country)?;
+        let mut adapted = self.clone();
+        let target_upper = target_country.trim().to_ascii_uppercase();
+        adapted.country = Some(target_upper);
+        let new_id = format!("{}:{}:{}", adapted.host, adapted.port, new_username);
+        adapted.id = new_id.clone();
+        adapted.name = new_id;
+        let new_auth = ProxyAuth {
+            username: new_username.clone(),
+            password: a.password.clone(),
+        };
+        adapted.url = format!(
+            "{}://{}:{}@{}:{}",
+            adapted.protocol.scheme(),
+            url_encode_userinfo(&new_username),
+            url_encode_userinfo(&new_auth.password),
+            adapted.host,
+            adapted.port
+        );
+        adapted.auth = Some(new_auth);
+        Some(adapted)
     }
 }
 
@@ -385,6 +415,32 @@ fn extract_country_from_username(username: &str) -> Option<String> {
                 return Some(code.to_ascii_uppercase());
             }
         }
+    }
+    None
+}
+
+fn replace_country_in_username(username: &str, target_country: &str) -> Option<String> {
+    let u_lower = username.to_ascii_lowercase();
+    let target = target_country.trim().to_ascii_lowercase();
+    if target.len() != 2 || !target.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    for pattern in &["-cc-", "_cc_", "-country-", "_country-", "-zone-"] {
+        if let Some(pos) = u_lower.find(pattern) {
+            let prefix = &username[..pos + pattern.len()];
+            let remainder = &username[pos + pattern.len()..];
+            let code_len = remainder
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .count();
+            if code_len == 2 {
+                let suffix = &remainder[code_len..];
+                return Some(format!("{prefix}{target}{suffix}"));
+            }
+        }
+    }
+    if (u_lower.starts_with("customer-") || u_lower.contains("resi")) && !u_lower.contains("-cc-") {
+        return Some(format!("{username}-cc-{target}"));
     }
     None
 }

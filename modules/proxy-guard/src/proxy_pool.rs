@@ -66,6 +66,18 @@ impl ProxyPool {
                 .collect();
             if !country_matches.is_empty() {
                 candidates = country_matches;
+            } else {
+                // If no exact match exists, adapt dynamic residential proxies (e.g. Oxylabs)
+                let adapted: Vec<UpstreamProxy> = candidates
+                    .iter()
+                    .filter_map(|p| p.adapt_country(&target_country))
+                    .collect();
+                if !adapted.is_empty() {
+                    candidates = adapted;
+                } else {
+                    // Fail closed if the requested country cannot be satisfied
+                    return Vec::new();
+                }
             }
         }
 
@@ -250,6 +262,12 @@ impl ProxyPoolManagementPort for ProxyPool {
                 .find(|p| p.country.as_deref() == Some(&target_country))
             {
                 return Some(p.clone());
+            }
+            if let Some(p) = fallback_candidates
+                .iter()
+                .find_map(|p| p.adapt_country(&target_country))
+            {
+                return Some(p);
             }
         }
 

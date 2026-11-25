@@ -233,7 +233,15 @@ impl FileStorageAdapter {
         let proxies_path = self.proxies_file();
         match fs::read_to_string(&proxies_path) {
             Ok(data) => match serde_json::from_str::<Vec<UpstreamProxy>>(&data) {
-                Ok(loaded) => {
+                Ok(mut loaded) => {
+                    for p in &mut loaded {
+                        if let Some(ref a) = p.auth {
+                            let expected_id = format!("{}:{}:{}", p.host, p.port, a.username);
+                            if p.id == format!("{}:{}", p.host, p.port) {
+                                p.id = expected_id;
+                            }
+                        }
+                    }
                     if let Ok(mut lock) = self.proxies_cache.write() {
                         *lock = loaded;
                     }
@@ -295,6 +303,15 @@ impl FileStorageAdapter {
         if !proxies_to_add.is_empty() {
             if let Ok(mut lock) = self.proxies_cache.write() {
                 let mut changed = false;
+                for p in &mut *lock {
+                    if let Some(ref a) = p.auth {
+                        let expected_id = format!("{}:{}:{}", p.host, p.port, a.username);
+                        if p.id == format!("{}:{}", p.host, p.port) {
+                            p.id = expected_id;
+                            changed = true;
+                        }
+                    }
+                }
                 for p in proxies_to_add {
                     if !lock
                         .iter()

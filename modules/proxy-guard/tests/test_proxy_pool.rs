@@ -518,3 +518,79 @@ fn test_config_json_sync_and_country_autodetection() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_dynamic_country_adaptation_and_shared_endpoint() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_pool_adapt_{}", std::process::id()));
+    let service = make_service_with_pool(&temp_dir);
+
+    // Add Oxylabs VN residential proxy
+    let p_vn = UpstreamProxy::parse(
+        "http://customer-resi_e58ec6d4-cc-vn:_yvFme7%3DXRnH@pr.oxylabs.io:7777",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    service.add_proxy(p_vn).unwrap();
+
+    // 1. Query for VN -> returns exact match
+    let q_vn = ProxySelectionQuery {
+        country: Some("VN".to_string()),
+        ..Default::default()
+    };
+    let sel_vn = service.select_proxy(&q_vn).unwrap();
+    assert_eq!(sel_vn.country.as_deref(), Some("VN"));
+    let pw_vn = sel_vn.to_playwright_config();
+    assert_eq!(
+        pw_vn.username.as_deref(),
+        Some("customer-resi_e58ec6d4-cc-vn")
+    );
+
+    // 2. Query for US -> dynamically adapts username from -cc-vn to -cc-us!
+    let q_us = ProxySelectionQuery {
+        country: Some("US".to_string()),
+        ..Default::default()
+    };
+    let sel_us = service.select_proxy(&q_us).unwrap();
+    assert_eq!(sel_us.country.as_deref(), Some("US"));
+    let pw_us = sel_us.to_playwright_config();
+    assert_eq!(
+        pw_us.username.as_deref(),
+        Some("customer-resi_e58ec6d4-cc-us")
+    );
+
+    // 3. Add explicit US proxy to same host and port -> both coexist with distinct IDs
+    let p_us = UpstreamProxy::parse(
+        "http://customer-resi_e58ec6d4-cc-us:_yvFme7%3DXRnH@pr.oxylabs.io:7777",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    service.add_proxy(p_us).unwrap();
+
+    let all = service.list_proxies();
+    assert_eq!(all.len(), 2);
+    assert_ne!(all[0].id, all[1].id);
+
+    // 4. Test via HTTP /proxies/next handler
+    let req = json!({
+        "method": "POST",
+        "path": "/proxies/next",
+        "body": {
+            "country": "US"
+        }
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    let body: serde_json::Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["proxy"]["country"], "US");
+    assert_eq!(
+        body["playwright_config"]["username"],
+        "customer-resi_e58ec6d4-cc-us"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

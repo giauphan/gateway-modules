@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "proxy-guard"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "serde",
  "serde_json",
