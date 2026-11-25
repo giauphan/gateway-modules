@@ -79,6 +79,9 @@ pub trait ProxyPoolManagementPort: Send + Sync {
     /// Adds or updates an upstream proxy in the pool.
     fn add_proxy(&self, proxy: UpstreamProxy) -> Result<String, String>;
 
+    /// Replaces the active proxy pool with a new set of proxies.
+    fn replace_proxies(&self, proxies: Vec<UpstreamProxy>) -> Result<(), String>;
+
     /// Removes an upstream proxy from the pool by ID.
     fn remove_proxy(&self, id: &str) -> Result<(), String>;
 

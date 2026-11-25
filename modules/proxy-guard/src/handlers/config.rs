@@ -62,14 +62,16 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
 fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
     // 1. Multi-proxy pool
     if let Some(pool_raw) = body.get("upstream_proxy_pool").and_then(|v| v.as_str()) {
+        let mut new_proxies = Vec::new();
         for line in pool_raw.split(['\n', ',', ';']) {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
                 if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
-                    let _ = service.add_proxy(proxy);
+                    new_proxies.push(proxy);
                 }
             }
         }
+        let _ = service.replace_proxies(new_proxies);
     }
 
     // 2. Fallback single proxy url

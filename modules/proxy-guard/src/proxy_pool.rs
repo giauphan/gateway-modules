@@ -160,6 +160,15 @@ impl ProxyPoolManagementPort for ProxyPool {
         Ok(proxy_id)
     }
 
+    fn replace_proxies(&self, proxies: Vec<UpstreamProxy>) -> Result<(), String> {
+        let _guard = self.mutation_lock.lock().map_err(|e| e.to_string())?;
+        self.storage.save_proxies(&proxies)?;
+        if let Ok(mut write_lock) = self.proxies.write() {
+            *write_lock = proxies;
+        }
+        Ok(())
+    }
+
     fn remove_proxy(&self, id: &str) -> Result<(), String> {
         let _guard = self.mutation_lock.lock().map_err(|e| e.to_string())?;
 

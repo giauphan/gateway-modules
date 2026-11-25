@@ -328,6 +328,10 @@ impl ProxyPoolManagementPort for ProxyGuardService {
         self.proxy_pool.add_proxy(proxy)
     }
 
+    fn replace_proxies(&self, proxies: Vec<UpstreamProxy>) -> Result<(), String> {
+        self.proxy_pool.replace_proxies(proxies)
+    }
+
     fn remove_proxy(&self, id: &str) -> Result<(), String> {
         self.proxy_pool.remove_proxy(id)
     }

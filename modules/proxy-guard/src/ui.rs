@@ -199,6 +199,17 @@ textarea {{ min-height: 100px; resize: vertical; }}
 </div>
 
 <script>
+function getApiEndpoint(subpath) {{
+  const p = window.location.pathname;
+  if (p.includes('/custom/proxy-guard')) {{
+    return '/custom/proxy-guard' + subpath;
+  }}
+  if (p.includes('/modules/proxy-guard')) {{
+    return '/modules/proxy-guard' + subpath;
+  }}
+  return subpath;
+}}
+
 async function submitMultiProxy() {{
   const raw = document.getElementById('proxyLines').value.trim();
   if (!raw) {{ alert('Please enter at least one proxy URL'); return; }}
@@ -208,7 +219,7 @@ async function submitMultiProxy() {{
   const tags = tag ? [tag] : undefined;
 
   const proxies = lines.map(url => ({{ url, country, tags }}));
-  const res = await fetch('/proxies/add', {{
+  const res = await fetch(getApiEndpoint('/proxies/add'), {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{ proxies }})
@@ -224,7 +235,7 @@ async function submitMultiProxy() {{
 
 async function removeProxy(id) {{
   if (!confirm(`Remove proxy ${{id}} from pool?`)) return;
-  const res = await fetch('/proxies/remove', {{
+  const res = await fetch(getApiEndpoint('/proxies/remove'), {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{ id }})
