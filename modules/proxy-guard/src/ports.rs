@@ -5,7 +5,7 @@
 
 use crate::domain::{
     FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, ProxyRotationStrategy,
-    ProxySelectionQuery, Rule, RuleCategory, UpstreamProxy,
+    ProxySelectionQuery, RequestLogEntry, Rule, RuleCategory, UpstreamProxy,
 };
 
 /// Inbound Port: Application operations for analyzing and optimizing traffic flows.
@@ -48,6 +48,15 @@ pub trait MetricsPort: Send + Sync {
 
     /// Resets metrics to zero.
     fn reset_metrics(&self);
+
+    /// Appends an intercepted request to the live audit log buffer.
+    fn log_request(&self, entry: RequestLogEntry);
+
+    /// Returns recent intercepted request logs up to `limit`.
+    fn get_request_logs(&self, limit: usize) -> Vec<RequestLogEntry>;
+
+    /// Clears the request log buffer.
+    fn clear_request_logs(&self);
 }
 
 /// Outward Port: Storage abstraction for persisting and loading rules and configuration.

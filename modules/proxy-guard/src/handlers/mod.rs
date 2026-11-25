@@ -169,6 +169,25 @@ fn handle_custom_route(
         return Some(handle_get_metrics(service));
     }
 
+    if clean_path.ends_with("/logs/clear") {
+        return Some(handle_clear_logs(service));
+    }
+
+    if clean_path.ends_with("/logs") {
+        let mut body = extract_request_body(req).unwrap_or_else(|_| json!({}));
+        if !query_str.is_empty() {
+            let q_map = crate::rpc::parse_query_params(query_str);
+            if let Some(obj) = body.as_object_mut() {
+                for (k, v) in q_map {
+                    obj.entry(k).or_insert(v);
+                }
+            } else {
+                body = Value::Object(q_map);
+            }
+        }
+        return Some(handle_get_logs(&body, service));
+    }
+
     handle_proxy_subroutes(req, clean_path, query_str, service)
 }
 
@@ -315,6 +334,16 @@ fn get_mcp_tools_list() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {}
+            }
+        },
+        {
+            "name": "proxy-guard__get_request_logs",
+            "description": "Returns live intercepted request logs and traffic reduction statistics.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "number", "description": "Max number of recent logs to return (default: 50, max: 100)" }
+                }
             }
         },
         {

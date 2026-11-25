@@ -366,3 +366,70 @@ fn test_config_endpoint_get_and_post() {
     let alias_resp = handle_request(alias_req, &service);
     assert_eq!(alias_resp["status"], 200);
 }
+
+#[test]
+fn test_request_logs_api_and_mcp() {
+    use proxy_guard::ports::{FlowOptimizerPort, MetricsPort};
+    let temp_dir = std::env::temp_dir().join(format!("pg_logs_test_{}", std::process::id()));
+    let service = make_test_service(&temp_dir);
+    service.reset_metrics();
+
+    // 1. Initially empty logs
+    let req_logs_empty = json!({
+        "method": "GET",
+        "path": "/custom/proxy-guard/logs"
+    });
+    let resp_empty = handle_request(req_logs_empty, &service);
+    assert_eq!(resp_empty["status"], 200);
+    let body_empty: Value = serde_json::from_str(resp_empty["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body_empty["logs_count"], 0);
+    assert_eq!(body_empty["request_reduction_percentage"], 0.0);
+
+    // 2. Intercept a blocked request and an allowed request
+    let _ = service.evaluate_url("https://www.google-analytics.com/analytics.js", "GET", None);
+    let _ = service.evaluate_url("https://api.ipify.org?format=json", "GET", None);
+
+    // 3. Query GET /custom/proxy-guard/logs
+    let req_logs = json!({
+        "method": "GET",
+        "path": "/custom/proxy-guard/logs?limit=10"
+    });
+    let resp = handle_request(req_logs, &service);
+    assert_eq!(resp["status"], 200);
+    let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["logs_count"], 2);
+    assert_eq!(body["total_requests"], 2);
+    assert_eq!(body["blocked_requests"], 1);
+    assert_eq!(body["forwarded_requests"], 1);
+    assert_eq!(body["request_reduction_percentage"], 50.0);
+
+    let logs = body["logs"].as_array().unwrap();
+    assert_eq!(logs.len(), 2);
+    assert_eq!(logs[0]["host"], "api.ipify.org");
+    assert_eq!(logs[0]["action"], "Forwarded (Upstream)");
+    assert_eq!(logs[1]["host"], "www.google-analytics.com");
+    assert!(logs[1]["action"].as_str().unwrap().contains("Mocked"));
+
+    // 4. Query via MCP tool proxy-guard__get_request_logs
+    let mcp_req = json!({
+        "method": "POST",
+        "path": "/tools/call",
+        "body": {
+            "name": "proxy-guard__get_request_logs",
+            "arguments": { "limit": 5 }
+        }
+    });
+    let mcp_resp = handle_request(mcp_req, &service);
+    assert_eq!(mcp_resp["status"], 200);
+    let mcp_body: Value = serde_json::from_str(mcp_resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(mcp_body["isError"], false);
+
+    // 5. POST /custom/proxy-guard/logs/clear
+    let clear_req = json!({
+        "method": "POST",
+        "path": "/custom/proxy-guard/logs/clear"
+    });
+    let clear_resp = handle_request(clear_req, &service);
+    assert_eq!(clear_resp["status"], 200);
+    assert_eq!(service.get_request_logs(10).len(), 0);
+}

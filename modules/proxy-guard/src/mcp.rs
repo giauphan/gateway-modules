@@ -22,6 +22,7 @@ pub fn handle_mcp_tool_request(
         "optimize_flow" => tool_optimize_flow(arguments, service),
         "generate_script" => tool_generate_script(arguments, service),
         "get_metrics" => make_mcp_success(&json!({ "metrics": service.get_metrics() })),
+        "get_request_logs" => tool_get_request_logs(arguments, service),
         "configure_rules" => tool_configure_rules(arguments, service),
         "add_upstream_proxy" => tool_add_upstream_proxy(arguments, service),
         "list_upstream_proxies" => tool_list_upstream_proxies(service),
@@ -148,6 +149,43 @@ fn tool_generate_script(arguments: &Value, service: &ProxyGuardService) -> Value
         })),
         Err(err) => make_mcp_error(&err),
     }
+}
+
+fn tool_get_request_logs(arguments: &Value, service: &ProxyGuardService) -> Value {
+    let limit = arguments
+        .get("limit")
+        .and_then(|v| {
+            if let Some(n) = v.as_u64() {
+                Some(n as usize)
+            } else if let Some(s) = v.as_str() {
+                s.parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(50);
+
+    let logs = service.get_request_logs(limit);
+    let metrics = service.get_metrics();
+    let total = metrics.total_requests;
+    let blocked = metrics.blocked_requests;
+    let reduction_pct = if total > 0 {
+        (blocked as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    make_mcp_success(&json!({
+        "status": "success",
+        "request_reduction_percentage": (reduction_pct * 10.0).round() / 10.0,
+        "total_requests": total,
+        "blocked_requests": blocked,
+        "forwarded_requests": metrics.forwarded_requests,
+        "bytes_saved": metrics.bytes_saved,
+        "estimated_cost_saved_usd": metrics.estimated_cost_saved_usd,
+        "logs_returned": logs.len(),
+        "logs": logs
+    }))
 }
 
 fn tool_configure_rules(arguments: &Value, service: &ProxyGuardService) -> Value {

@@ -23,13 +23,13 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.4.0)
+## 2. Architecture & Clean Architecture Layers (v1.5.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.4.0)
+├── Cargo.toml          # Single source of truth (v1.5.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary (635 KB)
@@ -107,6 +107,7 @@ Integrated out of the box with Toolcase Gateway via `stdio-stream`:
   - `proxy-guard__set_rotation_strategy`: Set rotation strategy (`round_robin`, `sticky_session`, `lowest_failures`, `random`).
   - `proxy-guard__generate_script`: Output ready-to-run automation interceptors.
   - `proxy-guard__get_metrics`: View real-time bandwidth and dollar savings.
+  - `proxy-guard__get_request_logs`: Query live intercepted request audit logs and request reduction percentages.
   - `proxy-guard__configure_rules`: Toggle categories or add custom whitelist/blacklist entries.
 
 ### Playwright & Headless Browser Integration
@@ -124,4 +125,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 89 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 90 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.

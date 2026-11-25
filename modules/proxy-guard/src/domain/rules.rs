@@ -294,3 +294,19 @@ pub struct FlowOptimizationResult {
     pub cost_saved_usd: f64,
     pub decisions: Vec<FilterDecision>,
 }
+
+/// Individual log record for an intercepted request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub url: String,
+    pub host: String,
+    pub action: String,
+    pub category: String,
+    pub reason: String,
+    pub bytes_saved: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_proxy: Option<String>,
+}

@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -190,6 +190,19 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "get_request_logs",
+      "description": "Returns live intercepted request logs and traffic reduction statistics.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Max number of recent logs to return (default: 50, max: 100)"
+          }
+        }
       }
     },
     {

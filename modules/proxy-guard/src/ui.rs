@@ -33,7 +33,17 @@ pub fn render_dashboard_html(service: &ProxyGuardService) -> String {
         ProxyRotationStrategy::Random => "Random",
     };
 
+    let total_reqs = metrics.total_requests;
+    let blocked_reqs = metrics.blocked_requests;
+    let reduction_pct = if total_reqs > 0 {
+        (blocked_reqs as f64 / total_reqs as f64) * 100.0
+    } else {
+        0.0
+    };
+
     let mb_saved = (metrics.bytes_saved as f64) / (1024.0 * 1024.0);
+    let mb_upstream = (metrics.upstream_bytes_used as f64) / (1024.0 * 1024.0);
+    let cost_saved = metrics.estimated_cost_saved_usd;
     let total_proxies = proxies.len();
 
     let mut proxy_rows = String::new();
@@ -92,22 +102,73 @@ pub fn render_dashboard_html(service: &ProxyGuardService) -> String {
         proxy_rows = "<tr><td colspan='9' style='text-align:center;color:#888;padding:24px;'>No upstream proxies registered in pool. Add proxies using the form below.</td></tr>".to_string();
     }
 
+    // Recent Request Logs
+    let recent_logs = service.get_request_logs(25);
+    let logs_count = recent_logs.len();
+    let mut log_rows = String::new();
+    for log in &recent_logs {
+        let action_badge = if log.action.starts_with("Blocked") {
+            format!(
+                "<span class='badge err'>{}</span>",
+                html_escape(&log.action)
+            )
+        } else if log.action.starts_with("Mocked") {
+            format!(
+                "<span class='badge warn'>{}</span>",
+                html_escape(&log.action)
+            )
+        } else {
+            format!("<span class='badge ok'>{}</span>", html_escape(&log.action))
+        };
+
+        let saved_str = if log.bytes_saved >= 1024 * 1024 {
+            format!("{:.2} MB", log.bytes_saved as f64 / (1024.0 * 1024.0))
+        } else if log.bytes_saved > 0 {
+            format!("{:.1} KB", log.bytes_saved as f64 / 1024.0)
+        } else {
+            "-".to_string()
+        };
+
+        log_rows.push_str(&format!(
+            r#"<tr>
+                <td style='white-space:nowrap;font-family:monospace;font-size:12px;color:#8b949e;'>{}</td>
+                <td><span class='proto'>{}</span></td>
+                <td style='max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' title='{}'><strong>{}</strong><br><span style='font-size:11px;color:#8b949e;'>{}</span></td>
+                <td><span class='tag'>{}</span></td>
+                <td>{}</td>
+                <td><strong style='color:var(--green);'>{}</strong></td>
+            </tr>"#,
+            html_escape(&log.timestamp),
+            html_escape(&log.method),
+            html_escape(&log.url),
+            html_escape(&log.host),
+            html_escape(&log.reason),
+            html_escape(&log.category),
+            action_badge,
+            html_escape(&saved_str),
+        ));
+    }
+
+    if recent_logs.is_empty() {
+        log_rows = "<tr><td colspan='6' style='text-align:center;color:#888;padding:24px;'>No requests intercepted yet. Active traffic will stream here in real time.</td></tr>".to_string();
+    }
+
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Proxy Guard - Multi-Proxy Pool Dashboard</title>
+<title>Proxy Guard - Multi-Proxy Pool & Traffic Optimizer</title>
 <style>
 :root {{ --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --warn: #d29922; --err: #f85149; }}
 body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
 .container {{ max-width: 1100px; margin: 0 auto; }}
 h1, h2, h3 {{ color: #f0f6fc; margin-top: 0; }}
 .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }}
 .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }}
-.metric {{ font-size: 28px; font-weight: bold; color: var(--accent); margin-top: 4px; }}
+.metric {{ font-size: 26px; font-weight: bold; color: var(--accent); margin-top: 4px; }}
 .card-green .metric {{ color: var(--green); }}
 table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
 th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }}
@@ -135,7 +196,7 @@ textarea {{ min-height: 100px; resize: vertical; }}
   <div class="header">
     <div>
       <h1>🛡️ Proxy Guard Dashboard</h1>
-      <div style="color:#8b949e;font-size:14px;">Multi-Upstream Proxy Pool & Cost Optimizer</div>
+      <div style="color:#8b949e;font-size:14px;">Multi-Upstream Proxy Pool, Live Reduction Stream &amp; Cost Optimizer</div>
     </div>
     <div>
       <button class="btn btn-sm" onclick="location.reload()">🔄 Refresh</button>
@@ -144,7 +205,7 @@ textarea {{ min-height: 100px; resize: vertical; }}
 
   <div class="grid">
     <div class="card">
-      <div style="font-size:13px;color:#8b949e;">Active Upstream Proxies</div>
+      <div style="font-size:13px;color:#8b949e;">Active Proxies</div>
       <div class="metric">{total_proxies}</div>
     </div>
     <div class="card">
@@ -152,12 +213,21 @@ textarea {{ min-height: 100px; resize: vertical; }}
       <div class="metric" style="font-size:20px;padding-top:6px;">{strat_str}</div>
     </div>
     <div class="card card-green">
+      <div style="font-size:13px;color:#8b949e;">Request Reduction</div>
+      <div class="metric">{reduction_pct:.1}%</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">{blocked_reqs} blocked / {total_reqs} total</div>
+    </div>
+    <div class="card card-green">
       <div style="font-size:13px;color:#8b949e;">Bandwidth Saved</div>
       <div class="metric">{mb_saved:.2} MB</div>
     </div>
+    <div class="card">
+      <div style="font-size:13px;color:#8b949e;">Upstream Used</div>
+      <div class="metric" style="color:#79c0ff;">{mb_upstream:.2} MB</div>
+    </div>
     <div class="card card-green">
       <div style="font-size:13px;color:#8b949e;">Cost Saved (USD)</div>
-      <div class="metric">${:.4}</div>
+      <div class="metric">${cost_saved:.4}</div>
     </div>
   </div>
 
@@ -182,6 +252,33 @@ textarea {{ min-height: 100px; resize: vertical; }}
       </thead>
       <tbody>
         {proxy_rows}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto;margin-top:24px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h3 style="margin:0;">📋 Live Intercepted Request Logs</h3>
+        <div style="font-size:12px;color:#8b949e;margin-top:2px;">Audit trail of intercepted requests showing real-time bandwidth reduction (last {logs_count})</div>
+      </div>
+      <div>
+        <button class="btn btn-sm btn-del" onclick="clearLogs()">Clear Logs</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Method</th>
+          <th>Host &amp; URL</th>
+          <th>Category</th>
+          <th>Action</th>
+          <th>Data Saved</th>
+        </tr>
+      </thead>
+      <tbody>
+        {log_rows}
       </tbody>
     </table>
   </div>
@@ -247,9 +344,19 @@ async function removeProxy(id) {{
     alert('Failed to remove proxy: ' + (data.error || 'Unknown error'));
   }}
 }}
+
+async function clearLogs() {{
+  if (!confirm('Clear recent intercepted request logs?')) return;
+  const res = await fetch(getApiEndpoint('/logs/clear'), {{
+    method: 'POST'
+  }});
+  const data = await res.json();
+  if (data.status === 'ok') {{
+    location.reload();
+  }}
+}}
 </script>
 </body>
-</html>"##,
-        metrics.estimated_cost_saved_usd,
+</html>"##
     )
 }

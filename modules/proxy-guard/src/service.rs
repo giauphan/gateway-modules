@@ -5,7 +5,8 @@
 
 use crate::domain::{
     FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType,
-    ProxyRotationStrategy, ProxySelectionQuery, Rule, RuleAction, RuleCategory, UpstreamProxy,
+    ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, Rule, RuleAction, RuleCategory,
+    UpstreamProxy,
 };
 use crate::ports::{
     FlowOptimizerPort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
@@ -13,6 +14,7 @@ use crate::ports::{
 };
 use crate::rules_engine::RulesEngine;
 use crate::script_generator::ScriptGenerator;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -24,6 +26,7 @@ pub struct ProxyGuardService {
     cached_engine: RwLock<RulesEngine>,
     cached_metrics: RwLock<FlowMetrics>,
     dirty_metrics_count: AtomicU64,
+    request_logs: RwLock<VecDeque<RequestLogEntry>>,
     rule_edit_lock: Mutex<()>,
     metrics_lock: Mutex<()>,
 }
@@ -49,6 +52,7 @@ impl ProxyGuardService {
             cached_engine: RwLock::new(engine),
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
+            request_logs: RwLock::new(VecDeque::with_capacity(100)),
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
         }
@@ -94,6 +98,18 @@ impl ProxyGuardService {
     }
 }
 
+fn current_utc_time_str() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let hours = (secs / 3600) % 24;
+    let minutes = (secs / 60) % 60;
+    let seconds = secs % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02} UTC")
+}
+
 impl FlowOptimizerPort for ProxyGuardService {
     fn evaluate_url(&self, url: &str, method: &str, resource_type: Option<&str>) -> FilterDecision {
         let decision = if let Ok(engine) = self.cached_engine.read() {
@@ -104,6 +120,58 @@ impl FlowOptimizerPort for ProxyGuardService {
 
         // Automatically record to metrics
         self.record_decision(&decision, None);
+
+        // Record to live audit logs
+        let host_candidate = url
+            .split("://")
+            .nth(1)
+            .unwrap_or(url)
+            .split('/')
+            .next()
+            .unwrap_or(url);
+        let host = host_candidate
+            .split('?')
+            .next()
+            .unwrap_or(host_candidate)
+            .to_string();
+
+        let action_str = if decision.is_blocked() {
+            match decision.action {
+                RuleAction::Block204 => "Blocked (204)",
+                RuleAction::MockScript => "Mocked (JS Stub)",
+                RuleAction::MockPixel => "Mocked (1x1 Pixel)",
+                RuleAction::BlockEmptyJson => "Blocked (Empty JSON)",
+                RuleAction::Block403 => "Blocked (403)",
+                _ => "Blocked",
+            }
+        } else if decision.action == RuleAction::BypassDirect {
+            "Bypassed (Direct)"
+        } else {
+            "Forwarded (Upstream)"
+        };
+
+        let req_id = format!(
+            "req_{}",
+            self.cached_metrics
+                .read()
+                .map(|m| m.total_requests)
+                .unwrap_or(0)
+        );
+
+        let log_entry = RequestLogEntry {
+            id: req_id,
+            timestamp: current_utc_time_str(),
+            method: method.to_ascii_uppercase(),
+            url: url.to_string(),
+            host,
+            action: action_str.to_string(),
+            category: format!("{:?}", decision.category),
+            reason: decision.reason.clone(),
+            bytes_saved: decision.estimated_bytes_saved,
+            upstream_proxy: None,
+        };
+        self.log_request(log_entry);
+
         decision
     }
 
@@ -304,6 +372,7 @@ impl MetricsPort for ProxyGuardService {
     }
 
     fn reset_metrics(&self) {
+        self.clear_request_logs();
         if let Ok(_guard) = self.metrics_lock.lock() {
             if let Ok(mut metrics_lock) = self.cached_metrics.write() {
                 let rate = self.cost_per_gb_usd.read().map(|r| *r).unwrap_or(3.5);
@@ -313,6 +382,30 @@ impl MetricsPort for ProxyGuardService {
                     self.dirty_metrics_count.store(0, Ordering::Relaxed);
                 }
             }
+        }
+    }
+
+    fn log_request(&self, entry: RequestLogEntry) {
+        if let Ok(mut logs) = self.request_logs.write() {
+            if logs.len() >= 100 {
+                logs.pop_front();
+            }
+            logs.push_back(entry);
+        }
+    }
+
+    fn get_request_logs(&self, limit: usize) -> Vec<RequestLogEntry> {
+        if let Ok(logs) = self.request_logs.read() {
+            let count = if limit == 0 { 50 } else { limit.min(100) };
+            logs.iter().rev().take(count).cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn clear_request_logs(&self) {
+        if let Ok(mut logs) = self.request_logs.write() {
+            logs.clear();
         }
     }
 }

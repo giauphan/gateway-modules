@@ -12,5 +12,5 @@ pub use proxy::{
 };
 pub use rules::{
     FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, MockPayload, PatternType,
-    ResourceType, Rule, RuleAction, RuleCategory,
+    RequestLogEntry, ResourceType, Rule, RuleAction, RuleCategory,
 };
