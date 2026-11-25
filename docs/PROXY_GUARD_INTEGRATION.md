@@ -129,6 +129,8 @@ Unlike crude blockers that return `403 Forbidden` or drop sockets (causing clien
 
 ## 4. Automation Tool Integration Examples
 
+> 💡 **Dedicated Playwright Guide**: For in-depth recipes including in-browser route mocking, Python async flows, CI test runner configuration, and dynamic proxy rotation, see the dedicated [**Playwright Integration Guide**](./PLAYWRIGHT_INTEGRATION.md).
+
 ### 4.1 Playwright (TypeScript / Node.js)
 
 Configure Playwright to route all browser traffic through Proxy Guard on `http://127.0.0.1:3128`:

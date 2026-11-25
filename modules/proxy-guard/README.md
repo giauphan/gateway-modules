@@ -107,6 +107,10 @@ Integrated out of the box with Toolcase Gateway via `stdio-stream`:
   - `proxy-guard__get_metrics`: View real-time bandwidth and dollar savings.
   - `proxy-guard__configure_rules`: Toggle categories or add custom whitelist/blacklist entries.
 
+### Playwright & Headless Browser Integration
+For full integration recipes (TypeScript, Python, CI `playwright.config.ts`, route interception, and proxy rotation), refer to the dedicated guide:
+👉 [**Playwright Integration Guide**](../../docs/PLAYWRIGHT_INTEGRATION.md)
+
 ---
 
 ## 4. Verification & Tests
