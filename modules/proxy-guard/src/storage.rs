@@ -65,6 +65,26 @@ impl FileStorageAdapter {
         self.base_dir.join(".state").join("proxies.json")
     }
 
+    pub fn config_file(&self) -> PathBuf {
+        if let Ok(env_path) = std::env::var("PROXY_GUARD_CONFIG_PATH") {
+            let p = PathBuf::from(env_path);
+            if p.is_file() {
+                return p;
+            }
+        }
+        let local_cfg = self.base_dir.join("config.json");
+        if local_cfg.is_file() {
+            return local_cfg;
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let cwd_cfg = cwd.join("config.json");
+            if cwd_cfg.is_file() {
+                return cwd_cfg;
+            }
+        }
+        self.base_dir.join("config.json")
+    }
+
     fn atomic_write_file(&self, target_path: &Path, content: &str) -> Result<(), String> {
         let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
         let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -233,6 +253,105 @@ impl FileStorageAdapter {
                     proxies_path
                 );
                 self.proxies_corrupted.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let cfg_path = self.config_file();
+        if cfg_path.is_file() {
+            if let Ok(data) = fs::read_to_string(&cfg_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                    self.sync_from_config_json(&val);
+                }
+            }
+        }
+    }
+
+    fn sync_from_config_json(&self, val: &serde_json::Value) {
+        let mut proxies_to_add = Vec::new();
+
+        // 1. upstream_proxy_pool
+        if let Some(pool_raw) = val.get("upstream_proxy_pool").and_then(|v| v.as_str()) {
+            for line in pool_raw.split(['\n', ',', ';']) {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                        proxies_to_add.push(proxy);
+                    }
+                }
+            }
+        }
+
+        // 2. upstream_proxy_url (fallback)
+        if let Some(single_url) = val.get("upstream_proxy_url").and_then(|v| v.as_str()) {
+            let trimmed = single_url.trim();
+            if !trimmed.is_empty() {
+                if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    proxies_to_add.push(proxy);
+                }
+            }
+        }
+
+        // Add to proxies_cache if not already present
+        if !proxies_to_add.is_empty() {
+            if let Ok(mut lock) = self.proxies_cache.write() {
+                let mut changed = false;
+                for p in proxies_to_add {
+                    if !lock
+                        .iter()
+                        .any(|existing| existing.id == p.id || existing.url == p.url)
+                    {
+                        lock.push(p);
+                        changed = true;
+                    }
+                }
+                if changed && !self.proxies_corrupted.load(Ordering::SeqCst) {
+                    if let Ok(json) = serde_json::to_string_pretty(&*lock) {
+                        let _ = self.atomic_write_file(&self.proxies_file(), &json);
+                    }
+                }
+            }
+        }
+
+        // 3. cost_per_gb_usd
+        if let Some(cost) = val.get("cost_per_gb_usd").and_then(|v| v.as_f64()) {
+            if cost > 0.0 {
+                if let Ok(mut lock) = self.metrics_cache.write() {
+                    lock.cost_per_gb_usd = cost;
+                }
+            }
+        }
+
+        // 4. whitelist_domains
+        if let Some(arr) = val.get("whitelist_domains").and_then(|v| v.as_array()) {
+            if let Ok(mut lock) = self.whitelist_cache.write() {
+                for item in arr {
+                    if let Some(d) = item.as_str() {
+                        let trimmed = d.trim();
+                        if !trimmed.is_empty() && !lock.contains(&trimmed.to_string()) {
+                            lock.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Rule category toggles
+        let toggles = [
+            ("block_analytics", crate::domain::RuleCategory::Analytics),
+            ("block_ads", crate::domain::RuleCategory::Advertising),
+            ("block_telemetry", crate::domain::RuleCategory::Telemetry),
+            ("block_media", crate::domain::RuleCategory::HeavyMedia),
+            ("block_fonts", crate::domain::RuleCategory::Font),
+        ];
+        if let Ok(mut lock) = self.rules_cache.write() {
+            for (key, cat) in toggles {
+                if let Some(enabled) = val.get(key).and_then(|v| v.as_bool()) {
+                    for r in lock.iter_mut() {
+                        if r.category == cat {
+                            r.enabled = enabled;
+                        }
+                    }
+                }
             }
         }
     }

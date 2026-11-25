@@ -453,3 +453,68 @@ fn test_per_request_rotation_strategy_override() {
         serde_json::from_str(resp_post["body"].as_str().unwrap()).unwrap();
     assert_eq!(post_body["strategy_applied"], "sticky_session");
 }
+
+#[test]
+fn test_config_json_sync_and_country_autodetection() {
+    let temp_dir = std::env::temp_dir().join(format!("pg_test_cfg_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // 1. Test auto-detection of country from Oxylabs username with special chars in password
+    let oxylabs_url = "http://customer-resi_e58ec6d4-cc-vn:_yvFme7=XRnH@pr.oxylabs.io:7777";
+    let p_auto = UpstreamProxy::parse(oxylabs_url, None, None, None).unwrap();
+    assert_eq!(p_auto.country.as_deref(), Some("VN"));
+    assert_eq!(
+        p_auto.auth.as_ref().unwrap().username,
+        "customer-resi_e58ec6d4-cc-vn"
+    );
+    assert_eq!(p_auto.auth.as_ref().unwrap().password, "_yvFme7=XRnH");
+
+    // 2. Write a gateway-style config.json in temp_dir
+    let config_json = json!({
+        "upstream_proxy_pool": "http://customer-resi_e58ec6d4-cc-vn:_yvFme7=XRnH@pr.oxylabs.io:7777\nsocks5://backup:pass123@1.1.1.1:1080",
+        "rotation_strategy": "lowest_failures",
+        "cost_per_gb_usd": 4.5,
+        "block_analytics": true
+    });
+    std::fs::write(temp_dir.join("config.json"), config_json.to_string()).unwrap();
+
+    // 3. Instantiate FileStorageAdapter on temp_dir
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    );
+
+    // Verify proxies were automatically loaded from config.json
+    let proxies = service.list_proxies();
+    assert_eq!(proxies.len(), 2);
+    assert_eq!(proxies[0].country.as_deref(), Some("VN"));
+    assert_eq!(proxies[0].host, "pr.oxylabs.io");
+    assert_eq!(proxies[1].host, "1.1.1.1");
+
+    // Verify /proxies/next succeeds with country=VN
+    let req = json!({
+        "method": "POST",
+        "path": "/proxies/next",
+        "body": {
+            "country": "VN"
+        }
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    let body: serde_json::Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["proxy"]["country"], "VN");
+    assert_eq!(
+        body["playwright_config"]["server"],
+        "http://pr.oxylabs.io:7777"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -96,13 +96,74 @@ fn resolve_base_dir() -> PathBuf {
         })
 }
 
-fn init_proxies(service: &ProxyGuardService, raw_inputs: Vec<String>, strategy: Option<String>) {
-    if let Some(strat_str) = strategy {
+fn init_proxies(
+    service: &ProxyGuardService,
+    raw_inputs: Vec<String>,
+    strategy: Option<String>,
+    base_dir: &std::path::Path,
+) {
+    let mut effective_strategy = strategy;
+
+    let config_candidates = [
+        base_dir.join("config.json"),
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("config.json"),
+    ];
+
+    for cfg_path in &config_candidates {
+        if cfg_path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(cfg_path) {
+                if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                    if effective_strategy.is_none() {
+                        if let Some(strat_str) =
+                            val.get("rotation_strategy").and_then(|v| v.as_str())
+                        {
+                            let trimmed = strat_str.trim();
+                            if !trimmed.is_empty() {
+                                effective_strategy = Some(trimmed.to_string());
+                            }
+                        }
+                    }
+                    if service.list_proxies().is_empty() {
+                        if let Some(pool_raw) =
+                            val.get("upstream_proxy_pool").and_then(|v| v.as_str())
+                        {
+                            for line in pool_raw.split(['\n', ',', ';']) {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    if let Ok(parsed) =
+                                        UpstreamProxy::parse(trimmed, None, None, None)
+                                    {
+                                        let _ = service.add_proxy(parsed);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(single_url) =
+                            val.get("upstream_proxy_url").and_then(|v| v.as_str())
+                        {
+                            let trimmed = single_url.trim();
+                            if !trimmed.is_empty() {
+                                if let Ok(parsed) = UpstreamProxy::parse(trimmed, None, None, None)
+                                {
+                                    let _ = service.add_proxy(parsed);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(strat_str) = effective_strategy {
         let strat = match strat_str.to_ascii_lowercase().as_str() {
-            "round_robin" => ProxyRotationStrategy::RoundRobin,
+            "round_robin" | "roundrobin" => ProxyRotationStrategy::RoundRobin,
             "random" => ProxyRotationStrategy::Random,
             "sticky_session" | "sticky" => ProxyRotationStrategy::StickySession,
-            "lowest_failures" | "health" => ProxyRotationStrategy::LowestFailures,
+            "lowest_failures" | "health" | "healthy" => ProxyRotationStrategy::LowestFailures,
             _ => ProxyRotationStrategy::RoundRobin,
         };
         let _ = service.set_strategy(strat);
@@ -196,6 +257,7 @@ fn main() {
         &service,
         config.raw_upstream_inputs,
         config.configured_strategy,
+        &base_dir,
     );
     start_optional_proxy_server(config.proxy_port, Arc::clone(&service));
     run_stdio_loop(&service);

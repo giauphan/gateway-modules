@@ -93,6 +93,11 @@ impl UpstreamProxy {
             None => format!("{}://{}:{}", protocol.scheme(), host, port),
         };
 
+        let detected_country = country.map(|c| c.trim().to_ascii_uppercase()).or_else(|| {
+            auth.as_ref()
+                .and_then(|a| extract_country_from_username(&a.username))
+        });
+
         Ok(Self {
             id,
             name: proxy_name,
@@ -101,7 +106,7 @@ impl UpstreamProxy {
             host,
             port,
             auth,
-            country: country.map(|c| c.trim().to_ascii_uppercase()),
+            country: detected_country,
             weight: 1,
             enabled: true,
             failure_count: 0,
@@ -365,4 +370,21 @@ fn url_encode_userinfo(s: &str) -> String {
         }
     }
     out
+}
+
+fn extract_country_from_username(username: &str) -> Option<String> {
+    let u = username.to_ascii_lowercase();
+    for pattern in &["-cc-", "_cc_", "-country-", "_country-", "-zone-"] {
+        if let Some(pos) = u.find(pattern) {
+            let after = &u[pos + pattern.len()..];
+            let code: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            if code.len() == 2 {
+                return Some(code.to_ascii_uppercase());
+            }
+        }
+    }
+    None
 }
