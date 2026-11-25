@@ -145,10 +145,57 @@ You can manage and save multi-proxies in two places within the user interface:
 #### Method B: Interactive Proxy Guard Dashboard
 - **Path**: Open `http://<host>:<port>/custom/proxy-guard/ui` in your browser.
 - **Features**:
-  - Live metrics: Total active proxies, current rotation strategy, MB saved, and estimated cost savings in USD.
+  - Live metrics: Total active proxies, current rotation strategy, Request Reduction %, MB saved, upstream data used, and estimated cost savings in USD.
   - Proxy health table: Protocol, masked auth, host:port, country, tags, success/failure counts, and real-time status badges (`Healthy`, `Recovering`, `Failing`).
   - **➕ Add Multiple Upstream Proxies**: Enter proxies in the multi-line textarea with optional batch Country Code and Tags, then click **Add to Proxy Pool**.
   - One-click removal via the **Remove** button on any table row.
+
+---
+
+### 2.5 Empty Pool Handling & Client Fallback (`No healthy upstream proxy available in pool`)
+
+When a fresh gateway instance is deployed, or before upstream proxies have been added, the pool in `data/proxies.json` contains 0 proxies. Calling `GET /custom/proxy-guard/proxies/next` or `POST /custom/proxy-guard/proxies/next` will return HTTP 404:
+
+```json
+{
+  "error": "No healthy upstream proxy available in pool"
+}
+```
+
+#### Causes
+1. **Empty Pool**: No upstream proxies have been registered via the UI dashboard, Settings config, or API yet.
+2. **All Proxies Failing**: Proxies were added, but all of them exceeded consecutive failure thresholds during health probes.
+3. **Filter Mismatch**: Requesting a specific country (e.g. `?country=VN`) when no proxies in the pool match that country code.
+
+#### Recommended Solutions & Best Practices
+1. **Populate Upstream Proxies**:
+   - Add your paid proxy credentials (e.g. Oxylabs, BrightData, Smartproxy, or custom SOCKS5 nodes) using the UI at `http://<gateway-host>/custom/proxy-guard/ui` or `/modules/proxy-guard/config`.
+   - Alternatively, register proxies dynamically via API:
+     ```bash
+     curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/add \
+       -H "Content-Type: application/json" \
+       -d '{"url":"http://user:pass@pr.oxylabs.io:7777","country":"US"}'
+     ```
+2. **Client-Side Graceful Fallback**:
+   Automation scripts (such as Playwright, Puppeteer, or crawler bots) should catch the 404 error and fall back to local proxy settings (e.g., in `config/settings.yaml` or environment variables) so runs never abort unexpectedly:
+   ```python
+   # Python Requests / Playwright Client Example
+   try:
+       resp = requests.post(
+           "https://gateway.genrostore.com/custom/proxy-guard/proxies/next",
+           json={"country": "VN", "strategy": "lowest_failures"},
+           timeout=5,
+       )
+       if resp.status_code == 200:
+           proxy_info = resp.json().get("playwright_config")
+       else:
+           # Fallback to local settings when pool is empty
+           proxy_info = local_fallback_proxy()
+   except Exception:
+       proxy_info = local_fallback_proxy()
+   ```
+3. **Robust Route Matching (Query String & POST Body)**:
+   Proxy Guard normalizes request paths by stripping URL query strings (`/proxies/next?country=VN` → `/proxies/next`) before matching routes. Clients may query the next proxy using either `GET /proxies/next?country=US&strategy=lowest_failures` or `POST /proxies/next` with a JSON payload `{"country":"US","strategy":"lowest_failures"}`.
 
 ---
 
@@ -166,6 +213,86 @@ Unlike crude blockers that return `403 Forbidden` or drop sockets (causing clien
 | **Web Fonts** | `fonts.gstatic.com`, `fonts.googleapis.com` | **Block (204 No Content)** | **0.11 MB** | **0% impact**: Browser falls back to system fonts (Arial, Roboto); buttons and DOM selectors are identical. |
 | **Anti-Fraud Profiling** | `online-metrix.net` (LexisNexis ThreatMetrix) | **Forwarded (Allowed)** | 0 KB | **Preserved**: Required by sensitive identity platforms (e.g. SheerID) to prevent fraud rejection. |
 | **Cloudflare Turnstile** | `challenges.cloudflare.com` | **Forwarded (Allowed)** | 0 KB | **Preserved**: Allows bot / automation tools to render and solve Turnstile Captchas cleanly. |
+
+### 3.2 Live Request Audit Logs & Reduction Monitoring (v1.5.0+)
+
+Proxy Guard maintains an in-memory bounded ring buffer (latest 100 entries) capturing real-time network interception events. This enables live debugging, audit compliance, and immediate verification that bloat traffic is being stopped before hitting upstream proxies.
+
+#### Real-Time Metric & Request Reduction Calculation
+The system calculates request reduction percentage dynamically:
+$$\text{Request Reduction \%} = \frac{\text{Blocked Requests}}{\text{Blocked Requests} + \text{Forwarded Requests}} \times 100$$
+
+#### REST Endpoints for Logs
+- **Retrieve Request Logs (`GET /custom/proxy-guard/logs`)**:
+  ```bash
+  curl -s "http://127.0.0.1:3128/custom/proxy-guard/logs?limit=50"
+  ```
+  **Response Payload**:
+  ```json
+  {
+    "status": "success",
+    "request_reduction_percentage": 78.5,
+    "blocked_requests": 157,
+    "forwarded_requests": 43,
+    "total_requests": 200,
+    "logs": [
+      {
+        "id": 200,
+        "timestamp": 1700923050,
+        "method": "GET",
+        "host": "ciscobinary.openh264.org",
+        "path": "/openh264-win64-2e17de1.zip",
+        "action": "Blocked (204 No Content)",
+        "category": "Browser Bloat (Codecs)",
+        "bytes_saved": 535552,
+        "is_blocked": true
+      },
+      {
+        "id": 199,
+        "timestamp": 1700923049,
+        "method": "GET",
+        "host": "www.google-analytics.com",
+        "path": "/analytics.js",
+        "action": "Mocked (JS Stub)",
+        "category": "Analytics & Trackers",
+        "bytes_saved": 47104,
+        "is_blocked": true
+      },
+      {
+        "id": 198,
+        "timestamp": 1700923048,
+        "method": "POST",
+        "host": "api.targetservice.com",
+        "path": "/v1/checkout",
+        "action": "Forwarded (Upstream)",
+        "category": "Core Application Traffic",
+        "bytes_saved": 0,
+        "is_blocked": false
+      }
+    ]
+  }
+  ```
+
+- **Clear In-Memory Audit Logs (`POST /custom/proxy-guard/logs/clear`)**:
+  ```bash
+  curl -s -X POST http://127.0.0.1:3128/custom/proxy-guard/logs/clear
+  ```
+  **Response**:
+  ```json
+  {
+    "status": "success",
+    "message": "Request logs cleared successfully"
+  }
+  ```
+
+#### Live UI Dashboard (`/custom/proxy-guard/ui`)
+The interactive web dashboard displays:
+1. **Request Reduction % Card**: Real-time percentage badge showing how much traffic was filtered out before reaching paid proxies.
+2. **Bandwidth & Upstream Usage Cards**: Instant readout of total MB saved vs. upstream data used, alongside USD cost savings.
+3. **Live Intercepted Request Logs Table**:
+   - Status badges with distinct color-coding: `Blocked (204)` (red/amber), `Mocked (JS Stub)` (purple/indigo), and `Forwarded (Upstream)` (green).
+   - Domain, route path, category badge, timestamp, and bytes saved per entry.
+   - **One-click "Clear Logs" button** with automatic host/path resolution for reverse proxy environments.
 
 ---
 
@@ -295,7 +422,9 @@ When interacting with AI agents (e.g. Gemini, Antigravity, Claude), Proxy Guard 
 | `proxy-guard__list_upstream_proxies` | Lists all registered upstream proxies with credentials securely masked. | *(none)* |
 | `proxy-guard__remove_upstream_proxy` | Unregisters a proxy from the pool by ID or URL. | `id` |
 | `proxy-guard__set_rotation_strategy` | Updates rotation strategy (`round_robin`, `sticky_session`, etc.). | `strategy` |
+| `proxy-guard__get_next_proxy` | Selects the next healthy upstream proxy according to strategy and filters. | `country`, `session_id`, `strategy` |
 | `proxy-guard__get_metrics` | Returns cumulative metrics on bytes saved, blocked requests, and USD saved. | *(none)* |
+| `proxy-guard__get_request_logs` | Retrieves live ring-buffer logs of intercepted requests and cumulative request reduction percentage. | `limit` (optional integer, default 50) |
 | `proxy-guard__configure_rules` | Toggles rule categories or configures custom domain whitelists. | `block_analytics`, `block_ads`, `whitelist` |
 | `proxy-guard__generate_script` | Outputs ready-to-use interceptor code for Playwright, Puppeteer, or mitmproxy. | `target` (`playwright_ts`, `playwright_py`, etc.) |
 
@@ -332,7 +461,14 @@ Execute `run.sh` with `--proxy-port`:
    ```
    *Expected Response: HTTP 200 OK forwarded through the selected healthy proxy in the pool.*
 
-4. **Verify Real-Time Metrics**:
+4. **Verify Real-Time Metrics & Reduction Logs**:
    ```bash
+   # Cumulative counters
    curl http://127.0.0.1:3128/custom/proxy-guard/metrics
+
+   # Live intercepted request logs & reduction percentage
+   curl -s "http://127.0.0.1:3128/custom/proxy-guard/logs?limit=10"
+
+   # Clear logs buffer
+   curl -s -X POST http://127.0.0.1:3128/custom/proxy-guard/logs/clear
    ```

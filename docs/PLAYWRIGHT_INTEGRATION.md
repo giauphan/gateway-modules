@@ -301,20 +301,42 @@ interface PlaywrightProxyConfig {
   password?: string;
 }
 
+// Fallback configuration when upstream pool in Proxy Guard is empty or uninitialized
+const LOCAL_FALLBACK_PROXY: PlaywrightProxyConfig = {
+  server: process.env.FALLBACK_PROXY_SERVER || 'http://pr.oxylabs.io:7777',
+  username: process.env.FALLBACK_PROXY_USERNAME,
+  password: process.env.FALLBACK_PROXY_PASSWORD,
+};
+
 async function getNextProxy(country = 'US', sessionId = 'session-1', strategy = 'lowest_failures'): Promise<PlaywrightProxyConfig> {
-  const response = await fetch(
-    `http://127.0.0.1:28130/custom/proxy-guard/proxies/next?country=${country}&session_id=${sessionId}&strategy=${strategy}`
-  );
-  const data = await response.json();
-  if (data.status !== 'success' || !data.playwright_config) {
-    throw new Error('No available proxy returned from Proxy Guard pool');
+  try {
+    // Both POST with JSON body and GET with query params are supported
+    const response = await fetch('http://127.0.0.1:28130/custom/proxy-guard/proxies/next', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country, session_id: sessionId, strategy }),
+    });
+
+    if (!response.ok) {
+      // Handles HTTP 404: {"error":"No healthy upstream proxy available in pool"}
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      console.warn(`[ProxyGuard] Upstream pool warning (${response.status}): ${err.error}. Falling back to default proxy.`);
+      return LOCAL_FALLBACK_PROXY;
+    }
+
+    const data = await response.json();
+    if (data.status === 'success' && data.playwright_config) {
+      return data.playwright_config;
+    }
+  } catch (err) {
+    console.warn('[ProxyGuard] Gateway unreachable, using fallback proxy:', err);
   }
-  return data.playwright_config;
+  return LOCAL_FALLBACK_PROXY;
 }
 
 async function runSession() {
-  // Retrieve balanced proxy config from Proxy Guard pool
-  const proxyConfig = await getNextProxy('US', 'account-user-123');
+  // Retrieve balanced proxy config from Proxy Guard pool (or fallback)
+  const proxyConfig = await getNextProxy('US', 'account-user-123', 'lowest_failures');
 
   const browser = await chromium.launch({
     headless: true,
@@ -401,9 +423,56 @@ Comparison of bandwidth consumed by Playwright navigating real-world target flow
    [proxy-guard] Local intercepting proxy listening on 127.0.0.1:3128
    ```
 
-3. **Check Live Dashboard**:
+3. **Inspect Live Request Audit Logs & Reduction % (v1.5.0+)**:
+   While Playwright tests run, monitor exactly which background bloat and telemetry requests are blocked vs. forwarded upstream:
+   ```bash
+   # Query recent 20 intercepted requests & reduction rate
+   curl -s "http://127.0.0.1:28130/custom/proxy-guard/logs?limit=20"
+   ```
+   Sample output:
+   ```json
+   {
+     "status": "success",
+     "request_reduction_percentage": 82.4,
+     "blocked_requests": 140,
+     "forwarded_requests": 30,
+     "total_requests": 170,
+     "logs": [
+       {
+         "id": 170,
+         "timestamp": 1700923200,
+         "method": "GET",
+         "host": "ciscobinary.openh264.org",
+         "path": "/openh264-win64-2e17de1.zip",
+         "action": "Blocked (204 No Content)",
+         "category": "Browser Bloat (Codecs)",
+         "bytes_saved": 535552,
+         "is_blocked": true
+       }
+     ]
+   }
+   ```
+   To reset the ring buffer during test runs:
+   ```bash
+   curl -s -X POST http://127.0.0.1:28130/custom/proxy-guard/logs/clear
+   ```
+
+4. **MCP Tool for AI Agent Verification**:
+   AI agents can inspect intercepted request logs dynamically by invoking:
+   ```json
+   {
+     "name": "proxy-guard__get_request_logs",
+     "arguments": {
+       "limit": 25
+     }
+   }
+   ```
+
+5. **Check Interactive Web Dashboard**:
    Open `http://127.0.0.1:28130/custom/proxy-guard/ui` or `/modules/proxy-guard/config` to view:
+   - **Request Reduction % Card** (real-time efficiency metric)
    - Total requests processed vs. blocked
    - Megabytes transferred vs. saved
    - Estimated cost savings in USD
+   - Live Intercepted Request Logs table with status badges (`Blocked`, `Mocked`, `Forwarded`)
    - Active upstream multi-proxy pool health status
