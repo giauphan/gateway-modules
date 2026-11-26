@@ -160,7 +160,8 @@ You can manage and save multi-proxies in two places within the user interface:
 
 #### Method A: Toolcase Gateway Settings UI (Configuration Page)
 - **Path**: Navigate to **Modules** > **proxy-guard** > **Configuration** (or open `http://<host>:<port>/modules/proxy-guard/config`).
-- **Field**: In the **"Upstream Multi-Proxy Pool (1 per line)"** textarea, paste multiple proxies (one per line). Supported formats include standard URLs with credentials (`http://user:pass@host:port`), SOCKS5 (`socks5://user:pass@host:port`), or shorthand vendor syntax (`host:port:user:pass`).
+- **Field**: In the **"Upstream Multi-Proxy Pool (1 per line)"** textarea, paste clean unique proxies (`http://username:password@host:port` or `socks5://username:password@host:port`, one per line — duplicates are automatically deduplicated).
+- **Country Acronym & `-cc-<country>`**: Set **"Country Acronym (2-Letter ISO or -cc-XX)"** (`default_country`, e.g. `VN` or `-cc-vn`). Enable **"Append `-cc-<country>` to Username"** (or enter `-cc-vn` directly) to automatically inject `-cc-<country>` into each proxy's username without modifying every line.
 - **Rotation Strategy**: Set the default strategy in the **"Proxy Rotation Strategy"** input (`round_robin`, `sticky_session`, `lowest_failures`, `random`).
 - **Save**: Click **Save Settings**. Proxy Guard saves the pool to disk (`data/proxies.json`) and instantly reloads the pool into memory.
 
@@ -169,7 +170,7 @@ You can manage and save multi-proxies in two places within the user interface:
 - **Features**:
   - Live metrics: Total active proxies, current rotation strategy, Request Reduction %, MB saved, upstream data used, and estimated cost savings in USD.
   - Proxy health table: Protocol, masked auth, host:port, country, tags, success/failure counts, and real-time status badges (`Healthy`, `Recovering`, `Failing`).
-  - **➕ Add Multiple Upstream Proxies**: Enter proxies in the multi-line textarea with optional batch Country Code and Tags, then click **Add to Proxy Pool**.
+  - **➕ Add Multiple Upstream Proxies**: Enter clean `http://username:password@host:port` lines in the multi-line textarea, set the **Country** field (e.g. `VN`, `US`, or `-cc-vn`), optionally check **Append `-cc-<country>` to username**, and click **Add to Proxy Pool**.
   - One-click removal via the **Remove** button on any table row.
 
 ---

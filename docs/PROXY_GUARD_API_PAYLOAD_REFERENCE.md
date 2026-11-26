@@ -1,6 +1,6 @@
 # Proxy Guard & Multi-Proxy API Payload Reference
 
-> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.5.1).**  
+> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.10.0).**  
 > Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, and MCP tool arguments.
 
 ---
@@ -329,7 +329,7 @@ Add an array of proxy objects or raw strings:
 
 ---
 
-### 3.4 Automatic Username Country Parsing
+### 3.4 Automatic Username Country Parsing & `-cc-<country>` Injection
 
 Proxy Guard automatically parses the following patterns in the username string to deduce the proxy's country code:
 
@@ -340,6 +340,11 @@ Proxy Guard automatically parses the following patterns in the username string t
 | `-country-<iso>` | `client-country-de` | `"DE"` |
 | `_country-<iso>` | `client_country-sg` | `"SG"` |
 | `-zone-<iso>` | `bot-zone-jp` | `"JP"` |
+
+**Clean Pool + `-cc-<country>` Injection (`POST /config` & `POST /proxies/add`)**:
+You can keep every line in `upstream_proxy_pool` clean (`http://username:password@host:port`) without manually editing each username:
+- Pass `"default_country": "-cc-vn"` (or `"default_country": "VN"` with `"append_cc_to_username": true`) in `POST /config`, or `"country": "-cc-vn"` in `POST /proxies/add`.
+- Proxy Guard automatically injects `-cc-vn` into each proxy's username (`http://username-cc-vn:password@host:port`), updates its unique ID, and deduplicates duplicate entries.
 
 ---
 
