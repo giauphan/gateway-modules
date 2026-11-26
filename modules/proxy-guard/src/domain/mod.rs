@@ -7,8 +7,8 @@ pub mod proxy;
 pub mod rules;
 
 pub use proxy::{
-    PlaywrightProxyConfig, ProxyAuth, ProxyProtocol, ProxyRotationStrategy, ProxySelectionQuery,
-    UpstreamProxy,
+    parse_country_input, PlaywrightProxyConfig, ProxyAuth, ProxyProtocol, ProxyRotationStrategy,
+    ProxySelectionQuery, UpstreamProxy,
 };
 pub use rules::{
     FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, MockPayload, PatternType,

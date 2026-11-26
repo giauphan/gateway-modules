@@ -708,5 +708,28 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     let body2: serde_json::Value = serde_json::from_str(resp2["body"].as_str().unwrap()).unwrap();
     assert_eq!(body2["config"]["default_country"], "VN");
 
+    // Passing "-cc-vn" in default_country or append_cc_to_username appends "-cc-vn" to username
+    let req3 = json!({
+        "method": "POST",
+        "path": "/config",
+        "body": {
+            "upstream_proxy_pool": "http://myuser:mypass@pr.oxylabs.io:7777",
+            "default_country": "-cc-vn"
+        }
+    });
+    let resp3 = handle_request(req3, &service);
+    assert_eq!(resp3["status"], 200);
+    let proxies3 = service.list_proxies();
+    assert_eq!(proxies3.len(), 1);
+    assert_eq!(proxies3[0].country.as_deref(), Some("VN"));
+    assert_eq!(
+        proxies3[0].auth.as_ref().map(|a| a.username.as_str()),
+        Some("myuser-cc-vn")
+    );
+    assert_eq!(
+        proxies3[0].url,
+        "http://myuser-cc-vn:mypass@pr.oxylabs.io:7777"
+    );
+
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
