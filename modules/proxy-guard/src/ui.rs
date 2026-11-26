@@ -288,10 +288,10 @@ textarea {{ min-height: 100px; resize: vertical; }}
     <p style="font-size:13px;color:#8b949e;margin-top:0;">Enter one unique proxy per line using <code>http://username:password@host:port</code> (or <code>socks5://username:password@host:port</code>) and set the 2-letter Country Acronym field below.</p>
     <textarea id="proxyLines" placeholder="http://username:password@host:port&#10;socks5://username:password@host:port"></textarea>
     <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
-      <input type="text" id="countryCode" placeholder="Country (e.g. VN, US, or -cc-vn)" style="margin:0;max-width:250px;">
+      <input type="text" id="countryCode" value="VN" placeholder="Country (e.g. VN, US, or -cc-vn)" style="margin:0;max-width:250px;">
       <input type="text" id="proxyTag" placeholder="Optional Tag (e.g. residential, mobile)" style="margin:0;max-width:250px;">
       <label style="font-size:13px;color:#8b949e;display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="checkbox" id="appendCc" style="width:auto;margin:0;"> Append <code>-cc-&lt;country&gt;</code> to username
+        <input type="checkbox" id="appendCc" checked style="width:auto;margin:0;"> Append <code>-cc-&lt;country&gt;</code> to username
       </label>
     </div>
     <button class="btn" onclick="submitMultiProxy()">Add to Proxy Pool</button>

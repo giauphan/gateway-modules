@@ -37,7 +37,14 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
     let default_country = proxies
         .iter()
         .find_map(|p| p.country.as_deref())
-        .unwrap_or("");
+        .unwrap_or("VN");
+    let append_cc_to_username = proxies.is_empty()
+        || proxies.iter().any(|p| {
+            p.auth
+                .as_ref()
+                .map(|a| a.username.to_ascii_lowercase().contains("-cc-"))
+                .unwrap_or(false)
+        });
     let strategy = match service.get_strategy() {
         ProxyRotationStrategy::RoundRobin => "round_robin",
         ProxyRotationStrategy::Random => "random",
@@ -52,6 +59,7 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
         "status": "ok",
         "upstream_proxy_pool": upstream_proxy_pool,
         "default_country": default_country,
+        "append_cc_to_username": append_cc_to_username,
         "rotation_strategy": strategy,
         "upstream_proxy_url": upstream_proxy_url,
         "proxy_listener_port": 3128,
