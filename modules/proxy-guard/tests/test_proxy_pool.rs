@@ -731,5 +731,21 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
         "http://myuser-cc-vn:mypass@pr.oxylabs.io:7777"
     );
 
+    // Non-empty upstream_proxy_pool must NOT re-add stale upstream_proxy_url fallback
+    let req4 = json!({
+        "method": "POST",
+        "path": "/config",
+        "body": {
+            "upstream_proxy_pool": "http://fresh:pass@2.2.2.2:8080",
+            "upstream_proxy_url": "http://stale:pass@1.1.1.1:8080",
+            "default_country": "VN"
+        }
+    });
+    let resp4 = handle_request(req4, &service);
+    assert_eq!(resp4["status"], 200);
+    let proxies4 = service.list_proxies();
+    assert_eq!(proxies4.len(), 1);
+    assert_eq!(proxies4[0].host, "2.2.2.2");
+
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

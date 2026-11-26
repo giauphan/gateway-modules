@@ -33,7 +33,11 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
         .map(|p| p.pool_line())
         .collect::<Vec<_>>()
         .join("\n");
-    let upstream_proxy_url = proxies.first().map(|p| p.url.as_str()).unwrap_or("");
+    let upstream_proxy_url = if proxies.len() == 1 {
+        proxies.first().map(|p| p.url.as_str()).unwrap_or("")
+    } else {
+        ""
+    };
     let default_country = proxies
         .iter()
         .find_map(|p| p.country.as_deref())
@@ -102,7 +106,8 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
         None => (None, append_flag),
     };
 
-    // 1. Multi-proxy pool
+    // 1. Multi-proxy pool (authoritative when non-empty)
+    let mut pool_populated = false;
     if let Some(pool_raw) = body.get("upstream_proxy_pool").and_then(|v| v.as_str()) {
         let mut new_proxies = Vec::new();
         for line in pool_raw.split(['\n', ',', ';']) {
@@ -117,19 +122,22 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
                 }
             }
         }
+        pool_populated = !new_proxies.is_empty();
         let _ = service.replace_proxies(new_proxies);
     }
 
-    // 2. Fallback single proxy url
-    if let Some(single_url) = body.get("upstream_proxy_url").and_then(|v| v.as_str()) {
-        let trimmed = single_url.trim();
-        if !trimmed.is_empty() {
-            if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
-                let _ = service.add_proxy(apply_default_country(
-                    proxy,
-                    default_country.as_deref(),
-                    force_cc_username,
-                ));
+    // 2. Fallback single proxy url (only used when multi-proxy pool is empty/absent)
+    if !pool_populated {
+        if let Some(single_url) = body.get("upstream_proxy_url").and_then(|v| v.as_str()) {
+            let trimmed = single_url.trim();
+            if !trimmed.is_empty() {
+                if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    let _ = service.add_proxy(apply_default_country(
+                        proxy,
+                        default_country.as_deref(),
+                        force_cc_username,
+                    ));
+                }
             }
         }
     }
