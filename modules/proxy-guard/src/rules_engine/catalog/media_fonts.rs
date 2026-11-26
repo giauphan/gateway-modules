@@ -69,13 +69,13 @@ pub fn media_and_font_rules() -> Vec<Rule> {
         ),
         Rule::new(
             "media-fbcdn",
-            "Facebook CDN Heavy Media & Video",
+            "Facebook CDN Heavy Media & Video (scontent)",
             RuleCategory::HeavyMedia,
-            PatternType::DomainSuffix,
-            "fbcdn.net",
+            PatternType::UrlContains,
+            "scontent",
             RuleAction::Block204,
             75,
-            "Blocks Facebook CDN images and video streaming assets (saves 180MB+ per flow)",
+            "Blocks Facebook scontent CDN images and video streaming assets while preserving static.xx.fbcdn.net core JS/CSS",
         ),
         Rule::new(
             "media-metaaivm",
