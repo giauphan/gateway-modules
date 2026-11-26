@@ -1,6 +1,6 @@
 # Proxy Guard & Multi-Proxy API Payload Reference
 
-> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.10.0).**  
+> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.11.0).**  
 > Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, and MCP tool arguments.
 
 ---
@@ -494,6 +494,10 @@ Returns cumulative counters for bandwidth, requests, and cost savings.
   "forwarded_requests": 340,
   "bytes_saved": 142606336,
   "upstream_bytes_used": 15728640,
+  "gb_saved": 0.1328,
+  "gb_upstream_used": 0.0146,
+  "gb_total_original": 0.1475,
+  "data_reduction_percentage": 90.1,
   "estimated_cost_saved_usd": 0.4991,
   "request_reduction_percentage": 77.63
 }
