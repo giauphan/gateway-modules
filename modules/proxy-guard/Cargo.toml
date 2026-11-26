@@ -1,6 +1,6 @@
 [package]
 name = "proxy-guard"
-version = "1.10.3"
+version = "1.11.0"
 edition = "2021"
 description = "Native Rust proxy traffic optimizer & bandwidth saver for Toolcase Gateway"
 license = "MIT"
