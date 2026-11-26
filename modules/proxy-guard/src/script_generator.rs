@@ -13,9 +13,14 @@ impl ScriptGenerator {
 
 import { BrowserContext, Route } from 'playwright';
 
+const ESSENTIAL_DOMAINS = [
+  'auth.meta.com', 'auth.muse.ai', 'api.muse.ai',
+  'static.xx.fbcdn.net', 'challenges.cloudflare.com', 'stripe.com'
+];
+
 const BLOCKED_DOMAINS = [
   'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'googlesyndication.com',
-  'connect.facebook.net', 'pixel.facebook.com', 'analytics.tiktok.com',
+  'pixel.facebook.com', 'analytics.tiktok.com',
   'hotjar.com', 'clarity.ms', 'smartlook.com', 'fullstory.com',
   'sentry.io', 'browser-intake-datadoghq.com', 'segment.io', 'amplitude.com',
   'criteo.com', 'taboola.com', 'outbrain.com'
@@ -23,37 +28,53 @@ const BLOCKED_DOMAINS = [
 
 const BLOCKED_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.woff2', '.woff', '.ttf'];
 
+// 1x1 transparent GIF (43 bytes) avoids broken-image DOM signals while spending 0 proxy bytes
+const TRANSPARENT_GIF_1X1 = Buffer.from(
+  'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  'base64'
+);
+
 export async function setupProxyGuardInterceptor(context: BrowserContext, blockImages = true) {
   await context.route('**/*', (route: Route) => {
     const request = route.request();
     const url = request.url();
     const resourceType = request.resourceType();
+    const host = new URL(url).hostname.toLowerCase();
 
-    // 1. Block heavy resource types
-    if (['media', 'font'].includes(resourceType) || (blockImages && resourceType === 'image')) {
+    // 1. Always pass essential auth, API, CAPTCHA, and core static assets untouched
+    if (ESSENTIAL_DOMAINS.some(d => host === d || host.endsWith('.' + d))) {
+      return route.continue();
+    }
+
+    // 2. Block heavy media/font types
+    if (['media', 'font'].includes(resourceType)) {
       return route.abort(); // 0 bytes hit your paid proxy!
     }
 
-    // 2. Block heavy file extensions
+    // 3. Fulfill non-essential images with a valid 1x1 GIF (0 proxy bytes, clean DOM)
+    if (blockImages && resourceType === 'image') {
+      return route.fulfill({ status: 200, contentType: 'image/gif', body: TRANSPARENT_GIF_1X1 });
+    }
+
+    // 4. Block heavy file extensions
     const cleanUrl = url.split('?')[0].toLowerCase();
     if (BLOCKED_EXTENSIONS.some(ext => cleanUrl.endsWith(ext))) {
       return route.abort();
     }
 
-    // 3. Block tracking and analytics domains with harmless stubs
-    const host = new URL(url).hostname.toLowerCase();
+    // 5. Block tracking and analytics domains with harmless stubs
     if (BLOCKED_DOMAINS.some(domain => host === domain || host.endsWith('.' + domain))) {
       if (resourceType === 'script') {
         return route.fulfill({
           status: 200,
           contentType: 'application/javascript',
-          body: 'window.dataLayer = window.dataLayer || []; window.gtag = function(){}; window.fbq = function(){};'
+          body: 'window.dataLayer = window.dataLayer || []; window.gtag = function(){};'
         });
       }
       return route.fulfill({ status: 204, body: '' });
     }
 
-    // 4. Allowed requests continue through your paid proxy
+    // 6. Allowed requests continue through your paid proxy
     return route.continue();
   });
 }
@@ -67,9 +88,14 @@ export async function setupProxyGuardInterceptor(context: BrowserContext, blockI
 
 from urllib.parse import urlparse
 
+ESSENTIAL_DOMAINS = {
+    "auth.meta.com", "auth.muse.ai", "api.muse.ai",
+    "static.xx.fbcdn.net", "challenges.cloudflare.com", "stripe.com"
+}
+
 BLOCKED_DOMAINS = {
     "google-analytics.com", "googletagmanager.com", "doubleclick.net", "googlesyndication.com",
-    "connect.facebook.net", "pixel.facebook.com", "analytics.tiktok.com",
+    "pixel.facebook.com", "analytics.tiktok.com",
     "hotjar.com", "clarity.ms", "smartlook.com", "fullstory.com",
     "sentry.io", "browser-intake-datadoghq.com", "segment.io", "amplitude.com",
     "criteo.com", "taboola.com", "outbrain.com"
@@ -77,32 +103,47 @@ BLOCKED_DOMAINS = {
 
 BLOCKED_EXTENSIONS = (".mp4", ".webm", ".ogg", ".woff2", ".woff", ".ttf")
 
+# 1x1 transparent GIF (43 bytes) avoids broken-image DOM signals while spending 0 proxy bytes
+TRANSPARENT_GIF_1X1 = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!"
+    b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+)
+
 def setup_proxy_guard_interceptor(context, block_images=True):
     def handle_route(route):
         request = route.request
         url = request.url
         resource_type = request.resource_type
+        hostname = (urlparse(url).hostname or "").lower()
 
-        # 1. Block heavy resource types
-        if resource_type in ("media", "font") or (block_images and resource_type == "image"):
+        # 1. Always pass essential auth, API, CAPTCHA, and core static assets untouched
+        if any(hostname == d or hostname.endswith("." + d) for d in ESSENTIAL_DOMAINS):
+            route.continue_()
+            return
+
+        # 2. Block heavy media/font types
+        if resource_type in ("media", "font"):
             route.abort()
             return
 
-        # 2. Block extensions
+        # 3. Fulfill non-essential images with a valid 1x1 GIF (0 proxy bytes, clean DOM)
+        if block_images and resource_type == "image":
+            route.fulfill(status=200, content_type="image/gif", body=TRANSPARENT_GIF_1X1)
+            return
+
+        # 4. Block extensions
         clean_url = url.split("?")[0].lower()
         if clean_url.endswith(BLOCKED_EXTENSIONS):
             route.abort()
             return
 
-        # 3. Block analytics/ads domains with harmless stub
-        hostname = urlparse(url).hostname or ""
-        hostname = hostname.lower()
+        # 5. Block analytics/ads domains with harmless stub
         if any(hostname == d or hostname.endswith("." + d) for d in BLOCKED_DOMAINS):
             if resource_type == "script":
                 route.fulfill(
                     status=200,
                     content_type="application/javascript",
-                    body="window.dataLayer = window.dataLayer || []; window.gtag = function(){}; window.fbq = function(){};"
+                    body="window.dataLayer = window.dataLayer || []; window.gtag = function(){};"
                 )
             else:
                 route.fulfill(status=204, body="")

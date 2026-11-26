@@ -23,10 +23,14 @@ fn test_script_generation_targets() {
     let pw_ts = service.generate_client_script("playwright_ts").unwrap();
     assert!(pw_ts.contains("context.route"));
     assert!(pw_ts.contains("google-analytics.com"));
+    assert!(pw_ts.contains("ESSENTIAL_DOMAINS"));
+    assert!(pw_ts.contains("TRANSPARENT_GIF_1X1"));
     assert!(pw_ts.contains("route.abort()"));
 
     let pw_py = service.generate_client_script("playwright_py").unwrap();
     assert!(pw_py.contains("def setup_proxy_guard_interceptor"));
+    assert!(pw_py.contains("ESSENTIAL_DOMAINS"));
+    assert!(pw_py.contains("TRANSPARENT_GIF_1X1"));
     assert!(pw_py.contains("route.abort()"));
 
     let puppeteer = service.generate_client_script("puppeteer_ts").unwrap();
