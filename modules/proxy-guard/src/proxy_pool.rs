@@ -179,9 +179,16 @@ impl ProxyPoolManagementPort for ProxyPool {
 
     fn replace_proxies(&self, proxies: Vec<UpstreamProxy>) -> Result<(), String> {
         let _guard = self.mutation_lock.lock().map_err(|e| e.to_string())?;
-        self.storage.save_proxies(&proxies)?;
+        let mut unique_proxies: Vec<UpstreamProxy> = Vec::with_capacity(proxies.len());
+        let mut seen = std::collections::HashSet::with_capacity(proxies.len());
+        for p in proxies {
+            if seen.insert(p.id.clone()) {
+                unique_proxies.push(p);
+            }
+        }
+        self.storage.save_proxies(&unique_proxies)?;
         if let Ok(mut write_lock) = self.proxies.write() {
-            *write_lock = proxies;
+            *write_lock = unique_proxies;
         }
         Ok(())
     }

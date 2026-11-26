@@ -30,7 +30,7 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
     let proxies = service.list_proxies();
     let upstream_proxy_pool = proxies
         .iter()
-        .map(|p| p.url.as_str())
+        .map(|p| p.pool_line())
         .collect::<Vec<_>>()
         .join("\n");
     let upstream_proxy_url = proxies.first().map(|p| p.url.as_str()).unwrap_or("");

@@ -61,9 +61,9 @@ impl UpstreamProxy {
     /// Parses an upstream proxy definition string into a structured UpstreamProxy entity.
     ///
     /// Supported formats:
-    /// - `http://user:pass@host:port`
+    /// - `http://user:pass@host:port` (optional `#US` or `|US` country acronym suffix, or `US|` prefix)
     /// - `socks5://host:port`
-    /// - `host:port:user:pass` (standard proxy vendor format)
+    /// - `host:port:user:pass` or `host:port:user:pass:US` (standard proxy vendor format)
     /// - `host:port`
     pub fn parse(
         raw_url: &str,
@@ -76,7 +76,8 @@ impl UpstreamProxy {
             return Err("Proxy URL cannot be empty".to_string());
         }
 
-        let (protocol, host, port, auth) = parse_proxy_components(trimmed)?;
+        let (stripped_url, inline_tag_country) = split_inline_country(trimmed);
+        let (protocol, host, port, auth, vendor_country) = parse_proxy_components(stripped_url)?;
 
         let id = match &auth {
             Some(a) => format!("{}:{}:{}", host, port, a.username),
@@ -96,10 +97,15 @@ impl UpstreamProxy {
             None => format!("{}://{}:{}", protocol.scheme(), host, port),
         };
 
-        let detected_country = country.map(|c| c.trim().to_ascii_uppercase()).or_else(|| {
-            auth.as_ref()
-                .and_then(|a| extract_country_from_username(&a.username))
-        });
+        let detected_country = country
+            .map(|c| c.trim().to_ascii_uppercase())
+            .filter(|c| !c.is_empty())
+            .or(inline_tag_country)
+            .or(vendor_country)
+            .or_else(|| {
+                auth.as_ref()
+                    .and_then(|a| extract_country_from_username(&a.username))
+            });
 
         Ok(Self {
             id,
@@ -142,6 +148,23 @@ impl UpstreamProxy {
         cloned
     }
 
+    /// Returns a 1-line pool representation, preserving an explicit `#CC` country suffix
+    /// when the country acronym is not already encoded in the username.
+    pub fn pool_line(&self) -> String {
+        if let Some(ref cc) = self.country {
+            let in_username = self
+                .auth
+                .as_ref()
+                .and_then(|a| extract_country_from_username(&a.username))
+                .map(|u| u.eq_ignore_ascii_case(cc))
+                .unwrap_or(false);
+            if !in_username {
+                return format!("{}#{}", self.url, cc);
+            }
+        }
+        self.url.clone()
+    }
+
     /// Formats this proxy into a standard format for client tools (Playwright, Puppeteer).
     pub fn to_playwright_config(&self) -> PlaywrightProxyConfig {
         PlaywrightProxyConfig {
@@ -179,10 +202,35 @@ impl UpstreamProxy {
     }
 }
 
-/// Helper to parse URL or vendor string `host:port:user:pass`
-fn parse_proxy_components(
-    s: &str,
-) -> Result<(ProxyProtocol, String, u16, Option<ProxyAuth>), String> {
+fn is_country_acronym(s: &str) -> bool {
+    let t = s.trim();
+    t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Extracts an optional inline 2-letter country acronym from `#CC`, `|CC`, or `CC|`.
+fn split_inline_country(s: &str) -> (&str, Option<String>) {
+    if let Some((base, frag)) = s.rsplit_once('#') {
+        if is_country_acronym(frag) && !base.trim().is_empty() {
+            return (base.trim(), Some(frag.trim().to_ascii_uppercase()));
+        }
+    }
+    if let Some((base, suffix)) = s.rsplit_once('|') {
+        if is_country_acronym(suffix) && !base.trim().is_empty() {
+            return (base.trim(), Some(suffix.trim().to_ascii_uppercase()));
+        }
+    }
+    if let Some((prefix, rest)) = s.split_once('|') {
+        if is_country_acronym(prefix) && !rest.trim().is_empty() {
+            return (rest.trim(), Some(prefix.trim().to_ascii_uppercase()));
+        }
+    }
+    (s, None)
+}
+
+type ParsedProxyComponents = (ProxyProtocol, String, u16, Option<ProxyAuth>, Option<String>);
+
+/// Helper to parse URL or vendor string `host:port:user:pass[:CC]`
+fn parse_proxy_components(s: &str) -> Result<ParsedProxyComponents, String> {
     if s.contains("://") {
         let parts: Vec<&str> = s.splitn(2, "://").collect();
         let protocol = ProxyProtocol::parse(parts[0]);
@@ -208,7 +256,7 @@ fn parse_proxy_components(
         let clean_hp = host_port.split('/').next().unwrap_or(host_port);
         let (host, port) = parse_host_port(clean_hp)?;
 
-        Ok((protocol, host, port, auth))
+        Ok((protocol, host, port, auth, None))
     } else if s.starts_with('[') {
         let (host, remainder) = if let Some(close_idx) = s.find(']') {
             (s[..=close_idx].to_string(), &s[close_idx + 1..])
@@ -222,7 +270,7 @@ fn parse_proxy_components(
                 let port: u16 = segments[0]
                     .parse()
                     .map_err(|_| "Invalid proxy port".to_string())?;
-                Ok((ProxyProtocol::Http, host, port, None))
+                Ok((ProxyProtocol::Http, host, port, None, None))
             }
             3 => {
                 let port: u16 = segments[0]
@@ -232,15 +280,31 @@ fn parse_proxy_components(
                     username: segments[1].to_string(),
                     password: segments[2].to_string(),
                 });
-                Ok((ProxyProtocol::Http, host, port, auth))
+                Ok((ProxyProtocol::Http, host, port, auth, None))
+            }
+            4 if is_country_acronym(segments[3]) => {
+                let port: u16 = segments[0]
+                    .parse()
+                    .map_err(|_| "Invalid proxy port".to_string())?;
+                let auth = Some(ProxyAuth {
+                    username: segments[1].to_string(),
+                    password: segments[2].to_string(),
+                });
+                Ok((
+                    ProxyProtocol::Http,
+                    host,
+                    port,
+                    auth,
+                    Some(segments[3].to_ascii_uppercase()),
+                ))
             }
             _ => Err(
-                "Invalid IPv6 proxy format. Expected '[ipv6]:port' or '[ipv6]:port:user:pass'"
+                "Invalid IPv6 proxy format. Expected '[ipv6]:port' or '[ipv6]:port:user:pass[:CC]'"
                     .to_string(),
             ),
         }
     } else {
-        // Vendor format: host:port:user:pass or host:port
+        // Vendor format: host:port:user:pass[:CC] or host:port
         let segments: Vec<&str> = s.split(':').collect();
         match segments.len() {
             2 => {
@@ -248,7 +312,7 @@ fn parse_proxy_components(
                 let port: u16 = segments[1]
                     .parse()
                     .map_err(|_| "Invalid proxy port".to_string())?;
-                Ok((ProxyProtocol::Http, host, port, None))
+                Ok((ProxyProtocol::Http, host, port, None, None))
             }
             4 => {
                 let host = segments[0].to_string();
@@ -259,10 +323,27 @@ fn parse_proxy_components(
                     username: segments[2].to_string(),
                     password: segments[3].to_string(),
                 });
-                Ok((ProxyProtocol::Http, host, port, auth))
+                Ok((ProxyProtocol::Http, host, port, auth, None))
+            }
+            5 if is_country_acronym(segments[4]) => {
+                let host = segments[0].to_string();
+                let port: u16 = segments[1]
+                    .parse()
+                    .map_err(|_| "Invalid proxy port".to_string())?;
+                let auth = Some(ProxyAuth {
+                    username: segments[2].to_string(),
+                    password: segments[3].to_string(),
+                });
+                Ok((
+                    ProxyProtocol::Http,
+                    host,
+                    port,
+                    auth,
+                    Some(segments[4].to_ascii_uppercase()),
+                ))
             }
             _ => Err(
-                "Invalid proxy format. Expected 'protocol://host:port' or 'host:port:user:pass'"
+                "Invalid proxy format. Expected 'protocol://host:port' or 'host:port:user:pass[:CC]'"
                     .to_string(),
             ),
         }

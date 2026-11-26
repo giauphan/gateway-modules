@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -26,8 +26,8 @@
         "key": "upstream_proxy_pool",
         "label": "Upstream Multi-Proxy Pool (1 per line)",
         "type": "textarea",
-        "placeholder": "http://user1:pass1@us-proxy.com:8080\nsocks5://user2:pass2@de-proxy.com:1080\n10.0.0.1:9000:user3:pass3",
-        "description": "Enter multiple upstream proxies (one per line or comma-separated). Automatically balanced and rotated."
+        "placeholder": "http://user1:pass1@us-proxy.com:8080#US\nsocks5://user2:pass2@de-proxy.com:1080|DE\n10.0.0.1:9000:user3:pass3:SG",
+        "description": "Enter unique upstream proxies (1 per line). Append #CC, |CC, or :CC (e.g. #US, #VN) to tag country acronym."
       },
       {
         "key": "rotation_strategy",
