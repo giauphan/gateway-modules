@@ -34,6 +34,10 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
         .collect::<Vec<_>>()
         .join("\n");
     let upstream_proxy_url = proxies.first().map(|p| p.url.as_str()).unwrap_or("");
+    let default_country = proxies
+        .iter()
+        .find_map(|p| p.country.as_deref())
+        .unwrap_or("");
     let strategy = match service.get_strategy() {
         ProxyRotationStrategy::RoundRobin => "round_robin",
         ProxyRotationStrategy::Random => "random",
@@ -47,6 +51,7 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
     json!({
         "status": "ok",
         "upstream_proxy_pool": upstream_proxy_pool,
+        "default_country": default_country,
         "rotation_strategy": strategy,
         "upstream_proxy_url": upstream_proxy_url,
         "proxy_listener_port": 3128,
@@ -60,13 +65,23 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
 }
 
 fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
+    let default_country = body
+        .get("default_country")
+        .or_else(|| body.get("country"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty());
+
     // 1. Multi-proxy pool
     if let Some(pool_raw) = body.get("upstream_proxy_pool").and_then(|v| v.as_str()) {
         let mut new_proxies = Vec::new();
         for line in pool_raw.split(['\n', ',', ';']) {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                if let Ok(mut proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    if proxy.country.is_none() {
+                        proxy.country.clone_from(&default_country);
+                    }
                     new_proxies.push(proxy);
                 }
             }
@@ -78,7 +93,10 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
     if let Some(single_url) = body.get("upstream_proxy_url").and_then(|v| v.as_str()) {
         let trimmed = single_url.trim();
         if !trimmed.is_empty() {
-            if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+            if let Ok(mut proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                if proxy.country.is_none() {
+                    proxy.country.clone_from(&default_country);
+                }
                 let _ = service.add_proxy(proxy);
             }
         }

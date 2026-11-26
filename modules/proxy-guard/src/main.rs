@@ -105,6 +105,10 @@ fn init_proxies(
 ) -> Option<u16> {
     let mut effective_strategy = strategy;
     let mut effective_port = proxy_port;
+    let mut default_country = std::env::var("PROXY_GUARD_COUNTRY")
+        .ok()
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty());
 
     let config_candidates = [
         base_dir.join("config.json"),
@@ -117,6 +121,14 @@ fn init_proxies(
         if cfg_path.is_file() {
             if let Ok(content) = std::fs::read_to_string(cfg_path) {
                 if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                    if default_country.is_none() {
+                        if let Some(cc) = val.get("default_country").and_then(|v| v.as_str()) {
+                            let trimmed = cc.trim().to_ascii_uppercase();
+                            if !trimmed.is_empty() {
+                                default_country = Some(trimmed);
+                            }
+                        }
+                    }
                     if effective_port.is_none() {
                         if let Some(port_num) =
                             val.get("proxy_listener_port").and_then(|v| v.as_u64())
@@ -143,9 +155,12 @@ fn init_proxies(
                             for line in pool_raw.split(['\n', ',', ';']) {
                                 let trimmed = line.trim();
                                 if !trimmed.is_empty() {
-                                    if let Ok(parsed) =
+                                    if let Ok(mut parsed) =
                                         UpstreamProxy::parse(trimmed, None, None, None)
                                     {
+                                        if parsed.country.is_none() {
+                                            parsed.country.clone_from(&default_country);
+                                        }
                                         let _ = service.add_proxy(parsed);
                                     }
                                 }
@@ -156,8 +171,12 @@ fn init_proxies(
                         {
                             let trimmed = single_url.trim();
                             if !trimmed.is_empty() {
-                                if let Ok(parsed) = UpstreamProxy::parse(trimmed, None, None, None)
+                                if let Ok(mut parsed) =
+                                    UpstreamProxy::parse(trimmed, None, None, None)
                                 {
+                                    if parsed.country.is_none() {
+                                        parsed.country.clone_from(&default_country);
+                                    }
                                     let _ = service.add_proxy(parsed);
                                 }
                             }
@@ -184,7 +203,10 @@ fn init_proxies(
         for line in raw.split(['\n', ',', ';']) {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                if let Ok(parsed) = UpstreamProxy::parse(trimmed, None, None, None) {
+                if let Ok(mut parsed) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    if parsed.country.is_none() {
+                        parsed.country.clone_from(&default_country);
+                    }
                     let _ = service.add_proxy(parsed);
                 }
             }
