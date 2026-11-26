@@ -637,3 +637,58 @@ fn test_record_proxy_result_tracks_adapted_country_proxy() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_inline_country_acronym_formats_and_uniqueness() {
+    let p_hash = UpstreamProxy::parse("http://u1:p1@1.2.3.4:8080#us", None, None, None).unwrap();
+    assert_eq!(p_hash.country.as_deref(), Some("US"));
+    assert_eq!(p_hash.pool_line(), "http://u1:p1@1.2.3.4:8080#US");
+
+    let p_pipe_suffix =
+        UpstreamProxy::parse("socks5://u2:p2@2.3.4.5:1080|vn", None, None, None).unwrap();
+    assert_eq!(p_pipe_suffix.country.as_deref(), Some("VN"));
+    assert_eq!(
+        p_pipe_suffix.pool_line(),
+        "socks5://u2:p2@2.3.4.5:1080#VN"
+    );
+
+    let p_pipe_prefix =
+        UpstreamProxy::parse("jp|http://u3:p3@3.4.5.6:8080", None, None, None).unwrap();
+    assert_eq!(p_pipe_prefix.country.as_deref(), Some("JP"));
+
+    let p_vendor5 =
+        UpstreamProxy::parse("10.0.0.1:9000:u4:p4:sg", None, None, None).unwrap();
+    assert_eq!(p_vendor5.country.as_deref(), Some("SG"));
+    assert_eq!(
+        p_vendor5.auth.as_ref().map(|a| a.username.as_str()),
+        Some("u4")
+    );
+
+    // Multi-proxy pool deduplicates duplicate entries cleanly
+    let temp_dir = std::env::temp_dir().join("proxy_guard_test_unique_pool");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+
+    let req = json!({
+        "method": "POST",
+        "path": "/config",
+        "body": {
+            "upstream_proxy_pool": "http://u1:p1@1.2.3.4:8080#US\nhttp://u1:p1@1.2.3.4:8080#US\n10.0.0.1:9000:u4:p4:SG"
+        }
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    assert_eq!(service.list_proxies().len(), 2);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
