@@ -23,13 +23,13 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.6.0)
+## 2. Architecture & Clean Architecture Layers (v1.8.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.6.0)
+├── Cargo.toml          # Single source of truth (v1.8.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary (635 KB)
@@ -59,7 +59,7 @@ modules/proxy-guard/
 │   ├── handlers/       # Interface adapters (routes & dispatcher)
 │   ├── rpc.rs          # stdio-stream framing helpers
 │   └── mcp.rs          # Model Context Protocol tools adapter
-└── tests/              # Automated integration test suite (57 tests)
+└── tests/              # Automated integration test suite (75 integration + 16 unit tests)
 ```
 
 > [!NOTE]
@@ -93,8 +93,18 @@ Manage proxies via API, Gateway Settings UI (`/modules/proxy-guard/config`), or 
 ```bash
 curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/add \
   -H "Content-Type: application/json" \
-  -d '{"url": "http://user:pass@pr.oxylabs.io:7777", "name": "oxylabs-1", "country": "US"}'
+  -d '{"url": "http://user:pass@pr.oxylabs.io:7777#US", "name": "oxylabs-1"}'
 ```
+
+**1-Line Multi-Proxy Country Acronyms & Uniqueness (`upstream_proxy_pool`)**:
+Each line in `upstream_proxy_pool` (or `/proxies/add`) is deduplicated by unique proxy ID and supports inline 2-letter ISO country acronyms:
+```text
+http://user1:pass1@us-proxy.com:8080#US
+socks5://user2:pass2@de-proxy.com:1080|DE
+JP|http://user3:pass3@jp-proxy.com:8080
+10.0.0.1:9000:user4:pass4:SG
+```
+When querying `GET /proxies/next?country=VN`, `proxy-guard` first matches proxies tagged with `VN`, and falls back to dynamic residential country adaptation (`-cc-vn`, `_cc_vn`, `-country-vn`, `-zone-vn`) if supported by the proxy username.
 
 ### Mode C: Toolcase Gateway & MCP for AI Agents
 Integrated out of the box with Toolcase Gateway via `stdio-stream`:
@@ -126,4 +136,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 90 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 91 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
