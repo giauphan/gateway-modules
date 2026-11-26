@@ -747,5 +747,29 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     assert_eq!(proxies4.len(), 1);
     assert_eq!(proxies4[0].host, "2.2.2.2");
 
+    // `#oxylabs` (non-2-letter fragment) parses port cleanly and attaches "oxylabs" tag
+    let req5 = json!({
+        "method": "POST",
+        "path": "/config",
+        "body": {
+            "upstream_proxy_pool": "http://customer-resi_f4012494:pass#123@pr.oxylabs.io:7777#oxylabs\nhttp://user-dc_0abe5c4c:xxx@dc.oxylabs.io:8000#oxylabs",
+            "default_country": "VN",
+            "append_cc_to_username": true
+        }
+    });
+    let resp5 = handle_request(req5, &service);
+    assert_eq!(resp5["status"], 200);
+    let proxies5 = service.list_proxies();
+    assert_eq!(proxies5.len(), 2);
+    assert_eq!(proxies5[0].port, 7777);
+    assert_eq!(proxies5[0].tags, vec!["oxylabs"]);
+    assert_eq!(proxies5[0].country.as_deref(), Some("VN"));
+    assert_eq!(
+        proxies5[0].auth.as_ref().map(|a| a.password.as_str()),
+        Some("pass#123")
+    );
+    assert_eq!(proxies5[1].port, 8000);
+    assert_eq!(proxies5[1].tags, vec!["oxylabs"]);
+
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

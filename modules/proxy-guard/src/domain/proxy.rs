@@ -76,7 +76,7 @@ impl UpstreamProxy {
             return Err("Proxy URL cannot be empty".to_string());
         }
 
-        let (stripped_url, inline_tag_country) = split_inline_country(trimmed);
+        let (stripped_url, inline_tag_country, inline_tag) = split_inline_country_and_tag(trimmed);
         let (protocol, host, port, auth, vendor_country) = parse_proxy_components(stripped_url)?;
 
         let id = match &auth {
@@ -111,6 +111,13 @@ impl UpstreamProxy {
                     .and_then(|a| extract_country_from_username(&a.username))
             });
 
+        let mut merged_tags = tags.unwrap_or_default();
+        if let Some(t) = inline_tag {
+            if !merged_tags.iter().any(|existing| existing.eq_ignore_ascii_case(&t)) {
+                merged_tags.push(t);
+            }
+        }
+
         let proxy = Self {
             id,
             name: proxy_name,
@@ -124,7 +131,7 @@ impl UpstreamProxy {
             enabled: true,
             failure_count: 0,
             success_count: 0,
-            tags: tags.unwrap_or_default(),
+            tags: merged_tags,
         };
 
         if force_cc_username {
@@ -269,24 +276,41 @@ pub fn parse_country_input(raw: &str) -> Option<(String, bool)> {
     Some((trimmed.to_ascii_uppercase(), false))
 }
 
-/// Extracts an optional inline 2-letter country acronym from `#CC`, `|CC`, or `CC|`.
-fn split_inline_country(s: &str) -> (&str, Option<String>) {
+/// Extracts an optional inline 2-letter country acronym (`#CC`, `|CC`, `CC|`)
+/// or non-country `#tag` fragment (e.g. `#oxylabs`) from the host/URL tail.
+fn split_inline_country_and_tag(s: &str) -> (&str, Option<String>, Option<String>) {
     if let Some((base, frag)) = s.rsplit_once('#') {
-        if is_country_acronym(frag) && !base.trim().is_empty() {
-            return (base.trim(), Some(frag.trim().to_ascii_uppercase()));
+        // Only treat `#frag` as a trailing country/tag if it is after `@` (or there is no `@`),
+        // so passwords containing `#` before `@` are never truncated.
+        let after_userinfo = base.rfind('@').map(|idx| &base[idx + 1..]).unwrap_or(base);
+        let frag_trimmed = frag.trim();
+        if !base.trim().is_empty() && !after_userinfo.is_empty() {
+            if is_country_acronym(frag_trimmed) {
+                return (
+                    base.trim(),
+                    Some(frag_trimmed.to_ascii_uppercase()),
+                    None,
+                );
+            }
+            let tag = if frag_trimmed.is_empty() {
+                None
+            } else {
+                Some(frag_trimmed.to_string())
+            };
+            return (base.trim(), None, tag);
         }
     }
     if let Some((base, suffix)) = s.rsplit_once('|') {
         if is_country_acronym(suffix) && !base.trim().is_empty() {
-            return (base.trim(), Some(suffix.trim().to_ascii_uppercase()));
+            return (base.trim(), Some(suffix.trim().to_ascii_uppercase()), None);
         }
     }
     if let Some((prefix, rest)) = s.split_once('|') {
         if is_country_acronym(prefix) && !rest.trim().is_empty() {
-            return (rest.trim(), Some(prefix.trim().to_ascii_uppercase()));
+            return (rest.trim(), Some(prefix.trim().to_ascii_uppercase()), None);
         }
     }
-    (s, None)
+    (s, None, None)
 }
 
 type ParsedProxyComponents = (ProxyProtocol, String, u16, Option<ProxyAuth>, Option<String>);
@@ -315,7 +339,7 @@ fn parse_proxy_components(s: &str) -> Result<ParsedProxyComponents, String> {
             (None, rest)
         };
 
-        let clean_hp = host_port.split('/').next().unwrap_or(host_port);
+        let clean_hp = host_port.split(['/', '?', '#']).next().unwrap_or(host_port);
         let (host, port) = parse_host_port(clean_hp)?;
 
         Ok((protocol, host, port, auth, None))
