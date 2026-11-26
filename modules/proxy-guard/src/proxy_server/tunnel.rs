@@ -3,10 +3,10 @@
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 
 use super::utils::{
-    base64_encode, find_header_end, perform_socks5_connect, try_connect_socket,
+    base64_encode, find_header_end, perform_socks5_connect, split_host_port, try_connect_socket,
     try_connect_target_socket,
 };
-use crate::domain::{ProxyProtocol, ProxySelectionQuery, UpstreamProxy};
+use crate::domain::{ProxyProtocol, ProxySelectionQuery, RuleAction, UpstreamProxy};
 use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
 use crate::service::ProxyGuardService;
 use std::io::{Read, Write};
@@ -31,14 +31,23 @@ pub fn handle_https_connect(
         return;
     }
 
-    let (mut upstream, leftover) =
+    let (mut upstream, leftover) = if decision.action == RuleAction::BypassDirect {
+        match try_connect_target_socket(host_port) {
+            Some(s) => (s, Vec::new()),
+            None => {
+                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                return;
+            }
+        }
+    } else {
         match dial_connect_tunnel(service, query, fallback_upstream.as_deref(), host_port) {
             Some(res) => res,
             None => {
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
                 return;
             }
-        };
+        }
+    };
 
     // RFC 9110: Write complete success response to client FIRST
     if client
@@ -125,8 +134,7 @@ fn try_dial_connect_proxy(
     let addr = format!("{}:{}", proxy.host, proxy.port);
     let stream = try_connect_socket(&addr).ok_or(())?;
     if proxy.protocol == ProxyProtocol::Socks5 {
-        let (th, tp) = host_port.split_once(':').unwrap_or((host_port, "443"));
-        let port_num = tp.parse::<u16>().unwrap_or(443);
+        let (th, port_num) = split_host_port(host_port, 443);
         perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
             .map(|s| (s, Vec::new()))
             .ok_or(())
@@ -221,7 +229,7 @@ pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) 
         match b_reader.read(&mut buf) {
             Ok(0) => {
                 let _ = a_writer.flush();
-                let _ = a_writer.shutdown(Shutdown::Both);
+                let _ = a_writer.shutdown(Shutdown::Write);
                 break;
             }
             Err(_) => {

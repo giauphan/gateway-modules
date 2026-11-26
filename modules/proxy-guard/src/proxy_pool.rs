@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+const MAX_STICKY_SESSIONS: usize = 10_000;
+
 pub struct ProxyPool {
     storage: Arc<dyn ProxyPoolStoragePort>,
     proxies: RwLock<Vec<UpstreamProxy>>,
@@ -117,6 +119,9 @@ impl ProxyPool {
                     let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
                     let selected = candidates[idx].clone();
                     if let Ok(mut sessions) = self.sticky_sessions.write() {
+                        if sessions.len() >= MAX_STICKY_SESSIONS {
+                            sessions.clear();
+                        }
                         sessions.insert(session_id.clone(), selected.id.clone());
                     }
                     Some(selected)
@@ -279,7 +284,16 @@ impl ProxyPoolManagementPort for ProxyPool {
 
     fn record_proxy_result(&self, id: &str, success: bool) {
         if let Ok(mut list) = self.proxies.write() {
-            if let Some(p) = list.iter_mut().find(|p| p.id == id) {
+            let target_pos = list.iter().position(|p| p.id == id).or_else(|| {
+                // Fallback for dynamically country-adapted residential proxy IDs (e.g. `host:port:user-cc-vn`)
+                let mut parts = id.splitn(3, ':');
+                let host = parts.next()?;
+                let port = parts.next()?.parse::<u16>().ok()?;
+                list.iter().position(|p| p.host == host && p.port == port)
+            });
+
+            if let Some(pos) = target_pos {
+                let p = &mut list[pos];
                 if success {
                     p.success_count = p.success_count.saturating_add(1);
                     if p.failure_count > 0 {
