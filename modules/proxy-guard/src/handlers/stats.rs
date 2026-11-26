@@ -9,7 +9,28 @@ use serde_json::{json, Value};
 
 pub fn handle_get_metrics(service: &ProxyGuardService) -> Value {
     let metrics = service.get_metrics();
-    make_json_resp(200, json!(metrics))
+    let total_bytes = metrics.bytes_saved.saturating_add(metrics.upstream_bytes_used);
+    let gb_saved = (metrics.bytes_saved as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
+    let gb_upstream_used =
+        (metrics.upstream_bytes_used as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
+    let gb_total_original =
+        (total_bytes as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
+    let data_reduction_percentage = if total_bytes > 0 {
+        ((metrics.bytes_saved as f64 / total_bytes as f64) * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let mut val = json!(metrics);
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert("gb_saved".to_string(), json!(gb_saved));
+        obj.insert("gb_upstream_used".to_string(), json!(gb_upstream_used));
+        obj.insert("gb_total_original".to_string(), json!(gb_total_original));
+        obj.insert(
+            "data_reduction_percentage".to_string(),
+            json!(data_reduction_percentage),
+        );
+    }
+    make_json_resp(200, val)
 }
 
 pub fn handle_reset_metrics(service: &ProxyGuardService) -> Value {

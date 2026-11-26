@@ -298,6 +298,9 @@ fn test_dashboard_ui_endpoint() {
     assert_eq!(resp["status"], 200);
     let body_str = resp["body"].as_str().unwrap();
     assert!(body_str.contains("Proxy Guard Dashboard"));
+    assert!(body_str.contains("Data Optimized (GB Saved)"));
+    assert!(body_str.contains("Data Optimization Efficiency"));
+    assert!(body_str.contains("GB"));
     assert!(body_str.contains("Registered Upstream Proxies"));
     assert!(body_str.contains("Add Multiple Upstream Proxies"));
 }

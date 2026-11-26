@@ -41,8 +41,18 @@ pub fn render_dashboard_html(service: &ProxyGuardService) -> String {
         0.0
     };
 
-    let mb_saved = (metrics.bytes_saved as f64) / (1024.0 * 1024.0);
-    let mb_upstream = (metrics.upstream_bytes_used as f64) / (1024.0 * 1024.0);
+    let mb_saved = (metrics.bytes_saved as f64) / 1_048_576.0;
+    let mb_upstream = (metrics.upstream_bytes_used as f64) / 1_048_576.0;
+    let gb_saved = (metrics.bytes_saved as f64) / 1_073_741_824.0;
+    let gb_upstream = (metrics.upstream_bytes_used as f64) / 1_073_741_824.0;
+    let total_data_bytes = metrics.bytes_saved.saturating_add(metrics.upstream_bytes_used);
+    let gb_total = (total_data_bytes as f64) / 1_073_741_824.0;
+    let data_opt_pct = if total_data_bytes > 0 {
+        (metrics.bytes_saved as f64 / total_data_bytes as f64) * 100.0
+    } else {
+        0.0
+    };
+    let cost_per_gb = metrics.cost_per_gb_usd;
     let cost_saved = metrics.estimated_cost_saved_usd;
     let total_proxies = proxies.len();
 
@@ -218,16 +228,29 @@ textarea {{ min-height: 100px; resize: vertical; }}
       <div style="font-size:12px;color:#8b949e;margin-top:2px;">{blocked_reqs} blocked / {total_reqs} total</div>
     </div>
     <div class="card card-green">
-      <div style="font-size:13px;color:#8b949e;">Bandwidth Saved</div>
-      <div class="metric">{mb_saved:.2} MB</div>
+      <div style="font-size:13px;color:#8b949e;">Data Optimized (GB Saved)</div>
+      <div class="metric">{gb_saved:.4} GB</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">{mb_saved:.2} MB saved ({data_opt_pct:.1}% of {gb_total:.4} GB)</div>
     </div>
     <div class="card">
-      <div style="font-size:13px;color:#8b949e;">Upstream Used</div>
-      <div class="metric" style="color:#79c0ff;">{mb_upstream:.2} MB</div>
+      <div style="font-size:13px;color:#8b949e;">Upstream Used (GB)</div>
+      <div class="metric" style="color:#79c0ff;">{gb_upstream:.4} GB</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">{mb_upstream:.2} MB forwarded</div>
     </div>
     <div class="card card-green">
       <div style="font-size:13px;color:#8b949e;">Cost Saved (USD)</div>
       <div class="metric">${cost_saved:.4}</div>
+      <div style="font-size:12px;color:#8b949e;margin-top:2px;">@${cost_per_gb:.2} / GB</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <strong style="color:#f0f6fc;">📊 Data Optimization Efficiency</strong>
+      <span style="font-size:13px;color:var(--green);font-weight:600;">{data_opt_pct:.1}% Optimized ({gb_saved:.4} GB saved / {gb_total:.4} GB total)</span>
+    </div>
+    <div style="width:100%;height:10px;background:#21262d;border-radius:6px;overflow:hidden;">
+      <div style="width:{data_opt_pct:.1}%;height:100%;background:linear-gradient(90deg,#238636,#3fb950);"></div>
     </div>
   </div>
 
