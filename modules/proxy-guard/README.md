@@ -23,13 +23,13 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.9.0)
+## 2. Architecture & Clean Architecture Layers (v1.10.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.9.0)
+├── Cargo.toml          # Single source of truth (v1.10.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary (635 KB)
@@ -96,8 +96,9 @@ curl -X POST http://127.0.0.1:3128/custom/proxy-guard/proxies/add \
   -d '{"url": "http://user:pass@pr.oxylabs.io:7777#US", "name": "oxylabs-1"}'
 ```
 
-**Multi-Proxy Pool & Country Acronym (`upstream_proxy_pool` + `default_country`)**:
-Enter clean `http://username:password@host:port` lines in `upstream_proxy_pool` (deduplicated automatically by unique proxy ID) and set the **Country Acronym** field (`default_country`, e.g. `VN`, `US`, `SG`).
+**Multi-Proxy Pool & `-cc-<country>` Acronym (`upstream_proxy_pool` + `default_country`)**:
+Enter clean `http://username:password@host:port` lines in `upstream_proxy_pool` (deduplicated automatically by unique proxy ID) and set the **Country Acronym** field (`default_country`):
+- Enter `VN` / `US` to tag the country acronym, **or** enter `-cc-vn` (or enable `append_cc_to_username: true`) to automatically inject `-cc-vn` into each proxy's username (`http://username-cc-vn:password@host:port`).
 When querying `GET /proxies/next?country=VN`, `proxy-guard` first matches proxies tagged with `VN`, and falls back to dynamic residential country adaptation (`-cc-vn`, `_cc_vn`, `-country-vn`, `-zone-vn`) if supported by the proxy username.
 
 ### Mode C: Toolcase Gateway & MCP for AI Agents

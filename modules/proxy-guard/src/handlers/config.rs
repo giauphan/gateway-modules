@@ -2,7 +2,7 @@
 //!
 //! Clean Architecture: Interface Adapters Layer.
 
-use crate::domain::{ProxyRotationStrategy, RuleCategory, UpstreamProxy};
+use crate::domain::{parse_country_input, ProxyRotationStrategy, RuleCategory, UpstreamProxy};
 use crate::ports::{MetricsPort, ProxyPoolManagementPort, RuleManagementPort};
 use crate::rpc::{extract_request_body, make_error_resp, make_json_resp, make_text_resp};
 use crate::service::ProxyGuardService;
@@ -64,13 +64,35 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
     })
 }
 
+fn apply_default_country(
+    mut proxy: UpstreamProxy,
+    default_cc: Option<&str>,
+    force_cc_username: bool,
+) -> UpstreamProxy {
+    if force_cc_username {
+        if let Some(cc) = default_cc.or(proxy.country.as_deref()) {
+            return proxy.with_cc_username(cc);
+        }
+    } else if proxy.country.is_none() {
+        proxy.country = default_cc.map(|s| s.to_string());
+    }
+    proxy
+}
+
 fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
-    let default_country = body
+    let parsed_country = body
         .get("default_country")
         .or_else(|| body.get("country"))
         .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_ascii_uppercase())
-        .filter(|s| !s.is_empty());
+        .and_then(parse_country_input);
+    let append_flag = body
+        .get("append_cc_to_username")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let (default_country, force_cc_username) = match parsed_country {
+        Some((cc, from_prefix)) => (Some(cc), from_prefix || append_flag),
+        None => (None, append_flag),
+    };
 
     // 1. Multi-proxy pool
     if let Some(pool_raw) = body.get("upstream_proxy_pool").and_then(|v| v.as_str()) {
@@ -78,11 +100,12 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
         for line in pool_raw.split(['\n', ',', ';']) {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                if let Ok(mut proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
-                    if proxy.country.is_none() {
-                        proxy.country.clone_from(&default_country);
-                    }
-                    new_proxies.push(proxy);
+                if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                    new_proxies.push(apply_default_country(
+                        proxy,
+                        default_country.as_deref(),
+                        force_cc_username,
+                    ));
                 }
             }
         }
@@ -93,11 +116,12 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
     if let Some(single_url) = body.get("upstream_proxy_url").and_then(|v| v.as_str()) {
         let trimmed = single_url.trim();
         if !trimmed.is_empty() {
-            if let Ok(mut proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
-                if proxy.country.is_none() {
-                    proxy.country.clone_from(&default_country);
-                }
-                let _ = service.add_proxy(proxy);
+            if let Ok(proxy) = UpstreamProxy::parse(trimmed, None, None, None) {
+                let _ = service.add_proxy(apply_default_country(
+                    proxy,
+                    default_country.as_deref(),
+                    force_cc_username,
+                ));
             }
         }
     }

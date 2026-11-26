@@ -97,9 +97,13 @@ impl UpstreamProxy {
             None => format!("{}://{}:{}", protocol.scheme(), host, port),
         };
 
-        let detected_country = country
-            .map(|c| c.trim().to_ascii_uppercase())
-            .filter(|c| !c.is_empty())
+        let parsed_country_arg = country.and_then(parse_country_input);
+        let (explicit_country, force_cc_username) = match parsed_country_arg {
+            Some((cc, append_cc)) => (Some(cc), append_cc),
+            None => (None, false),
+        };
+
+        let detected_country = explicit_country
             .or(inline_tag_country)
             .or(vendor_country)
             .or_else(|| {
@@ -107,7 +111,7 @@ impl UpstreamProxy {
                     .and_then(|a| extract_country_from_username(&a.username))
             });
 
-        Ok(Self {
+        let proxy = Self {
             id,
             name: proxy_name,
             url: canonical_url,
@@ -115,13 +119,21 @@ impl UpstreamProxy {
             host,
             port,
             auth,
-            country: detected_country,
+            country: detected_country.clone(),
             weight: 1,
             enabled: true,
             failure_count: 0,
             success_count: 0,
             tags: tags.unwrap_or_default(),
-        })
+        };
+
+        if force_cc_username {
+            if let Some(ref cc) = detected_country {
+                return Ok(proxy.with_cc_username(cc));
+            }
+        }
+
+        Ok(proxy)
     }
 
     /// Returns the canonical proxy URL with passwords masked (safe for logging & MCP outputs).
@@ -174,6 +186,38 @@ impl UpstreamProxy {
         }
     }
 
+    /// Returns a copy of this proxy with `-cc-<country>` appended/replaced in its username
+    /// (and updates `id`, `url`, and `country` accordingly).
+    pub fn with_cc_username(&self, target_country: &str) -> Self {
+        let target_upper = target_country.trim().to_ascii_uppercase();
+        let target_lower = target_upper.to_ascii_lowercase();
+        let mut updated = self.clone();
+        updated.country = Some(target_upper);
+        if let Some(ref a) = self.auth {
+            let new_username = replace_country_in_username(&a.username, &target_lower)
+                .unwrap_or_else(|| format!("{}-cc-{}", a.username, target_lower));
+            let new_id = format!("{}:{}:{}", updated.host, updated.port, new_username);
+            updated.id = new_id.clone();
+            if updated.name == self.id {
+                updated.name = new_id;
+            }
+            let new_auth = ProxyAuth {
+                username: new_username.clone(),
+                password: a.password.clone(),
+            };
+            updated.url = format!(
+                "{}://{}:{}@{}:{}",
+                updated.protocol.scheme(),
+                url_encode_userinfo(&new_username),
+                url_encode_userinfo(&new_auth.password),
+                updated.host,
+                updated.port
+            );
+            updated.auth = Some(new_auth);
+        }
+        updated
+    }
+
     /// Dynamically adapts a residential proxy to target another country if supported by its auth scheme.
     /// E.g., for Oxylabs/BrightData residential pools (`-cc-vn` -> `-cc-us`).
     pub fn adapt_country(&self, target_country: &str) -> Option<Self> {
@@ -205,6 +249,24 @@ impl UpstreamProxy {
 fn is_country_acronym(s: &str) -> bool {
     let t = s.trim();
     t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Parses a country input such as `"VN"` or `"-cc-vn"`, returning `(normalized_cc, force_cc_username)`.
+pub fn parse_country_input(raw: &str) -> Option<(String, bool)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for prefix in &["-cc-", "_cc_"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let cc = rest.trim();
+            if is_country_acronym(cc) {
+                return Some((cc.to_ascii_uppercase(), true));
+            }
+        }
+    }
+    Some((trimmed.to_ascii_uppercase(), false))
 }
 
 /// Extracts an optional inline 2-letter country acronym from `#CC`, `|CC`, or `CC|`.

@@ -4,7 +4,7 @@
 //! Reads JSON requests from stdin, dispatches to interface adapter handlers,
 //! and writes JSON responses to stdout.
 
-use proxy_guard::domain::{ProxyRotationStrategy, UpstreamProxy};
+use proxy_guard::domain::{parse_country_input, ProxyRotationStrategy, UpstreamProxy};
 use proxy_guard::handlers::handle_request;
 use proxy_guard::ports::ProxyPoolManagementPort;
 use proxy_guard::proxy_pool::ProxyPool;
@@ -105,10 +105,11 @@ fn init_proxies(
 ) -> Option<u16> {
     let mut effective_strategy = strategy;
     let mut effective_port = proxy_port;
-    let mut default_country = std::env::var("PROXY_GUARD_COUNTRY")
+    let env_country = std::env::var("PROXY_GUARD_COUNTRY")
         .ok()
-        .map(|s| s.trim().to_ascii_uppercase())
-        .filter(|s| !s.is_empty());
+        .and_then(|s| parse_country_input(&s));
+    let mut default_country = env_country.as_ref().map(|(cc, _)| cc.clone());
+    let mut force_cc_username = env_country.as_ref().map(|(_, f)| *f).unwrap_or(false);
 
     let config_candidates = [
         base_dir.join("config.json"),
@@ -121,11 +122,20 @@ fn init_proxies(
         if cfg_path.is_file() {
             if let Ok(content) = std::fs::read_to_string(cfg_path) {
                 if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                    if !force_cc_username
+                        && val.get("append_cc_to_username").and_then(|v| v.as_bool()) == Some(true)
+                    {
+                        force_cc_username = true;
+                    }
                     if default_country.is_none() {
-                        if let Some(cc) = val.get("default_country").and_then(|v| v.as_str()) {
-                            let trimmed = cc.trim().to_ascii_uppercase();
-                            if !trimmed.is_empty() {
-                                default_country = Some(trimmed);
+                        if let Some((cc, from_prefix)) = val
+                            .get("default_country")
+                            .and_then(|v| v.as_str())
+                            .and_then(parse_country_input)
+                        {
+                            default_country = Some(cc);
+                            if from_prefix {
+                                force_cc_username = true;
                             }
                         }
                     }
@@ -158,7 +168,14 @@ fn init_proxies(
                                     if let Ok(mut parsed) =
                                         UpstreamProxy::parse(trimmed, None, None, None)
                                     {
-                                        if parsed.country.is_none() {
+                                        if force_cc_username {
+                                            if let Some(cc) = default_country
+                                                .as_deref()
+                                                .or(parsed.country.as_deref())
+                                            {
+                                                parsed = parsed.with_cc_username(cc);
+                                            }
+                                        } else if parsed.country.is_none() {
                                             parsed.country.clone_from(&default_country);
                                         }
                                         let _ = service.add_proxy(parsed);

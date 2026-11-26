@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -31,11 +31,18 @@
       },
       {
         "key": "default_country",
-        "label": "Country Acronym (2-Letter ISO)",
+        "label": "Country Acronym (2-Letter ISO or -cc-XX)",
         "type": "text",
         "default": "",
-        "placeholder": "VN, US, SG, DE, JP",
-        "description": "2-letter country acronym applied to proxies in the pool when not already specified (e.g. VN, US). Used for country filtering and dynamic adaptation."
+        "placeholder": "VN, US, or -cc-vn",
+        "description": "2-letter country acronym (e.g. VN, US) or -cc-vn to automatically append -cc-<country> to proxy usernames."
+      },
+      {
+        "key": "append_cc_to_username",
+        "label": "Append -cc-<country> to Username",
+        "type": "boolean",
+        "default": false,
+        "description": "When enabled (or when Country Acronym starts with -cc-), appends -cc-<country> directly to each proxy username."
       },
       {
         "key": "rotation_strategy",
