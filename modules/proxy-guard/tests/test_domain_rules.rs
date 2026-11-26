@@ -306,3 +306,24 @@ fn test_resource_type_inference_and_sizes() {
     assert_eq!(ResourceType::Stylesheet.typical_byte_size(), 45_000);
     assert_eq!(ResourceType::Beacon.typical_byte_size(), 500);
 }
+
+#[test]
+fn test_fbcdn_scontent_blocked_while_static_preserved() {
+    let engine = RulesEngine::with_builtin_rules();
+
+    // Heavy user media on scontent.*.fbcdn.net is blocked
+    let scontent = engine.evaluate(
+        "https://scontent.xx.fbcdn.net/v/t39.30808-6/banner.jpg",
+        "GET",
+        Some("image"),
+    );
+    assert!(scontent.is_blocked());
+
+    // Core Meta JS/CSS on static.xx.fbcdn.net must NOT be blocked
+    let static_js = engine.evaluate(
+        "https://static.xx.fbcdn.net/rsrc.php/v3/core.js",
+        "GET",
+        Some("script"),
+    );
+    assert!(!static_js.is_blocked());
+}
