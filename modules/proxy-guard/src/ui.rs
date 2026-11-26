@@ -285,10 +285,10 @@ textarea {{ min-height: 100px; resize: vertical; }}
 
   <div class="form-box">
     <h3>➕ Add Multiple Upstream Proxies</h3>
-    <p style="font-size:13px;color:#8b949e;margin-top:0;">Enter one unique proxy per line. Supported formats: <code>http://user:pass@host:port#US</code>, <code>socks5://user:pass@host:port|VN</code>, <code>JP|http://user:pass@host:port</code>, or vendor format <code>host:port:user:pass:SG</code>. Append <code>#CC</code>, <code>|CC</code>, or <code>:CC</code> for per-line country acronyms.</p>
-    <textarea id="proxyLines" placeholder="http://alice:secret@us-proxy.com:8080#US&#10;socks5://bob:secret@de-proxy.com:1080|DE&#10;192.168.1.50:9000:myuser:mypass:SG"></textarea>
+    <p style="font-size:13px;color:#8b949e;margin-top:0;">Enter one unique proxy per line using <code>http://username:password@host:port</code> (or <code>socks5://username:password@host:port</code>) and set the 2-letter Country Acronym field below.</p>
+    <textarea id="proxyLines" placeholder="http://username:password@host:port&#10;socks5://username:password@host:port"></textarea>
     <div style="display:flex;gap:12px;margin-bottom:12px;">
-      <input type="text" id="countryCode" placeholder="Optional Country (e.g. US, DE, VN)" style="margin:0;max-width:250px;">
+      <input type="text" id="countryCode" placeholder="Country Acronym (e.g. VN, US, SG)" style="margin:0;max-width:250px;">
       <input type="text" id="proxyTag" placeholder="Optional Tag (e.g. residential, mobile)" style="margin:0;max-width:250px;">
     </div>
     <button class="btn" onclick="submitMultiProxy()">Add to Proxy Pool</button>

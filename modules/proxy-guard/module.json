@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -26,8 +26,16 @@
         "key": "upstream_proxy_pool",
         "label": "Upstream Multi-Proxy Pool (1 per line)",
         "type": "textarea",
-        "placeholder": "http://user1:pass1@us-proxy.com:8080#US\nsocks5://user2:pass2@de-proxy.com:1080|DE\n10.0.0.1:9000:user3:pass3:SG",
-        "description": "Enter unique upstream proxies (1 per line). Append #CC, |CC, or :CC (e.g. #US, #VN) to tag country acronym."
+        "placeholder": "http://username:password@host:port\nsocks5://username:password@host:port",
+        "description": "Enter unique upstream proxies (1 per line, e.g. http://username:password@host:port). Duplicate entries are automatically deduplicated."
+      },
+      {
+        "key": "default_country",
+        "label": "Country Acronym (2-Letter ISO)",
+        "type": "text",
+        "default": "",
+        "placeholder": "VN, US, SG, DE, JP",
+        "description": "2-letter country acronym applied to proxies in the pool when not already specified (e.g. VN, US). Used for country filtering and dynamic adaptation."
       },
       {
         "key": "rotation_strategy",

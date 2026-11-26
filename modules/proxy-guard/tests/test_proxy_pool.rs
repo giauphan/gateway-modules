@@ -690,5 +690,23 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     assert_eq!(resp["status"], 200);
     assert_eq!(service.list_proxies().len(), 2);
 
+    // Dedicated default_country field applies to plain http://username:password@host:port lines
+    let req2 = json!({
+        "method": "POST",
+        "path": "/config",
+        "body": {
+            "upstream_proxy_pool": "http://u1:p1@1.2.3.4:8080\nhttp://u2:p2@2.3.4.5:8080",
+            "default_country": "vn"
+        }
+    });
+    let resp2 = handle_request(req2, &service);
+    assert_eq!(resp2["status"], 200);
+    let proxies2 = service.list_proxies();
+    assert_eq!(proxies2.len(), 2);
+    assert_eq!(proxies2[0].country.as_deref(), Some("VN"));
+    assert_eq!(proxies2[1].country.as_deref(), Some("VN"));
+    let body2: serde_json::Value = serde_json::from_str(resp2["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body2["config"]["default_country"], "VN");
+
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

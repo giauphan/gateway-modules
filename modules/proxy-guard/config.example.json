@@ -1,5 +1,6 @@
 {
   "upstream_proxy_url": "http://user:pass@upstream-proxy.example.com:8080",
+  "default_country": "US",
   "proxy_listener_port": 3128,
   "block_analytics": true,
   "block_ads": true,
