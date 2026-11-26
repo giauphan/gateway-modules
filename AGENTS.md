@@ -92,3 +92,17 @@ Non-negotiable rules — full decision tables and worked examples in [`docs/RUST
 - **Borrowing & Lifetimes**: No `.clone()` to silence the borrow checker: borrow with Lifetimes (`'a`, `LogEntry<'a>`) for zero-copy views, `#[serde(borrow)]`, and `Cow<'a, B>` (`Cow::Borrowed`, `Cow::Owned`, avoid premature `.to_mut()`) for read-mostly data.
 - **Type-Driven Design & Architecture**: "Parse, Don't Validate" with private newtypes (e.g. `EmailAddress`), Typestate pattern for illegal states, `thiserror` in domain/application, `anyhow` in adapters/bin.
 - **Memory & Concurrency**: Preallocate with `with_capacity`; never hold synchronous `MutexGuard` across an `.await`.
+
+---
+
+## 7. Proxy Bandwidth Optimization & Anti-Abuse Protection (Proxy Guard Standards)
+
+Residential proxies cost money per GB ($2 - $10/GB). Any module handling proxy requests or client browser automation MUST enforce strict bandwidth optimization:
+
+- **Upstream Bloat Suppression**: Automatically block or abort high-bandwidth CDN assets (`*.fbcdn.net`, `scontent*.fbcdn.net`, `ciscobinary.openh264.org`, `hatch.metaaivm.com`, `x-marketing.fbthirdpartypixel.com`, `doubleclick.net`, `snapchat.com`, `googleads`). Never let image banners, video streams (`.mp4`, `.webm`, `.m3u8`), or font files (`.woff2`, `.ttf`) consume proxy bandwidth.
+- **Client & Engine Preference Hardening**:
+  - Disable automatic codec downloads in Firefox/Camoufox (`media.gmp-provider.enabled = false`, `media.gmp-gmpopenh264.enabled = false`).
+  - Disable background telemetry, update checks (`app.update.auto = false`, `app.update.enabled = false`), and safe browsing pingbacks.
+- **Local Asset Disk Caching**: Reusable JavaScript frameworks and static stylesheets MUST be cached to local disk (`cache/browser_assets/`) and served locally via `route.fulfill(body=cached_bytes)` to achieve 0-byte upstream proxy consumption and sub-10ms load times.
+- **Dynamic Session-based IP Rotation on Anti-Fraud Cooldown**:
+  - When encountering platform anti-abuse rejection (e.g. Meta *"You can't create a new account right now"* / *"You aren't able to create an account"*), the system MUST rotate the proxy `session_id` to acquire a brand-new, clean residential IP and retry automatically (up to `--retries N`) instead of terminating the run.
