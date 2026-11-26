@@ -594,3 +594,46 @@ fn test_dynamic_country_adaptation_and_shared_endpoint() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_record_proxy_result_tracks_adapted_country_proxy() {
+    let temp_dir = std::env::temp_dir().join("proxy_guard_test_adapted_result");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+
+    let p_vn = UpstreamProxy::parse(
+        "http://customer-resi_test-cc-vn:secret@pr.oxylabs.io:7777",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let base_id = p_vn.id.clone();
+    pool.add_proxy(p_vn).unwrap();
+
+    // Select adapted US proxy -> ID becomes `pr.oxylabs.io:7777:customer-resi_test-cc-us`
+    let adapted = pool
+        .select_proxy(&ProxySelectionQuery {
+            country: Some("US".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_ne!(adapted.id, base_id);
+
+    // Record failure against adapted ID -> base proxy failure_count should increment
+    pool.record_proxy_result(&adapted.id, false);
+    let list = pool.list_proxies();
+    assert_eq!(list[0].failure_count, 1);
+
+    // Record success against adapted ID -> base proxy success_count increments, failure_count decrements
+    pool.record_proxy_result(&adapted.id, true);
+    let list2 = pool.list_proxies();
+    assert_eq!(list2[0].success_count, 1);
+    assert_eq!(list2[0].failure_count, 0);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

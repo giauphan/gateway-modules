@@ -3,6 +3,7 @@
 use proxy_guard::proxy_server::utils::{
     extract_host_from_headers, extract_host_port, extract_proxy_query_from_headers,
     find_header_end, is_chunked_transfer_encoding, is_private_or_restricted, parse_content_length,
+    split_host_port,
 };
 use proxy_guard::rules_engine::extract_host;
 use std::net::IpAddr;
@@ -161,4 +162,22 @@ fn test_http_transfer_encoding_and_content_length() {
     let standard = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
     assert!(!is_chunked_transfer_encoding(standard));
     assert_eq!(parse_content_length(standard), None);
+}
+
+#[test]
+fn test_ipv6_and_userinfo_host_port_parsing() {
+    assert_eq!(extract_host_port("http://[::1]/foo", 80), "[::1]:80");
+    assert_eq!(
+        extract_host_port("https://[::1]:8443/path", 443),
+        "[::1]:8443"
+    );
+    assert_eq!(
+        extract_host_port("http://user:pass@example.com/path", 80),
+        "example.com:80"
+    );
+
+    assert_eq!(split_host_port("[::1]:443", 80), ("::1", 443));
+    assert_eq!(split_host_port("[::1]", 8080), ("::1", 8080));
+    assert_eq!(split_host_port("example.com:8443", 80), ("example.com", 8443));
+    assert_eq!(split_host_port("example.com", 80), ("example.com", 80));
 }

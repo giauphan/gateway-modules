@@ -77,12 +77,49 @@ pub fn extract_host_port(url_or_addr: &str, default_port: u16) -> String {
         url_or_addr
     };
 
-    let host_part = clean.split('/').next().unwrap_or(clean);
+    let authority = clean.split(['/', '?', '#']).next().unwrap_or(clean);
+    let host_part = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+
+    if host_part.starts_with('[') {
+        if let Some(close_idx) = host_part.find(']') {
+            let after_bracket = &host_part[close_idx + 1..];
+            if after_bracket.starts_with(':') {
+                return host_part.to_string();
+            }
+            return format!("{}:{default_port}", &host_part[..=close_idx]);
+        }
+        return host_part.to_string();
+    }
+
     if host_part.contains(':') {
         host_part.to_string()
     } else {
         format!("{host_part}:{default_port}")
     }
+}
+
+/// Splits a `host:port` (including bracketed IPv6 `[::1]:443`) into `(host, port)`.
+/// Brackets around IPv6 addresses are stripped from `host` for SOCKS5/socket APIs.
+pub fn split_host_port(host_port: &str, default_port: u16) -> (&str, u16) {
+    if host_port.starts_with('[') {
+        if let Some(close_idx) = host_port.find(']') {
+            let host = &host_port[1..close_idx];
+            let port = host_port[close_idx + 1..]
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(default_port);
+            return (host, port);
+        }
+    }
+    if let Some((host, port_str)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return (host, port);
+        }
+    }
+    (host_port, default_port)
 }
 
 pub fn extract_host_from_headers(header_bytes: &[u8]) -> Option<String> {

@@ -4,9 +4,11 @@
 
 use super::utils::{
     base64_encode, extract_host_port, is_chunked_transfer_encoding, parse_content_length,
-    perform_socks5_connect, try_connect_socket, try_connect_target_socket,
+    perform_socks5_connect, split_host_port, try_connect_socket, try_connect_target_socket,
 };
-use crate::domain::{FilterDecision, ProxyProtocol, ProxySelectionQuery, UpstreamProxy};
+use crate::domain::{
+    FilterDecision, ProxyProtocol, ProxySelectionQuery, RuleAction, UpstreamProxy,
+};
 use crate::mock_factory::MockFactory;
 use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
 use crate::request_optimizer::optimize_request_headers;
@@ -64,23 +66,57 @@ fn inject_proxy_auth(headers: &[u8], proxy_opt: Option<&UpstreamProxy>) -> Vec<u
     optimized
 }
 
+fn ends_with_chunk_terminator(tail: &[u8], len: usize) -> bool {
+    len >= 5 && &tail[len - 5..len] == b"0\r\n\r\n"
+}
+
 fn forward_chunked_body(
     client: &mut TcpStream,
     upstream: &mut TcpStream,
     body_prefix: &[u8],
 ) -> Result<(), ()> {
-    let mut body_tracker = body_prefix.to_vec();
+    // Keep at most the last 4 bytes of previous reads to detect `0\r\n\r\n` across boundaries in O(1) space.
+    let mut tail = [0u8; 4];
+    let mut tail_len = 0usize;
+
+    let check_and_advance = |slice: &[u8], tail: &mut [u8; 4], tail_len: &mut usize| -> bool {
+        let mut combined = [0u8; 4 + 4096];
+        let mut idx = 0;
+        if *tail_len > 0 {
+            combined[..*tail_len].copy_from_slice(&tail[..*tail_len]);
+            idx = *tail_len;
+        }
+        // Scan in chunks if slice > 4096, though here slice is <= 4096 on reads (and body_prefix is < 64KB)
+        for chunk in slice.chunks(4096) {
+            let total = idx + chunk.len();
+            combined[idx..total].copy_from_slice(chunk);
+            if combined[..total].windows(5).any(|w| w == b"0\r\n\r\n") {
+                return true;
+            }
+            let keep = total.min(4);
+            tail[..keep].copy_from_slice(&combined[total - keep..total]);
+            *tail_len = keep;
+            combined[..keep].copy_from_slice(&tail[..keep]);
+            idx = keep;
+        }
+        ends_with_chunk_terminator(&combined, idx)
+    };
+
+    if check_and_advance(body_prefix, &mut tail, &mut tail_len) {
+        return Ok(());
+    }
+
     let mut chunk_buf = [0u8; 4096];
-    while !body_tracker.windows(5).any(|w| w == b"0\r\n\r\n")
-        && !body_tracker.ends_with(b"0\r\n\r\n")
-    {
+    loop {
         match client.read(&mut chunk_buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 if upstream.write_all(&chunk_buf[..n]).is_err() {
                     return Err(());
                 }
-                body_tracker.extend_from_slice(&chunk_buf[..n]);
+                if check_and_advance(&chunk_buf[..n], &mut tail, &mut tail_len) {
+                    break;
+                }
             }
         }
     }
@@ -163,16 +199,26 @@ pub fn handle_http_request(
     }
 
     let target_host_port = extract_host_port(target, 80);
-    let (mut upstream, proxy_opt) = match dial_upstream(
-        service,
-        query,
-        fallback_upstream.as_deref(),
-        &target_host_port,
-    ) {
-        Some(res) => res,
-        None => {
-            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            return;
+    let (mut upstream, proxy_opt) = if decision.action == RuleAction::BypassDirect {
+        match try_connect_target_socket(&target_host_port) {
+            Some(s) => (s, None),
+            None => {
+                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                return;
+            }
+        }
+    } else {
+        match dial_upstream(
+            service,
+            query,
+            fallback_upstream.as_deref(),
+            &target_host_port,
+        ) {
+            Some(res) => res,
+            None => {
+                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                return;
+            }
         }
     };
 
@@ -206,10 +252,7 @@ fn try_dial_proxy(proxy: &UpstreamProxy, target_host_port: &str) -> Option<TcpSt
     let addr = format!("{}:{}", proxy.host, proxy.port);
     let stream = try_connect_socket(&addr)?;
     if proxy.protocol == ProxyProtocol::Socks5 {
-        let (th, tp) = target_host_port
-            .split_once(':')
-            .unwrap_or((target_host_port, "80"));
-        let port_num = tp.parse::<u16>().unwrap_or(80);
+        let (th, port_num) = split_host_port(target_host_port, 80);
         perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
     } else {
         Some(stream)
