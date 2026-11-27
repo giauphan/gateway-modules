@@ -22,16 +22,21 @@ Proxy Guard sits between your automation tools and the paid proxy providers as a
 │             TOOLCASE GATEWAY / PROXY GUARD                  │
 │                   (127.0.0.1:3128)                          │
 │                                                             │
-│  1. Request Classifier & Rules Engine                       │
-│     ├── Block & Mock (0 Bytes sent upstream):               │
+│  1. Request Classifier & 3-Way Domain Split Router          │
+│     ├── REJECT / Mock (0 Bytes sent upstream):              │
 │     │   ├── Browser Bloat (*.gvt1.com Widevine: ~9.1MB)     │
 │     │   ├── OpenH264 Video Codec (~523KB)                   │
 │     │   ├── Google Tag Manager / GA4 (Mock JS Stub)         │
 │     │   ├── Meta Pixel, Sentry, New Relic (Mock JS Stub)    │
-│     │   └── Custom Web Fonts (.woff2, .ttf)                 │
-│     └── Allowed Core Traffic:                               │
+│     │   └── Custom Web Fonts (.woff2, .ttf) & scontent      │
+│     ├── DIRECT Bypass (BypassDirect — 0 GB paid proxy):     │
+│     │   ├── Public static CDNs (static.xx.fbcdn.net,        │
+│     │   │   js.stripe.com, custom add_direct_bypass_domains)│
+│     │   └── Preserves original TLS fingerprint & HTTP cache │
+│     └── Forward Upstream (Sensitive Domains Only):          │
+│         ├── services.sheerid.com, muse.ai, auth.meta.com    │
 │         ├── Request Optimizer (strip utm_*, fbclid, sec-ch) │
-│         └── RFC 9110 Safe Compression Rewriter             │
+│         └── RFC 9110 Safe Compression Rewriter              │
 │                                                             │
 │  2. Multi-Upstream Proxy Pool & Health Manager              │
 │     ├── Round-Robin / Random / Lowest-Failures              │
@@ -316,6 +321,69 @@ The interactive web dashboard displays:
    - Status badges with distinct color-coding: `Blocked (204)` (red/amber), `Mocked (JS Stub)` (purple/indigo), and `Forwarded (Upstream)` (green).
    - Domain, route path, category badge, timestamp, and bytes saved per entry.
    - **One-click "Clear Logs" button** with automatic host/path resolution for reverse proxy environments.
+
+### 3.3 Domain Split Routing, Caching & TLS Fingerprint Strategy (v1.14.0+)
+
+For strict anti-bot platforms such as **`services.sheerid.com`** and **`muse.ai`**, the most effective way to cut paid residential proxy GB consumption is **not just caching**, but **domain-based split routing** so heavy non-sensitive assets never traverse pay-per-GB proxies while sensitive hosts retain their exact original browser TLS fingerprint.
+
+#### Recommended 3-Tier Solution Architecture
+
+| Tier | Approach | GB Saved | TLS Fingerprint | Best For |
+| :--- | :--- | :---: | :---: | :--- |
+| **Group 1 (Recommended)** | **Domain Split Routing (`REJECT` / `DIRECT` / `Upstream`)** | **70% – 90%+** | **100% Preserved** | Headless browsers & strict anti-bot targets (`services.sheerid.com`, `muse.ai`, `auth.meta.com`) |
+| **Group 2** | **HTTP Client-Layer Caching** (`hishel`, `requests-cache`) | **50% – 85%** | **100% Preserved** | Pure REST API tools with repeated lookups (school/org search, metadata) |
+| **Group 3 (Use with Care)** | **MITM Caching Proxy** (`mitmproxy-anycache`, `python-mitmcache`) | **60% – 80%** | **Altered (OpenSSL)** | Static/CDN hosts only — **must** exclude sensitive hosts via `--ignore-hosts` |
+
+---
+
+#### Group 1: Domain Split Routing (70–90% GB Saved, Intact TLS Fingerprint)
+
+Route only sensitive domains through paid upstream proxies; **reject** trackers/fonts/ads and route public static CDNs **`DIRECT`** (0 GB paid proxy):
+
+| Domain / Host Pattern | Recommended Route | Proxy Guard Action | Paid Proxy GB |
+| :--- | :--- | :--- | :---: |
+| `services.sheerid.com` | Paid Residential Proxy (e.g. DataImpulse / Oxylabs) | `ForwardUpstream` | Minimal (API/HTML only) |
+| `muse.ai`, `auth.muse.ai`, `api.muse.ai` | Static US ISP / Residential Proxy | `ForwardUpstream` | Minimal (API/HTML only) |
+| `auth.meta.com`, `m.stripe.com`, `challenges.cloudflare.com` | Paid Upstream Proxy | `ForwardUpstream` | Minimal |
+| `static.xx.fbcdn.net`, `js.stripe.com`, public JS/CSS CDNs | **`DIRECT`** (Local network, SSRF-checked) | `BypassDirect` | **0 GB** |
+| `scontent*.fbcdn.net`, `*.gvt1.com`, `fonts.gstatic.com`, trackers/ads | **`REJECT`** (204 / Harmless JS Stub) | `Block204` / `MockScript` | **0 GB** |
+
+**Dynamic Split Routing in Proxy Guard (v1.14.0+):**
+Add custom `DIRECT` bypass domains dynamically via REST API or MCP (`proxy-guard__configure_rules`):
+```bash
+curl -X POST http://127.0.0.1:3128/custom/proxy-guard/rules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "add_direct_bypass_domains": ["cdn.jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com"]
+  }'
+```
+
+**Open-Source Local Split-Router Alternatives (Standalone / Multi-Upstream):**
+- **`MetaCubeX/mihomo`** *(Clash Meta core)*: Flexible `DOMAIN` / `DOMAIN-SUFFIX` rule engine (e.g., `services.sheerid.com` → DataImpulse proxy, `muse.ai` → Static US ISP, heavy CDNs/trackers → `DIRECT` or `REJECT`).
+- **`apify/proxy-chain`** *(Node.js / TypeScript)*: Programmable local proxy server for scraping/automation with upstream HTTP/HTTPS/SOCKS5 chaining and dynamic per-request routing/blocking.
+- **`go-gost/gost`** *(Go)*: Lightweight tunnel/proxy router with rule-based routing and basic forward/reverse proxy caching.
+
+---
+
+#### Group 2: HTTP Client-Layer Caching (Pure REST API Tools)
+
+For tools calling REST APIs directly (such as repeated institution/school search endpoints or static configuration metadata), cache responses directly inside the HTTP client:
+- **`karpetrosyan/hishel`** *(Python)*: Modern RFC 9111 HTTP caching for `httpx` and `requests` (both sync and async) backed by SQLite or Redis.
+- **`requests-cache/requests-cache`** *(Python)*: Drop-in `CachedSession()` replacement for `requests.Session()` with automatic SQLite/Redis/file persistence and TTL / `Cache-Control` reuse.
+
+---
+
+#### Group 3: MITM Caching Proxy (Static/CDN Hosts Only)
+
+When a language-agnostic caching proxy is needed in front of an upstream proxy to cache static JS, CSS, and JSON responses:
+- **`investigativedata/mitmproxy-anycache`**: `mitmproxy` addon (with Docker image) caching responses by MIME type to file or Redis backends.
+- **`kitsuyui/python-mitmcache`**: Lightweight `mitmproxy` addon for local HTTP/HTTPS response caching.
+
+> [!CAUTION]
+> **TLS Fingerprint Warning (`mitmproxy --mode upstream`):**
+> Decrypting HTTPS via MITM terminates the browser's TLS connection and opens a new TLS handshake using `mitmproxy`'s OpenSSL stack. Strict anti-bot systems such as **`services.sheerid.com`** and **`muse.ai`** inspect JA3/JA4 TLS fingerprints and may flag or block MITM traffic.
+> - **Always exclude sensitive hosts** with `--ignore-hosts '^(services\.sheerid\.com|muse\.ai|.*\.muse\.ai|auth\.meta\.com):443$'`.
+> - For browser automation, prefer **Group 1 (non-MITM local proxy split routing)** combined with a **persistent browser disk cache** (see [Playwright Integration Guide](./PLAYWRIGHT_INTEGRATION.md#40-recommended-alternative-persistent-disk-cache--local-proxy-split-routing)).
 
 ---
 

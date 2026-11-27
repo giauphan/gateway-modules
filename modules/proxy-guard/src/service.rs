@@ -200,6 +200,8 @@ impl FlowOptimizerPort for ProxyGuardService {
 
             if decision.is_blocked() {
                 blocked_count = blocked_count.saturating_add(1);
+            } else if decision.action == RuleAction::BypassDirect {
+                // Split-routed DIRECT: 0 bytes consumed on paid upstream proxy
             } else {
                 forwarded_count = forwarded_count.saturating_add(1);
                 optimized_bytes = optimized_bytes.saturating_add(req_size);
@@ -314,6 +316,33 @@ impl RuleManagementPort for ProxyGuardService {
             RuleAction::Block204,
             120, // high priority for custom additions
             "User defined custom blocked domain",
+        );
+
+        let mut rules = self.rule_repo.load_rules();
+        rules.retain(|r| r.id != rule.id);
+        rules.push(rule);
+        self.rule_repo.save_rules(&rules)?;
+        self.rebuild_engine_locked();
+        Ok(())
+    }
+
+    fn add_direct_bypass_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String> {
+        let clean = domain.trim().to_ascii_lowercase();
+        if clean.is_empty() {
+            return Ok(());
+        }
+
+        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
+        let rule_name = name.unwrap_or(&clean).to_string();
+        let rule = Rule::new(
+            format!("direct:{clean}"),
+            rule_name,
+            RuleCategory::Custom,
+            PatternType::DomainSuffix,
+            clean,
+            RuleAction::BypassDirect,
+            125, // takes precedence over generic blocking rules for explicit split routing
+            "User defined direct-bypass (split-routing) domain",
         );
 
         let mut rules = self.rule_repo.load_rules();

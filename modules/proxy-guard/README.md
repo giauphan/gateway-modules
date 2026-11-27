@@ -17,19 +17,20 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 | **Session Recording** (Hotjar, Microsoft Clarity, FullStory) | **1 MB – 3 MB** | ❌ No | **Blocked (204 / Dropped WS)** |
 | **Error Telemetry** (Sentry, Datadog RUM, New Relic) | **300 KB – 1 MB** | ❌ No | **Blocked (Empty JSON / 204)** |
 | **Custom Web Fonts** (`.woff2`, `.woff`, `.ttf`) | **800 KB – 2 MB** | ❌ No | **Blocked (204 No Content)** |
-| **Core Document HTML & Essential JSON APIs** | **50 KB – 500 KB** | ✅ **YES** | **Forwarded to Upstream Proxy** |
+| **Public Static JS/CSS CDNs** (`static.xx.fbcdn.net`, `js.stripe.com`, custom `add_direct_bypass_domains`) | **1 MB – 8 MB** | ✅ **YES** | **Split-Routed DIRECT (`BypassDirect` — 0 GB paid proxy, TLS & cache intact)** |
+| **Core Document HTML & Essential JSON APIs** (`services.sheerid.com`, `muse.ai`, `auth.meta.com`) | **50 KB – 500 KB** | ✅ **YES** | **Forwarded to Upstream Proxy** |
 
 **Result**: A flow that previously burned **16 MB – 30 MB** is compressed down to **< 1 MB – 6 MB**, saving **60% to 95% of proxy bandwidth and cost**!
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.13.0)
+## 2. Architecture & Clean Architecture Layers (v1.14.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.13.0)
+├── Cargo.toml          # Single source of truth (v1.14.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary (635 KB)
@@ -59,7 +60,7 @@ modules/proxy-guard/
 │   ├── handlers/       # Interface adapters (routes & dispatcher)
 │   ├── rpc.rs          # stdio-stream framing helpers
 │   └── mcp.rs          # Model Context Protocol tools adapter
-└── tests/              # Automated integration test suite (75 integration + 16 unit tests)
+└── tests/              # Automated integration test suite (78 integration + 16 unit tests)
 ```
 
 > [!NOTE]
@@ -117,7 +118,7 @@ Integrated out of the box with Toolcase Gateway via `stdio-stream`:
   - `proxy-guard__generate_script`: Output ready-to-run automation interceptors.
   - `proxy-guard__get_metrics`: View real-time bandwidth and dollar savings.
   - `proxy-guard__get_request_logs`: Query live intercepted request audit logs and request reduction percentages.
-  - `proxy-guard__configure_rules`: Toggle categories or add custom whitelist/blacklist entries.
+  - `proxy-guard__configure_rules`: Toggle categories or add custom whitelist, blacklist, or `add_direct_bypass_domains` split-routing entries.
 
 ### Playwright & Headless Browser Integration
 For full integration recipes (TypeScript, Python, CI `playwright.config.ts`, route interception, and proxy rotation), refer to the dedicated guide:
@@ -134,4 +135,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 91 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 94 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.

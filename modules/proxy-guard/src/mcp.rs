@@ -224,6 +224,16 @@ fn tool_configure_rules(arguments: &Value, service: &ProxyGuardService) -> Value
             }
         }
     }
+    if let Some(arr) = arguments
+        .get("add_direct_bypass_domains")
+        .and_then(|v| v.as_array())
+    {
+        for d in arr.iter().filter_map(|v| v.as_str()) {
+            if let Err(e) = service.add_direct_bypass_domain(d, None) {
+                return make_mcp_error(&e);
+            }
+        }
+    }
     if let Some(rate) = arguments.get("cost_per_gb_usd").and_then(|v| v.as_f64()) {
         if let Err(e) = service.set_cost_per_gb(rate) {
             return make_mcp_error(&e);

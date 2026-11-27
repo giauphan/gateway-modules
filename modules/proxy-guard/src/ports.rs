@@ -33,6 +33,9 @@ pub trait RuleManagementPort: Send + Sync {
 
     /// Adds a domain to the custom blocked list.
     fn add_blocked_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String>;
+
+    /// Adds a domain to the custom direct-bypass (split-routing) list (0 GB paid proxy).
+    fn add_direct_bypass_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String>;
 }
 
 /// Inbound Port: Tracking and querying bandwidth and cost savings.

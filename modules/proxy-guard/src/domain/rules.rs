@@ -270,6 +270,8 @@ impl FlowMetrics {
             self.bytes_saved = self.bytes_saved.saturating_add(bytes);
         } else if decision.action == RuleAction::BypassDirect {
             self.direct_bypassed_requests = self.direct_bypassed_requests.saturating_add(1);
+            let bytes = actual_size.unwrap_or(decision.estimated_bytes_saved);
+            self.bytes_saved = self.bytes_saved.saturating_add(bytes);
         } else {
             self.forwarded_requests = self.forwarded_requests.saturating_add(1);
             let bytes = actual_size.unwrap_or(decision.resource_type.typical_byte_size());

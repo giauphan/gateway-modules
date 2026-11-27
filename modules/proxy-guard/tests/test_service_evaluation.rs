@@ -1,5 +1,5 @@
-use proxy_guard::domain::{FlowRequestDto, ProxyRotationStrategy};
-use proxy_guard::ports::{FlowOptimizerPort, MetricsPort};
+use proxy_guard::domain::{FlowRequestDto, ProxyRotationStrategy, RuleAction};
+use proxy_guard::ports::{FlowOptimizerPort, MetricsPort, RuleManagementPort};
 use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
@@ -115,4 +115,90 @@ fn test_flow_optimization_drastic_reduction() {
     let metrics = service.get_metrics();
     assert_eq!(metrics.blocked_requests, 7);
     assert_eq!(metrics.forwarded_requests, 3);
+}
+
+#[test]
+fn test_dynamic_split_routing_direct_bypass_and_savings() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_split_test_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    );
+
+    // Register a custom CDN for direct split-routing (0 GB paid proxy)
+    service
+        .add_direct_bypass_domain("cdn.jsdelivr.net", Some("jsDelivr Public CDN"))
+        .expect("should add direct bypass rule");
+
+    let direct_decision = service.evaluate_url(
+        "https://cdn.jsdelivr.net/npm/app.min.js",
+        "GET",
+        Some("script"),
+    );
+    assert_eq!(direct_decision.action, RuleAction::BypassDirect);
+    assert!(!direct_decision.is_blocked());
+
+    // Sensitive anti-bot platforms MUST stay ForwardUpstream (through paid proxy)
+    let sheerid = service.evaluate_url(
+        "https://services.sheerid.com/rest/v2/verification",
+        "POST",
+        Some("xhr"),
+    );
+    assert_eq!(sheerid.action, RuleAction::ForwardUpstream);
+
+    let muse = service.evaluate_url("https://api.muse.ai/v1/session", "GET", Some("xhr"));
+    assert_eq!(muse.action, RuleAction::ForwardUpstream);
+
+    // Verify optimize_flow counts BypassDirect as 0 paid-proxy bytes
+    let flow = vec![
+        FlowRequestDto {
+            url: "https://services.sheerid.com/rest/v2/verification".to_string(),
+            method: Some("POST".to_string()),
+            resource_type: Some("xhr".to_string()),
+            size_bytes: Some(20_000),
+        },
+        FlowRequestDto {
+            url: "https://cdn.jsdelivr.net/npm/bundle.js".to_string(),
+            method: Some("GET".to_string()),
+            resource_type: Some("script".to_string()),
+            size_bytes: Some(2_000_000),
+        },
+        FlowRequestDto {
+            url: "https://static.xx.fbcdn.net/rsrc.php/v3/core.js".to_string(),
+            method: Some("GET".to_string()),
+            resource_type: Some("script".to_string()),
+            size_bytes: Some(3_000_000),
+        },
+    ];
+
+    let result = service.optimize_flow(&flow);
+    assert_eq!(result.total_flow_requests, 3);
+    assert_eq!(result.forwarded_requests, 1);
+    assert!(
+        result.reduction_percentage > 99.0,
+        "Expected >99% paid proxy reduction with BypassDirect, got {}%",
+        result.reduction_percentage
+    );
+
+    let metrics = service.get_metrics();
+    assert!(metrics.direct_bypassed_requests >= 3);
+    assert!(metrics.bytes_saved >= 5_000_000);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

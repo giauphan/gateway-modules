@@ -48,16 +48,17 @@ flowchart TD
 
     PW_Browser -->|"Mode 1: proxy: { server: 'http://127.0.0.1:3128' }"| PG_Server
     PG_Server --> PG_Rules
-    PG_Rules -->|Blocked / Mocked| PW_Browser
-    PG_Rules -->|Forwarded| PG_Pool
+    PG_Rules -->|Blocked / Mocked (0 GB)| PW_Browser
+    PG_Rules -->|BypassDirect / DIRECT (0 GB paid proxy)| Target
+    PG_Rules -->|Forwarded (Sensitive Hosts)| PG_Pool
     PG_Pool --> Upstream --> Target
 
-    PW_Context -->|"Mode 2: context.route('**/*') abort/fulfill"| PW_Route
+    PW_Context -->|"Mode 2: context.route('**/*') abort/fulfill (disables HTTP cache!)"| PW_Route
     PW_Route -->|204 No Content / Mock Stub| PW_Context
 ```
 
-- **Mode 1: Native Proxy Forwarding (`127.0.0.1:3128`)**: Zero code changes. Playwright points its proxy server to Proxy Guard. Proxy Guard strips headers, blocks heavy media, mocks analytics, and handles upstream proxy failover automatically.
-- **Mode 2: In-Browser Route Interception (`page.route()`)**: Blocks or mocks requests inside the browser process before a network socket is even opened. Ideal when you cannot run a local proxy process.
+- **Mode 1: Native Proxy Forwarding & Domain Split Routing (`127.0.0.1:3128`) *(Recommended)***: Zero code changes. Playwright points its proxy server to Proxy Guard. Proxy Guard blocks heavy bloat (`REJECT`), routes public static CDNs `DIRECT` (`BypassDirect`), and forwards only sensitive domains (`services.sheerid.com`, `muse.ai`, `auth.meta.com`) to the upstream proxy pool — **preserving both the browser's HTTP cache AND original TLS fingerprint**.
+- **Mode 2: In-Browser Route Interception (`page.route()`) *(Fallback Only)***: Blocks or mocks requests inside the browser process when you cannot run a local proxy. **Note:** Enabling `page.route()` disables Chromium's HTTP cache (see [Section 4](#4-mode-2-in-browser-route-interception-pageroute--http-cache-trap)).
 - **Mode 3: Dynamic Multi-Proxy Rotation**: Query Proxy Guard's `/proxies/next` endpoint to receive a Playwright-ready proxy dictionary (`{ server, username, password }`).
 
 ---
@@ -194,9 +195,66 @@ if __name__ == "__main__":
 
 ---
 
-## 4. Mode 2: In-Browser Route Interception (`page.route()`)
+## 4. Mode 2: In-Browser Route Interception (`page.route()`) & HTTP Cache Trap
 
-If you run Playwright in environments where spawning a background proxy daemon is restricted (e.g. AWS Lambda, Google Cloud Run), you can use Proxy Guard's **Client Script Generator** to intercept and mock bloat directly inside Playwright.
+> [!WARNING]
+> **Critical Playwright / Puppeteer Trap (`page.route()` Disables HTTP Cache):**
+> Enabling request interception (`page.route()` / `context.route()` in Playwright, or `page.setRequestInterception(true)` in Puppeteer) **automatically disables the browser's built-in HTTP cache**. As a result, heavy JavaScript bundles (often 2–8 MB each) are re-downloaded on every page load or session instead of being served from disk cache.
+
+### 4.0 Recommended Alternative: Persistent Disk Cache + Local Proxy Split Routing
+
+To achieve maximum GB savings **without** triggering the `page.route()` cache trap or breaking TLS fingerprints on strict platforms (`services.sheerid.com`, `muse.ai`):
+
+1. **Preserve Browser Disk Cache Across Sessions (`launchPersistentContext` / `user_data_dir`)**:
+   Instead of launching an ephemeral blank profile every run, reuse a persistent `user_data_dir` (or shared cache directory) so static JS/CSS assets are served from local disk cache at **0 bytes**:
+
+   **TypeScript (`launchPersistentContext` + Proxy Guard Split Routing):**
+   ```typescript
+   import { chromium } from 'playwright';
+
+   const context = await chromium.launchPersistentContext('./cache/pw-profile', {
+     headless: true,
+     // Block ads/fonts/media & split-route static CDNs DIRECT at the local proxy layer
+     // (NO page.route() needed — HTTP disk cache and TLS fingerprint stay 100% intact!)
+     proxy: { server: 'http://127.0.0.1:3128' },
+     args: [
+       '--disable-background-networking',
+       '--disable-component-update',
+       '--disable-default-apps',
+       '--no-default-browser-check',
+       '--disable-sync',
+     ],
+   });
+   ```
+
+   **Python (`launch_persistent_context` + Proxy Guard Split Routing):**
+   ```python
+   from playwright.sync_api import sync_playwright
+
+   with sync_playwright() as p:
+       context = p.chromium.launch_persistent_context(
+           user_data_dir="./cache/pw-profile",
+           headless=True,
+           proxy={"server": "http://127.0.0.1:3128"},
+           args=[
+               "--disable-background-networking",
+               "--disable-component-update",
+               "--disable-default-apps",
+               "--no-default-browser-check",
+               "--disable-sync",
+           ],
+       )
+       page = context.new_page()
+       page.goto("https://services.sheerid.com", wait_until="domcontentloaded")
+       context.close()
+   ```
+
+2. **Block Junk & Split-Route at the Local Proxy Layer**:
+   Use **Proxy Guard (`127.0.0.1:3128`)**, **`MetaCubeX/mihomo`**, or **`apify/proxy-chain`** to reject ads/fonts/trackers (`REJECT`) and bypass public CDNs (`DIRECT`) at the network layer instead of `page.route()`. This saves **70% – 95% paid proxy GB** while preserving both Chromium's HTTP cache and the browser's genuine TLS fingerprint.
+
+---
+
+If you run Playwright in environments where spawning a background proxy daemon is strictly impossible (e.g. AWS Lambda, Google Cloud Run), you can fall back to Proxy Guard's **Client Script Generator** below:
 
 ### 4.1 Generate Script Dynamically via Gateway / MCP
 Call Proxy Guard's API or MCP tool `proxy-guard__generate_script` with target `playwright_ts` or `playwright_py`:
