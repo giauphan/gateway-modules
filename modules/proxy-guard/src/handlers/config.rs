@@ -180,17 +180,7 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
 
     // 6. Optional default route & HTTP response cache config
     if let Some(dr_val) = body.get("default_route") {
-        let parsed = if let Some(s) = dr_val.as_str() {
-            match s.trim().to_ascii_lowercase().as_str() {
-                "direct" | "bypass_direct" => Some(DefaultRoute::Direct),
-                "forward_upstream" | "upstream" => Some(DefaultRoute::ForwardUpstream),
-                other if !other.is_empty() => Some(DefaultRoute::Pool(other.to_string())),
-                _ => None,
-            }
-        } else {
-            serde_json::from_value::<DefaultRoute>(dr_val.clone()).ok()
-        };
-        if let Some(route) = parsed {
+        if let Some(route) = DefaultRoute::from_json_value(dr_val) {
             let _ = service.set_default_route(route);
         }
     }

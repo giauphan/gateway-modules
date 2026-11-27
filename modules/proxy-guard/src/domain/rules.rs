@@ -53,6 +53,30 @@ pub enum DefaultRoute {
     Pool(String),
 }
 
+impl DefaultRoute {
+    /// Parses a string representation (`"direct"`, `"forward_upstream"`, or a named pool).
+    pub fn parse_str(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        match trimmed.to_ascii_lowercase().as_str() {
+            "direct" | "bypass_direct" => Some(Self::Direct),
+            "forward_upstream" | "upstream" => Some(Self::ForwardUpstream),
+            _ => Some(Self::Pool(trimmed.to_string())),
+        }
+    }
+
+    /// Parses either a JSON string or a structured `DefaultRoute` JSON value.
+    pub fn from_json_value(val: &serde_json::Value) -> Option<Self> {
+        if let Some(s) = val.as_str() {
+            Self::parse_str(s)
+        } else {
+            serde_json::from_value::<Self>(val.clone()).ok()
+        }
+    }
+}
+
 /// Pattern matching strategy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

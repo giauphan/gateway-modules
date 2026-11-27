@@ -7,6 +7,7 @@ use crate::domain::{
     DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto,
     ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, Rule, RuleCategory, UpstreamProxy,
 };
+use crate::http_cache::{CacheLookup, CachedHttpResponse, HttpCacheConfig};
 
 /// Inbound Port: Application operations for analyzing and optimizing traffic flows.
 pub trait FlowOptimizerPort: Send + Sync {
@@ -160,4 +161,15 @@ pub trait ProxyPoolStoragePort: Send + Sync {
     fn save_rr_counter(&self, _counter: usize) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Outward Port: Bounded HTTP response cache abstraction (DIP boundary).
+pub trait HttpCachePort: Send + Sync {
+    fn config(&self) -> HttpCacheConfig;
+    fn update_config(&self, config: HttpCacheConfig);
+    fn clear(&self);
+    fn is_request_cacheable(&self, method: &str, url: &str, request_headers: &[u8]) -> bool;
+    fn lookup(&self, key: &str) -> CacheLookup;
+    fn store(&self, key: &str, url: &str, raw_response: &[u8]) -> bool;
+    fn refresh_not_modified(&self, key: &str, url: &str) -> Option<CachedHttpResponse>;
 }

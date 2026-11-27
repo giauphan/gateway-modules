@@ -278,6 +278,36 @@ impl HttpResponseCache {
     }
 }
 
+impl crate::ports::HttpCachePort for HttpResponseCache {
+    fn config(&self) -> HttpCacheConfig {
+        HttpResponseCache::config(self)
+    }
+
+    fn update_config(&self, config: HttpCacheConfig) {
+        HttpResponseCache::update_config(self, config);
+    }
+
+    fn clear(&self) {
+        HttpResponseCache::clear(self);
+    }
+
+    fn is_request_cacheable(&self, method: &str, url: &str, request_headers: &[u8]) -> bool {
+        HttpResponseCache::is_request_cacheable(self, method, url, request_headers)
+    }
+
+    fn lookup(&self, key: &str) -> CacheLookup {
+        HttpResponseCache::lookup(self, key)
+    }
+
+    fn store(&self, key: &str, url: &str, raw_response: &[u8]) -> bool {
+        HttpResponseCache::store(self, key, url, raw_response)
+    }
+
+    fn refresh_not_modified(&self, key: &str, url: &str) -> Option<CachedHttpResponse> {
+        HttpResponseCache::refresh_not_modified(self, key, url)
+    }
+}
+
 fn evict_to_limit(entries: &mut HashMap<String, CachedHttpResponse>, max_entries: usize) {
     while entries.len() > max_entries {
         let oldest_key = entries
