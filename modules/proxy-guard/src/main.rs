@@ -220,10 +220,15 @@ fn init_proxies(
                                         .or_else(|| item.get("pool"))
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
-                                    let sticky = item.get("sticky_session").and_then(|v| {
-                                        serde_json::from_value::<StickySessionConfig>(v.clone())
-                                            .ok()
-                                    });
+                                    let sticky = match StickySessionConfig::parse_optional_from_json(
+                                        item,
+                                    ) {
+                                        Ok(cfg) => cfg,
+                                        Err(e) => {
+                                            eprintln!("[proxy-guard] Warning: Skipping proxy with invalid sticky_session in config.json: {e}");
+                                            continue;
+                                        }
+                                    };
                                     if let Ok(parsed) =
                                         UpstreamProxy::parse(url, name, country, tags)
                                             .map(|p| p.with_pool_and_sticky(pool_name, sticky))
@@ -260,8 +265,15 @@ fn init_proxies(
                         }
                     }
                     if let Some(dr_val) = val.get("default_route") {
-                        if let Some(route) = DefaultRoute::from_json_value(dr_val) {
-                            let _ = service.set_default_route(route);
+                        match DefaultRoute::from_json_value(dr_val) {
+                            Ok(route) => {
+                                if let Err(e) = service.set_default_route(route) {
+                                    eprintln!("[proxy-guard] Warning: Failed to apply default_route from config.json: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[proxy-guard] Warning: Ignoring invalid default_route in config.json: {e}");
+                            }
                         }
                     }
                     if let Some(cache_val) = val.get("cache") {

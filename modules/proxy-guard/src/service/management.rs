@@ -124,14 +124,13 @@ impl RuleManagementPort for ProxyGuardService {
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("{clean} -> {trimmed_pool}"));
         let rule_id = format!(
-            "pool:{}:{}:{}",
+            "pool:{}:{}",
             if pattern_type == PatternType::ExactDomain {
                 "exact"
             } else {
                 "suffix"
             },
-            clean,
-            trimmed_pool
+            clean
         );
         let rule = Rule::new(
             rule_id,
@@ -154,6 +153,7 @@ impl RuleManagementPort for ProxyGuardService {
 
     fn set_default_route(&self, route: DefaultRoute) -> Result<(), String> {
         let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
+        self.rule_repo.save_default_route(&route)?;
         if let Ok(mut lock) = self.default_route.write() {
             *lock = route;
         }
@@ -254,18 +254,24 @@ impl MetricsPort for ProxyGuardService {
     fn record_upstream_transfer(&self, pool_key: &str, bytes_tx: u64, bytes_rx: u64) {
         if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_upstream_transfer(pool_key, bytes_tx, bytes_rx);
+            drop(metrics);
+            self.mark_metrics_dirty();
         }
     }
 
     fn record_cache_hit(&self, bytes_saved: u64) {
         if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_cache_hit(bytes_saved);
+            drop(metrics);
+            self.mark_metrics_dirty();
         }
     }
 
     fn record_cache_miss(&self) {
         if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_cache_miss();
+            drop(metrics);
+            self.mark_metrics_dirty();
         }
     }
 }

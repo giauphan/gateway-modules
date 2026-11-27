@@ -62,8 +62,8 @@ impl ProxyGuardService {
     ) -> Self {
         let rules = rule_repo.load_rules();
         let whitelist = rule_repo.load_whitelist();
-        let engine =
-            RulesEngine::with_default_route(rules, whitelist, DefaultRoute::ForwardUpstream);
+        let default_route = rule_repo.load_default_route();
+        let engine = RulesEngine::with_default_route(rules, whitelist, default_route.clone());
         let mut metrics = metrics_repo.load_metrics();
         metrics.cost_per_gb_usd = cost_per_gb_usd;
 
@@ -72,7 +72,7 @@ impl ProxyGuardService {
             metrics_repo,
             proxy_pool,
             cost_per_gb_usd: RwLock::new(cost_per_gb_usd),
-            default_route: RwLock::new(DefaultRoute::ForwardUpstream),
+            default_route: RwLock::new(default_route),
             cached_engine: RwLock::new(engine),
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
@@ -105,6 +105,16 @@ impl ProxyGuardService {
         self.metrics_repo.save_metrics(&metrics)?;
         self.dirty_metrics_count.store(0, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Marks metrics dirty and persists in batches (every 64 mutations) so transfer
+    /// and cache stats survive process restarts without per-request disk overhead.
+    pub(super) fn mark_metrics_dirty(&self) {
+        let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
+        if count >= 64 {
+            self.dirty_metrics_count.store(0, Ordering::Relaxed);
+            self.persist_latest_metrics();
+        }
     }
 
     /// Persists the latest in-memory metrics under the metrics lock, preventing

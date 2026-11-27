@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.15.1",
+  "version": "1.15.2",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -310,7 +310,8 @@
           "country": { "type": "string", "description": "Optional country filter (e.g. US)" },
           "pool": { "type": "string", "description": "Optional named pool filter (e.g. residential, static_isp_us)" },
           "tag": { "type": "string", "description": "Optional tag filter" },
-          "preferred_id": { "type": "string", "description": "Optional preferred proxy ID" }
+          "preferred_id": { "type": "string", "description": "Optional preferred proxy ID" },
+          "mask_credentials": { "type": "boolean", "description": "When true, masks upstream passwords in the returned proxy payload (default: false for client execution)" }
         }
       }
     },

@@ -180,8 +180,12 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
 
     // 6. Optional default route & HTTP response cache config
     if let Some(dr_val) = body.get("default_route") {
-        if let Some(route) = DefaultRoute::from_json_value(dr_val) {
-            let _ = service.set_default_route(route);
+        let route = match DefaultRoute::from_json_value(dr_val) {
+            Ok(r) => r,
+            Err(e) => return make_error_resp(400, &e),
+        };
+        if let Err(e) = service.set_default_route(route) {
+            return make_error_resp(500, &e);
         }
     }
     if let Some(cache_val) = body.get("cache") {

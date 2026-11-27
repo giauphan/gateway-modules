@@ -27,9 +27,7 @@ fn parse_proxy_item(item: &Value, idx: usize) -> Result<UpstreamProxy, String> {
                 .or_else(|| obj.get("pool"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let sticky = obj
-                .get("sticky_session")
-                .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
+            let sticky = StickySessionConfig::parse_optional_from_json(item)?;
             UpstreamProxy::parse(url, name, country, tags)
                 .map(|p| p.with_pool_and_sticky(pool_name, sticky))
         }
@@ -72,9 +70,10 @@ pub(super) fn tool_add_upstream_proxy(arguments: &Value, service: &ProxyGuardSer
             .or_else(|| arguments.get("pool"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let sticky = arguments
-            .get("sticky_session")
-            .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
+        let sticky = match StickySessionConfig::parse_optional_from_json(arguments) {
+            Ok(cfg) => cfg,
+            Err(e) => return make_mcp_error(&e),
+        };
 
         match UpstreamProxy::parse(url, name, country, tags)
             .map(|p| p.with_pool_and_sticky(pool_name, sticky))
@@ -138,18 +137,28 @@ pub(super) fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService
         strategy: strategy_override,
     };
 
+    let mask_credentials = arguments
+        .get("mask_credentials")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     match service.select_proxy(&query) {
         Some(proxy) => {
-            let playwright_cfg = proxy.to_playwright_config();
+            let output_proxy = if mask_credentials {
+                proxy.to_masked()
+            } else {
+                proxy
+            };
+            let playwright_cfg = output_proxy.to_playwright_config();
             let applied_strategy = strategy_override
                 .unwrap_or_else(|| service.get_strategy())
                 .as_str();
             make_mcp_success(&json!({
                 "status": "success",
                 "strategy_applied": applied_strategy,
-                "proxy": proxy,
+                "proxy": output_proxy,
                 "playwright_config": playwright_cfg,
-                "curl_arg": format!("-x {}", proxy.url)
+                "curl_arg": format!("-x {}", output_proxy.url)
             }))
         }
         None => {

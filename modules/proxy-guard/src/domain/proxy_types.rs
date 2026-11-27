@@ -31,6 +31,19 @@ impl Default for StickySessionConfig {
     }
 }
 
+impl StickySessionConfig {
+    /// Parses an optional `"sticky_session"` field from a JSON object.
+    /// Returns `Ok(None)` when absent or null, and an explicit `Err` on malformed payloads.
+    pub fn parse_optional_from_json(val: &serde_json::Value) -> Result<Option<Self>, String> {
+        match val.get("sticky_session") {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => serde_json::from_value::<Self>(v.clone())
+                .map(Some)
+                .map_err(|e| format!("Invalid 'sticky_session' configuration: {e}")),
+        }
+    }
+}
+
 /// Playwright / Puppeteer browser launch proxy dictionary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaywrightProxyConfig {
