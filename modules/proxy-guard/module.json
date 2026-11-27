@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -238,6 +238,11 @@
           },
           "add_blocked_domains": {
             "type": "array",
+            "items": { "type": "string" }
+          },
+          "add_direct_bypass_domains": {
+            "type": "array",
+            "description": "Domains to split-route DIRECT (0 GB paid proxy, preserves TLS fingerprint and browser HTTP cache)",
             "items": { "type": "string" }
           }
         }

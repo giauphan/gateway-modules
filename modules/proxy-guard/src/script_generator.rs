@@ -9,7 +9,12 @@ impl ScriptGenerator {
     /// Generates Playwright TypeScript route interception code.
     pub fn playwright_ts() -> String {
         r#"// [Proxy Guard] Zero-Bandwidth Playwright Interceptor (TypeScript/Node.js)
-// Drop this into your browser context setup to save 90-95% proxy bandwidth!
+// WARNING (HTTP Cache Trap): Enabling context.route() / page.route() disables Chromium's
+// built-in HTTP cache, causing large JS bundles to re-download on every navigation.
+// RECOMMENDED: Prefer local proxy split-routing (http://127.0.0.1:3128) + persistent
+// context (chromium.launchPersistentContext(userDataDir)) to preserve both HTTP cache
+// AND original TLS fingerprints for sensitive hosts (services.sheerid.com, muse.ai).
+// Use this route interceptor only when a local proxy process cannot be run.
 
 import { BrowserContext, Route } from 'playwright';
 
@@ -78,13 +83,19 @@ export async function setupProxyGuardInterceptor(context: BrowserContext, blockI
     return route.continue();
   });
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generates Playwright Python route interception code.
     pub fn playwright_py() -> String {
         r#"# [Proxy Guard] Zero-Bandwidth Playwright Interceptor (Python)
-# Plug this into your playwright flow before navigating!
+# WARNING (HTTP Cache Trap): Enabling context.route() / page.route() disables Chromium's
+# built-in HTTP cache, causing large JS bundles to re-download on every navigation.
+# RECOMMENDED: Prefer local proxy split-routing (http://127.0.0.1:3128) + persistent
+# context (p.chromium.launch_persistent_context(user_data_dir, ...)) to preserve both
+# HTTP cache AND original TLS fingerprints for sensitive hosts (services.sheerid.com, muse.ai).
+# Use this route interceptor only when a local proxy process cannot be run.
 
 from urllib.parse import urlparse
 
@@ -152,7 +163,8 @@ def setup_proxy_guard_interceptor(context, block_images=True):
         route.continue_()
 
     context.route("**/*", handle_route)
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generates Puppeteer Node.js route interception code.
@@ -198,7 +210,14 @@ export async function setupPuppeteerProxyGuard(page: Page, blockImages = true) {
     /// Generates mitmproxy Python addon script.
     pub fn mitmproxy_py() -> String {
         r#"# [Proxy Guard] mitmproxy Bandwidth Saver Addon (Python)
-# Usage: mitmproxy -s proxy_guard_addon.py --mode upstream:http://upstream-proxy:8080 --set upstream_auth=user:pass
+# WARNING (TLS Fingerprint): mitmproxy terminates client TLS and re-handshakes with OpenSSL.
+# Always bypass sensitive anti-bot hosts (services.sheerid.com, muse.ai, auth.meta.com) using
+# --ignore-hosts so their original browser TLS fingerprint stays intact, or prefer non-MITM
+# domain split-routing via Proxy Guard (127.0.0.1:3128) / mihomo / proxy-chain.
+# Usage:
+#   mitmproxy -s proxy_guard_addon.py \
+#     --mode upstream:http://upstream-proxy:8080 --set upstream_auth=user:pass \
+#     --ignore-hosts '^(services\.sheerid\.com|muse\.ai|.*\.muse\.ai|auth\.meta\.com):443$'
 
 from mitmproxy import http
 

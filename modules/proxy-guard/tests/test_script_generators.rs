@@ -26,12 +26,16 @@ fn test_script_generation_targets() {
     assert!(pw_ts.contains("ESSENTIAL_DOMAINS"));
     assert!(pw_ts.contains("TRANSPARENT_GIF_1X1"));
     assert!(pw_ts.contains("route.abort()"));
+    assert!(pw_ts.contains("HTTP Cache Trap"));
+    assert!(pw_ts.contains("launchPersistentContext"));
 
     let pw_py = service.generate_client_script("playwright_py").unwrap();
     assert!(pw_py.contains("def setup_proxy_guard_interceptor"));
     assert!(pw_py.contains("ESSENTIAL_DOMAINS"));
     assert!(pw_py.contains("TRANSPARENT_GIF_1X1"));
     assert!(pw_py.contains("route.abort()"));
+    assert!(pw_py.contains("HTTP Cache Trap"));
+    assert!(pw_py.contains("launch_persistent_context"));
 
     let puppeteer = service.generate_client_script("puppeteer_ts").unwrap();
     assert!(puppeteer.contains("setRequestInterception(true)"));
@@ -40,6 +44,8 @@ fn test_script_generation_targets() {
     assert!(mitm.contains("class ProxyGuard"));
     assert!(mitm.contains("http.Response.make"));
     assert!(mitm.contains("204"));
+    assert!(mitm.contains("--ignore-hosts"));
+    assert!(mitm.contains("services\\.sheerid\\.com"));
 
     assert!(service.generate_client_script("invalid_target").is_err());
 }
