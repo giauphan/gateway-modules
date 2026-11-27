@@ -762,14 +762,45 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     let proxies5 = service.list_proxies();
     assert_eq!(proxies5.len(), 2);
     assert_eq!(proxies5[0].port, 7777);
-    assert_eq!(proxies5[0].tags, vec!["oxylabs"]);
+    assert!(proxies5[0].tags.contains(&"oxylabs".to_string()));
+    assert!(proxies5[0].tags.contains(&"residential".to_string()));
     assert_eq!(proxies5[0].country.as_deref(), Some("VN"));
     assert_eq!(
         proxies5[0].auth.as_ref().map(|a| a.password.as_str()),
         Some("pass#123")
     );
     assert_eq!(proxies5[1].port, 8000);
-    assert_eq!(proxies5[1].tags, vec!["oxylabs"]);
+    assert!(proxies5[1].tags.contains(&"oxylabs".to_string()));
+    assert!(proxies5[1].tags.contains(&"datacenter".to_string()));
+
+    // Sticky session_id injects alphanumeric -sessid-<hex>-sesstime-10 on residential proxy
+    let res_req = json!({
+        "method": "POST",
+        "path": "/proxies/next",
+        "body": {
+            "country": "VN",
+            "tag": "residential",
+            "session_id": "user@example.com-run1"
+        }
+    });
+    let res_resp = handle_request(res_req, &service);
+    assert_eq!(res_resp["status"], 200);
+    let res_body: serde_json::Value = serde_json::from_str(res_resp["body"].as_str().unwrap()).unwrap();
+    let sticky_user = res_body["playwright_config"]["username"].as_str().unwrap();
+    assert!(sticky_user.contains("-sessid-"));
+    assert!(sticky_user.ends_with("-sesstime-10"));
+    assert!(!sticky_user.contains('@'));
+
+    // POST /proxies/report increments failure_count for lowest_failures routing
+    let proxy_id = res_body["proxy"]["id"].as_str().unwrap().to_string();
+    let rep_req = json!({
+        "method": "POST",
+        "path": "/proxies/report",
+        "body": { "id": proxy_id, "success": false }
+    });
+    let rep_resp = handle_request(rep_req, &service);
+    assert_eq!(rep_resp["status"], 200);
+    assert_eq!(service.list_proxies()[0].failure_count, 1);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

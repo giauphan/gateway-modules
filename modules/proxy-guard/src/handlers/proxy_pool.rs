@@ -231,3 +231,27 @@ pub fn handle_set_strategy(body: &Value, service: &ProxyGuardService) -> Value {
         Err(e) => make_error_resp(500, &e),
     }
 }
+
+/// POST /proxies/report
+/// Records proxy health feedback (success or failure/block) to guide `lowest_failures` routing.
+pub fn handle_report_proxy(body: &Value, service: &ProxyGuardService) -> Value {
+    let id = match body.get("id").and_then(|v| v.as_str()) {
+        Some(i) if !i.trim().is_empty() => i.trim(),
+        _ => return make_error_resp(400, "Missing required 'id' field"),
+    };
+    let success = match body.get("success").and_then(|v| v.as_bool()) {
+        Some(b) => b,
+        None => return make_error_resp(400, "Missing required boolean 'success' field"),
+    };
+
+    service.record_proxy_result(id, success);
+    make_json_resp(
+        200,
+        json!({
+            "status": "ok",
+            "id": id,
+            "success": success,
+            "message": "Proxy health result recorded"
+        }),
+    )
+}

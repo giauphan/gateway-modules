@@ -4,6 +4,7 @@
 //! Pure business rules with zero transport, framework, or database dependencies.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Upstream proxy protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +118,14 @@ impl UpstreamProxy {
                 merged_tags.push(t);
             }
         }
+        if let Some(tier_tag) = infer_proxy_tier_tag(&host, auth.as_ref().map(|a| a.username.as_str())) {
+            if !merged_tags
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(tier_tag))
+            {
+                merged_tags.push(tier_tag.to_string());
+            }
+        }
 
         let proxy = Self {
             id,
@@ -225,6 +234,62 @@ impl UpstreamProxy {
         updated
     }
 
+    /// Injects a deterministic, provider-safe sticky session token (`-sessid-<hex>-sesstime-10`)
+    /// into residential proxy usernames so all requests sharing `session_id` exit from the same
+    /// clean residential IP instead of rotating mid-session.
+    pub fn with_sticky_session(&self, session_id: &str) -> Self {
+        let trimmed = session_id.trim();
+        if trimmed.is_empty() {
+            return self.clone();
+        }
+        let a = match self.auth.as_ref() {
+            Some(auth) => auth,
+            None => return self.clone(),
+        };
+        let host_lower = self.host.to_ascii_lowercase();
+        let user_lower = a.username.to_ascii_lowercase();
+        let is_residential = host_lower.starts_with("pr.")
+            || user_lower.starts_with("customer-")
+            || user_lower.contains("resi")
+            || user_lower.contains("-sessid-");
+        if !is_residential {
+            return self.clone();
+        }
+
+        // Strip any existing -sessid-... suffix before appending the new clean token
+        let base_username = if let Some(idx) = user_lower.find("-sessid-") {
+            &a.username[..idx]
+        } else {
+            a.username.as_str()
+        };
+
+        // Oxylabs/BrightData require strictly alphanumeric sessid tokens (no `@`, `.`, or `-`)
+        let digest = Sha256::digest(trimmed.as_bytes());
+        let mut token = String::with_capacity(12);
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for &b in &digest[..6] {
+            token.push(HEX[(b >> 4) as usize] as char);
+            token.push(HEX[(b & 0x0f) as usize] as char);
+        }
+
+        let new_username = format!("{base_username}-sessid-{token}-sesstime-10");
+        let mut updated = self.clone();
+        let new_auth = ProxyAuth {
+            username: new_username.clone(),
+            password: a.password.clone(),
+        };
+        updated.url = format!(
+            "{}://{}:{}@{}:{}",
+            updated.protocol.scheme(),
+            url_encode_userinfo(&new_username),
+            url_encode_userinfo(&new_auth.password),
+            updated.host,
+            updated.port
+        );
+        updated.auth = Some(new_auth);
+        updated
+    }
+
     /// Dynamically adapts a residential proxy to target another country if supported by its auth scheme.
     /// E.g., for Oxylabs/BrightData residential pools (`-cc-vn` -> `-cc-us`).
     pub fn adapt_country(&self, target_country: &str) -> Option<Self> {
@@ -250,6 +315,19 @@ impl UpstreamProxy {
         );
         adapted.auth = Some(new_auth);
         Some(adapted)
+    }
+}
+
+fn infer_proxy_tier_tag(host: &str, username: Option<&str>) -> Option<&'static str> {
+    let h = host.to_ascii_lowercase();
+    let u = username.unwrap_or("").to_ascii_lowercase();
+    if h.starts_with("dc.") || u.starts_with("user-dc") || u.contains("-dc_") || u.contains("_dc_")
+    {
+        Some("datacenter")
+    } else if h.starts_with("pr.") || u.starts_with("customer-") || u.contains("resi") {
+        Some("residential")
+    } else {
+        None
     }
 }
 
