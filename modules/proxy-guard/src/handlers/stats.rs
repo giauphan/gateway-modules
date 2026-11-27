@@ -9,12 +9,13 @@ use serde_json::{json, Value};
 
 pub fn handle_get_metrics(service: &ProxyGuardService) -> Value {
     let metrics = service.get_metrics();
-    let total_bytes = metrics.bytes_saved.saturating_add(metrics.upstream_bytes_used);
+    let total_bytes = metrics
+        .bytes_saved
+        .saturating_add(metrics.upstream_bytes_used);
     let gb_saved = (metrics.bytes_saved as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
     let gb_upstream_used =
         (metrics.upstream_bytes_used as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
-    let gb_total_original =
-        (total_bytes as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
+    let gb_total_original = (total_bytes as f64 / 1_073_741_824.0 * 10_000.0).round() / 10_000.0;
     let data_reduction_percentage = if total_bytes > 0 {
         ((metrics.bytes_saved as f64 / total_bytes as f64) * 1000.0).round() / 10.0
     } else {

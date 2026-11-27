@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
@@ -244,6 +244,27 @@
             "type": "array",
             "description": "Domains to split-route DIRECT (0 GB paid proxy, preserves TLS fingerprint and browser HTTP cache)",
             "items": { "type": "string" }
+          },
+          "add_pool_routes": {
+            "type": "array",
+            "description": "Domain split-routing rules directing traffic to a specific named upstream proxy pool",
+            "items": {
+              "type": "object",
+              "properties": {
+                "domain": { "type": "string" },
+                "pool": { "type": "string" },
+                "name": { "type": "string" }
+              },
+              "required": ["domain", "pool"]
+            }
+          },
+          "default_route": {
+            "type": "string",
+            "description": "Fallback route when no rule matches: 'direct', 'forward_upstream', or a named pool"
+          },
+          "cache": {
+            "type": "object",
+            "description": "Opt-in bounded HTTP response cache settings (enabled, max_entries, max_body_bytes, default_ttl_secs)"
           }
         }
       }
@@ -257,6 +278,11 @@
           "url": { "type": "string", "description": "Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)" },
           "name": { "type": "string", "description": "Friendly name" },
           "country": { "type": "string", "description": "ISO country code (e.g. US, VN, SG)" },
+          "pool_name": { "type": "string", "description": "Named split-routing pool (e.g. residential, static_isp_us)" },
+          "sticky_session": {
+            "type": "object",
+            "description": "Sticky session config (enabled, ttl_secs, username_template)"
+          },
           "tags": { "type": "array", "items": { "type": "string" } },
           "proxies": {
             "type": "array",
@@ -282,6 +308,7 @@
           "strategy": { "type": "string", "description": "Optional rotation strategy override: round_robin, sticky_session, lowest_failures, or random" },
           "session_id": { "type": "string", "description": "Optional session key for sticky routing" },
           "country": { "type": "string", "description": "Optional country filter (e.g. US)" },
+          "pool": { "type": "string", "description": "Optional named pool filter (e.g. residential, static_isp_us)" },
           "tag": { "type": "string", "description": "Optional tag filter" },
           "preferred_id": { "type": "string", "description": "Optional preferred proxy ID" }
         }

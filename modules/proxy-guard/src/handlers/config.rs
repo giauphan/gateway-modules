@@ -2,7 +2,10 @@
 //!
 //! Clean Architecture: Interface Adapters Layer.
 
-use crate::domain::{parse_country_input, ProxyRotationStrategy, RuleCategory, UpstreamProxy};
+use crate::domain::{
+    parse_country_input, DefaultRoute, ProxyRotationStrategy, RuleCategory, UpstreamProxy,
+};
+use crate::http_cache::HttpCacheConfig;
 use crate::ports::{MetricsPort, ProxyPoolManagementPort, RuleManagementPort};
 use crate::rpc::{extract_request_body, make_error_resp, make_json_resp, make_text_resp};
 use crate::service::ProxyGuardService;
@@ -72,6 +75,8 @@ pub fn get_config_json(service: &ProxyGuardService) -> Value {
         "block_telemetry": has_enabled(RuleCategory::Telemetry),
         "block_media": has_enabled(RuleCategory::HeavyMedia),
         "block_fonts": has_enabled(RuleCategory::Font),
+        "default_route": service.get_default_route(),
+        "cache": service.http_cache().config(),
         "cost_per_gb_usd": service.get_metrics().cost_per_gb_usd
     })
 }
@@ -171,6 +176,28 @@ fn update_config(body: &Value, service: &ProxyGuardService) -> Value {
     // 5. Cost per GB
     if let Some(cost) = body.get("cost_per_gb_usd").and_then(|v| v.as_f64()) {
         let _ = service.set_cost_per_gb(cost);
+    }
+
+    // 6. Optional default route & HTTP response cache config
+    if let Some(dr_val) = body.get("default_route") {
+        let parsed = if let Some(s) = dr_val.as_str() {
+            match s.trim().to_ascii_lowercase().as_str() {
+                "direct" | "bypass_direct" => Some(DefaultRoute::Direct),
+                "forward_upstream" | "upstream" => Some(DefaultRoute::ForwardUpstream),
+                other if !other.is_empty() => Some(DefaultRoute::Pool(other.to_string())),
+                _ => None,
+            }
+        } else {
+            serde_json::from_value::<DefaultRoute>(dr_val.clone()).ok()
+        };
+        if let Some(route) = parsed {
+            let _ = service.set_default_route(route);
+        }
+    }
+    if let Some(cache_val) = body.get("cache") {
+        if let Ok(cache_cfg) = serde_json::from_value::<HttpCacheConfig>(cache_val.clone()) {
+            service.configure_cache(cache_cfg);
+        }
     }
 
     make_json_resp(

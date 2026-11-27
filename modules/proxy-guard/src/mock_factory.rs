@@ -92,7 +92,9 @@ window.DD_RUM = window.DD_RUM || { init: function(){}, addAction: function(){} }
                 content_type: "text/plain".to_string(),
                 body: "Blocked by Proxy Guard".to_string(),
             }),
-            RuleAction::ForwardUpstream | RuleAction::BypassDirect => None,
+            RuleAction::ForwardUpstream | RuleAction::BypassDirect | RuleAction::RoutePool(_) => {
+                None
+            }
         }
     }
 }

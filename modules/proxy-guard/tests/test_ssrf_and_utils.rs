@@ -178,6 +178,43 @@ fn test_ipv6_and_userinfo_host_port_parsing() {
 
     assert_eq!(split_host_port("[::1]:443", 80), ("::1", 443));
     assert_eq!(split_host_port("[::1]", 8080), ("::1", 8080));
-    assert_eq!(split_host_port("example.com:8443", 80), ("example.com", 8443));
+    assert_eq!(
+        split_host_port("example.com:8443", 80),
+        ("example.com", 8443)
+    );
     assert_eq!(split_host_port("example.com", 80), ("example.com", 80));
+}
+
+#[test]
+fn test_proxy_authorization_session_priority_over_header() {
+    use proxy_guard::proxy_server::utils::{base64_decode, base64_encode};
+
+    // Priority 1: Proxy-Authorization Basic `<pool>:<session_id>:<pass>` overrides X-Proxy-Session
+    let b64_pool_sess = base64_encode(b"residential:sheerid-42:x");
+    let headers = format!(
+        "CONNECT services.sheerid.com:443 HTTP/1.1\r\nHost: services.sheerid.com:443\r\nProxy-Authorization: Basic {b64_pool_sess}\r\nX-Proxy-Session: fallback-hdr\r\n\r\n"
+    );
+    let q = extract_proxy_query_from_headers(&headers);
+    assert_eq!(q.pool.as_deref(), Some("residential"));
+    assert_eq!(q.session_id.as_deref(), Some("sheerid-42"));
+
+    // Priority 1b: Proxy-Authorization Basic `session-<id>:<pass>`
+    let b64_sess = base64_encode(b"session-alpha99:x");
+    let headers2 =
+        format!("CONNECT muse.ai:443 HTTP/1.1\r\nProxy-Authorization: Basic {b64_sess}\r\n\r\n");
+    let q2 = extract_proxy_query_from_headers(&headers2);
+    assert_eq!(q2.session_id.as_deref(), Some("alpha99"));
+    assert_eq!(q2.pool, None);
+
+    // Priority 2: X-Proxy-Session when no Proxy-Authorization is present
+    let headers3 = "GET http://example.com HTTP/1.1\r\nX-Proxy-Session: hdr-sess-7\r\nX-Proxy-Pool: static_isp_us\r\n\r\n";
+    let q3 = extract_proxy_query_from_headers(headers3);
+    assert_eq!(q3.session_id.as_deref(), Some("hdr-sess-7"));
+    assert_eq!(q3.pool.as_deref(), Some("static_isp_us"));
+
+    // Base64 round-trip sanity
+    assert_eq!(
+        base64_decode(&b64_sess).as_deref(),
+        Some(b"session-alpha99:x".as_slice())
+    );
 }

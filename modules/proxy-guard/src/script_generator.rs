@@ -6,80 +6,101 @@
 pub struct ScriptGenerator;
 
 impl ScriptGenerator {
-    /// Generates Playwright TypeScript route interception code.
+    /// Generates Playwright TypeScript persistent-context launcher backed by Proxy Guard.
+    /// Does NOT enable `page.route()` by default so Chromium's HTTP disk cache and TLS fingerprint stay intact.
     pub fn playwright_ts() -> String {
-        r#"// [Proxy Guard] Zero-Bandwidth Playwright Interceptor (TypeScript/Node.js)
-// WARNING (HTTP Cache Trap): Enabling context.route() / page.route() disables Chromium's
-// built-in HTTP cache, causing large JS bundles to re-download on every navigation.
-// RECOMMENDED: Prefer local proxy split-routing (http://127.0.0.1:3128) + persistent
-// context (chromium.launchPersistentContext(userDataDir)) to preserve both HTTP cache
-// AND original TLS fingerprints for sensitive hosts (services.sheerid.com, muse.ai).
-// Use this route interceptor only when a local proxy process cannot be run.
+        r#"// [Proxy Guard] Bandwidth-Optimized Playwright Launcher (TypeScript/Node.js)
+// Preserves Chromium's HTTP disk cache AND original JA3/JA4 TLS fingerprint!
+//
+// IMPORTANT (HTTP Cache Trap):
+// Enabling context.route() / page.route() disables Chromium's HTTP disk cache,
+// forcing heavy JS bundles to re-download on every navigation.
+// By default (`enablePageRouteBlocking = false`), ALL ad/font/tracker blocking and
+// domain split-routing (`Reject` / `Direct` / `Pool`) are offloaded to Proxy Guard
+// at the local proxy layer (http://127.0.0.1:3128).
 
-import { BrowserContext, Route } from 'playwright';
+import { chromium, BrowserContext, Route } from 'playwright';
 
-const ESSENTIAL_DOMAINS = [
-  'auth.meta.com', 'auth.muse.ai', 'api.muse.ai',
-  'static.xx.fbcdn.net', 'challenges.cloudflare.com', 'stripe.com'
-];
+export interface ProxyGuardLaunchOptions {
+  /** Local Proxy Guard HTTP/CONNECT listener URL */
+  proxyServer?: string;
+  /** Persistent profile directory to reuse Chromium's HTTP disk cache across runs */
+  userDataDir?: string;
+  /** Target pool + sticky session ID passed via Proxy-Authorization (e.g. "residential:sheerid-01") */
+  sessionId?: string;
+  /** Named upstream pool prefix (e.g. "residential", "static_isp_us") */
+  pool?: string;
+  /** Align browser timezone with upstream proxy region (e.g. "America/New_York") */
+  timezoneId?: string;
+  /** Align browser locale with upstream proxy region (e.g. "en-US") */
+  locale?: string;
+  headless?: boolean;
+  /**
+   * Opt-in fallback ONLY when no local proxy daemon can run (e.g. serverless).
+   * Defaults to `false` to keep Chromium's HTTP disk cache active.
+   */
+  enablePageRouteBlocking?: boolean;
+}
 
-const BLOCKED_DOMAINS = [
-  'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'googlesyndication.com',
-  'pixel.facebook.com', 'analytics.tiktok.com',
-  'hotjar.com', 'clarity.ms', 'smartlook.com', 'fullstory.com',
-  'sentry.io', 'browser-intake-datadoghq.com', 'segment.io', 'amplitude.com',
-  'criteo.com', 'taboola.com', 'outbrain.com'
-];
+export async function launchWithProxyGuard(
+  opts: ProxyGuardLaunchOptions = {}
+): Promise<BrowserContext> {
+  const {
+    proxyServer = 'http://127.0.0.1:3128',
+    userDataDir = './cache/pw-profile',
+    sessionId = 'sheerid-session-01',
+    pool = 'residential',
+    timezoneId = 'America/New_York',
+    locale = 'en-US',
+    headless = true,
+    enablePageRouteBlocking = false,
+  } = opts;
 
-const BLOCKED_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.woff2', '.woff', '.ttf'];
+  const proxyUsername = pool ? `${pool}:${sessionId}` : `session-${sessionId}`;
 
-// 1x1 transparent GIF (43 bytes) avoids broken-image DOM signals while spending 0 proxy bytes
-const TRANSPARENT_GIF_1X1 = Buffer.from(
-  'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
-  'base64'
-);
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless,
+    timezoneId,
+    locale,
+    proxy: {
+      server: proxyServer,
+      username: proxyUsername,
+      password: 'x',
+    },
+    args: [
+      // Prevent browser background update / codec downloads
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--no-default-browser-check',
+      '--disable-sync',
+      // Prevent WebRTC real-IP leaks outside the proxy tunnel
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--enforce-webrtc-ip-permission-check',
+    ],
+  });
 
-export async function setupProxyGuardInterceptor(context: BrowserContext, blockImages = true) {
+  if (enablePageRouteBlocking) {
+    await attachFallbackRouteBlocker(context);
+  }
+
+  return context;
+}
+
+const FALLBACK_BLOCKED_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.woff2', '.woff', '.ttf'];
+
+async function attachFallbackRouteBlocker(context: BrowserContext): Promise<void> {
   await context.route('**/*', (route: Route) => {
-    const request = route.request();
-    const url = request.url();
-    const resourceType = request.resourceType();
-    const host = new URL(url).hostname.toLowerCase();
-
-    // 1. Always pass essential auth, API, CAPTCHA, and core static assets untouched
-    if (ESSENTIAL_DOMAINS.some(d => host === d || host.endsWith('.' + d))) {
-      return route.continue();
-    }
-
-    // 2. Block heavy media/font types
-    if (['media', 'font'].includes(resourceType)) {
-      return route.abort(); // 0 bytes hit your paid proxy!
-    }
-
-    // 3. Fulfill non-essential images with a valid 1x1 GIF (0 proxy bytes, clean DOM)
-    if (blockImages && resourceType === 'image') {
-      return route.fulfill({ status: 200, contentType: 'image/gif', body: TRANSPARENT_GIF_1X1 });
-    }
-
-    // 4. Block heavy file extensions
-    const cleanUrl = url.split('?')[0].toLowerCase();
-    if (BLOCKED_EXTENSIONS.some(ext => cleanUrl.endsWith(ext))) {
+    const req = route.request();
+    const resourceType = req.resourceType();
+    const cleanUrl = req.url().split('?')[0].toLowerCase();
+    if (
+      resourceType === 'media' ||
+      resourceType === 'font' ||
+      FALLBACK_BLOCKED_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext))
+    ) {
       return route.abort();
     }
-
-    // 5. Block tracking and analytics domains with harmless stubs
-    if (BLOCKED_DOMAINS.some(domain => host === domain || host.endsWith('.' + domain))) {
-      if (resourceType === 'script') {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/javascript',
-          body: 'window.dataLayer = window.dataLayer || []; window.gtag = function(){};'
-        });
-      }
-      return route.fulfill({ status: 204, body: '' });
-    }
-
-    // 6. Allowed requests continue through your paid proxy
     return route.continue();
   });
 }
@@ -87,79 +108,75 @@ export async function setupProxyGuardInterceptor(context: BrowserContext, blockI
         .to_string()
     }
 
-    /// Generates Playwright Python route interception code.
+    /// Generates Playwright Python persistent-context launcher backed by Proxy Guard.
+    /// Does NOT enable `page.route()` by default so Chromium's HTTP disk cache and TLS fingerprint stay intact.
     pub fn playwright_py() -> String {
-        r#"# [Proxy Guard] Zero-Bandwidth Playwright Interceptor (Python)
-# WARNING (HTTP Cache Trap): Enabling context.route() / page.route() disables Chromium's
-# built-in HTTP cache, causing large JS bundles to re-download on every navigation.
-# RECOMMENDED: Prefer local proxy split-routing (http://127.0.0.1:3128) + persistent
-# context (p.chromium.launch_persistent_context(user_data_dir, ...)) to preserve both
-# HTTP cache AND original TLS fingerprints for sensitive hosts (services.sheerid.com, muse.ai).
-# Use this route interceptor only when a local proxy process cannot be run.
+        r#"# [Proxy Guard] Bandwidth-Optimized Playwright Launcher (Python)
+# Preserves Chromium's HTTP disk cache AND original JA3/JA4 TLS fingerprint!
+#
+# IMPORTANT (HTTP Cache Trap):
+# Enabling context.route() / page.route() disables Chromium's HTTP disk cache,
+# forcing heavy JS bundles to re-download on every navigation.
+# By default (`enable_page_route_blocking=False`), ALL ad/font/tracker blocking and
+# domain split-routing (`Reject` / `Direct` / `Pool`) are offloaded to Proxy Guard
+# at the local proxy layer (http://127.0.0.1:3128).
 
-from urllib.parse import urlparse
+from playwright.sync_api import Playwright, BrowserContext
 
-ESSENTIAL_DOMAINS = {
-    "auth.meta.com", "auth.muse.ai", "api.muse.ai",
-    "static.xx.fbcdn.net", "challenges.cloudflare.com", "stripe.com"
-}
+FALLBACK_BLOCKED_EXTENSIONS = (".mp4", ".webm", ".ogg", ".woff2", ".woff", ".ttf")
 
-BLOCKED_DOMAINS = {
-    "google-analytics.com", "googletagmanager.com", "doubleclick.net", "googlesyndication.com",
-    "pixel.facebook.com", "analytics.tiktok.com",
-    "hotjar.com", "clarity.ms", "smartlook.com", "fullstory.com",
-    "sentry.io", "browser-intake-datadoghq.com", "segment.io", "amplitude.com",
-    "criteo.com", "taboola.com", "outbrain.com"
-}
 
-BLOCKED_EXTENSIONS = (".mp4", ".webm", ".ogg", ".woff2", ".woff", ".ttf")
+def launch_with_proxy_guard(
+    playwright: Playwright,
+    proxy_server: str = "http://127.0.0.1:3128",
+    user_data_dir: str = "./cache/pw-profile",
+    session_id: str = "sheerid-session-01",
+    pool: str = "residential",
+    timezone_id: str = "America/New_York",
+    locale: str = "en-US",
+    headless: bool = True,
+    enable_page_route_blocking: bool = False,
+) -> BrowserContext:
+    proxy_username = f"{pool}:{session_id}" if pool else f"session-{session_id}"
 
-# 1x1 transparent GIF (43 bytes) avoids broken-image DOM signals while spending 0 proxy bytes
-TRANSPARENT_GIF_1X1 = (
-    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!"
-    b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
-)
+    context = playwright.chromium.launch_persistent_context(
+        user_data_dir=user_data_dir,
+        headless=headless,
+        timezone_id=timezone_id,
+        locale=locale,
+        proxy={
+            "server": proxy_server,
+            "username": proxy_username,
+            "password": "x",
+        },
+        args=[
+            # Prevent browser background update / codec downloads
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-default-apps",
+            "--no-default-browser-check",
+            "--disable-sync",
+            # Prevent WebRTC real-IP leaks outside the proxy tunnel
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--enforce-webrtc-ip-permission-check",
+        ],
+    )
 
-def setup_proxy_guard_interceptor(context, block_images=True):
+    if enable_page_route_blocking:
+        _attach_fallback_route_blocker(context)
+
+    return context
+
+
+def _attach_fallback_route_blocker(context: BrowserContext) -> None:
     def handle_route(route):
-        request = route.request
-        url = request.url
-        resource_type = request.resource_type
-        hostname = (urlparse(url).hostname or "").lower()
-
-        # 1. Always pass essential auth, API, CAPTCHA, and core static assets untouched
-        if any(hostname == d or hostname.endswith("." + d) for d in ESSENTIAL_DOMAINS):
-            route.continue_()
-            return
-
-        # 2. Block heavy media/font types
-        if resource_type in ("media", "font"):
+        req = route.request
+        clean_url = req.url.split("?")[0].lower()
+        if req.resource_type in ("media", "font") or clean_url.endswith(
+            FALLBACK_BLOCKED_EXTENSIONS
+        ):
             route.abort()
             return
-
-        # 3. Fulfill non-essential images with a valid 1x1 GIF (0 proxy bytes, clean DOM)
-        if block_images and resource_type == "image":
-            route.fulfill(status=200, content_type="image/gif", body=TRANSPARENT_GIF_1X1)
-            return
-
-        # 4. Block extensions
-        clean_url = url.split("?")[0].lower()
-        if clean_url.endswith(BLOCKED_EXTENSIONS):
-            route.abort()
-            return
-
-        # 5. Block analytics/ads domains with harmless stub
-        if any(hostname == d or hostname.endswith("." + d) for d in BLOCKED_DOMAINS):
-            if resource_type == "script":
-                route.fulfill(
-                    status=200,
-                    content_type="application/javascript",
-                    body="window.dataLayer = window.dataLayer || []; window.gtag = function(){};"
-                )
-            else:
-                route.fulfill(status=204, body="")
-            return
-
         route.continue_()
 
     context.route("**/*", handle_route)

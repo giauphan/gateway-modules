@@ -4,8 +4,10 @@
 //! Exposes domain capabilities directly to AI agents via Toolcase Gateway.
 
 use crate::domain::{
-    FlowRequestDto, ProxyRotationStrategy, ProxySelectionQuery, RuleCategory, UpstreamProxy,
+    DefaultRoute, FlowRequestDto, ProxyRotationStrategy, ProxySelectionQuery, RuleCategory,
+    StickySessionConfig, UpstreamProxy,
 };
+use crate::http_cache::HttpCacheConfig;
 use crate::ports::{FlowOptimizerPort, MetricsPort, ProxyPoolManagementPort, RuleManagementPort};
 use crate::service::ProxyGuardService;
 use serde_json::{json, Value};
@@ -234,6 +236,40 @@ fn tool_configure_rules(arguments: &Value, service: &ProxyGuardService) -> Value
             }
         }
     }
+    if let Some(arr) = arguments.get("add_pool_routes").and_then(|v| v.as_array()) {
+        for item in arr {
+            let domain = item.get("domain").and_then(|v| v.as_str()).unwrap_or("");
+            let pool = item.get("pool").and_then(|v| v.as_str()).unwrap_or("");
+            let name = item.get("name").and_then(|v| v.as_str());
+            if !domain.is_empty() && !pool.is_empty() {
+                if let Err(e) = service.add_pool_route_domain(domain, pool, name) {
+                    return make_mcp_error(&e);
+                }
+            }
+        }
+    }
+    if let Some(dr_val) = arguments.get("default_route") {
+        let parsed = if let Some(s) = dr_val.as_str() {
+            match s.trim().to_ascii_lowercase().as_str() {
+                "direct" | "bypass_direct" => Some(DefaultRoute::Direct),
+                "forward_upstream" | "upstream" => Some(DefaultRoute::ForwardUpstream),
+                other if !other.is_empty() => Some(DefaultRoute::Pool(other.to_string())),
+                _ => None,
+            }
+        } else {
+            serde_json::from_value::<DefaultRoute>(dr_val.clone()).ok()
+        };
+        if let Some(route) = parsed {
+            if let Err(e) = service.set_default_route(route) {
+                return make_mcp_error(&e);
+            }
+        }
+    }
+    if let Some(cache_val) = arguments.get("cache") {
+        if let Ok(cache_cfg) = serde_json::from_value::<HttpCacheConfig>(cache_val.clone()) {
+            service.configure_cache(cache_cfg);
+        }
+    }
     if let Some(rate) = arguments.get("cost_per_gb_usd").and_then(|v| v.as_f64()) {
         if let Err(e) = service.set_cost_per_gb(rate) {
             return make_mcp_error(&e);
@@ -258,7 +294,16 @@ fn parse_proxy_item(item: &Value, idx: usize) -> Result<UpstreamProxy, String> {
                     .filter_map(|x| x.as_str().map(|s| s.to_string()))
                     .collect()
             });
+            let pool_name = obj
+                .get("pool_name")
+                .or_else(|| obj.get("pool"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let sticky = obj
+                .get("sticky_session")
+                .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
             UpstreamProxy::parse(url, name, country, tags)
+                .map(|p| p.with_pool_and_sticky(pool_name, sticky))
         }
         _ => Err(format!("Item at index {idx} has invalid format")),
     }
@@ -294,8 +339,18 @@ fn tool_add_upstream_proxy(arguments: &Value, service: &ProxyGuardService) -> Va
                 .filter_map(|x| x.as_str().map(|s| s.to_string()))
                 .collect()
         });
+        let pool_name = arguments
+            .get("pool_name")
+            .or_else(|| arguments.get("pool"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let sticky = arguments
+            .get("sticky_session")
+            .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
 
-        match UpstreamProxy::parse(url, name, country, tags) {
+        match UpstreamProxy::parse(url, name, country, tags)
+            .map(|p| p.with_pool_and_sticky(pool_name, sticky))
+        {
             Ok(proxy) => match service.add_proxy(proxy) {
                 Ok(id) => make_mcp_success(&json!({
                     "status": "success",
@@ -341,6 +396,11 @@ fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService) -> Value 
             .map(|s| s.to_string()),
         tag: arguments
             .get("tag")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        pool: arguments
+            .get("pool")
+            .or_else(|| arguments.get("pool_name"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         preferred_id: arguments

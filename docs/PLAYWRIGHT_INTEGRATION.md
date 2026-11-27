@@ -208,26 +208,35 @@ To achieve maximum GB savings **without** triggering the `page.route()` cache tr
 1. **Preserve Browser Disk Cache Across Sessions (`launchPersistentContext` / `user_data_dir`)**:
    Instead of launching an ephemeral blank profile every run, reuse a persistent `user_data_dir` (or shared cache directory) so static JS/CSS assets are served from local disk cache at **0 bytes**:
 
-   **TypeScript (`launchPersistentContext` + Proxy Guard Split Routing):**
+   **TypeScript (`launchPersistentContext` + Proxy Guard Split Routing + Sticky Session + WebRTC Protection):**
    ```typescript
    import { chromium } from 'playwright';
 
    const context = await chromium.launchPersistentContext('./cache/pw-profile', {
      headless: true,
+     timezoneId: 'America/New_York',
+     locale: 'en-US',
      // Block ads/fonts/media & split-route static CDNs DIRECT at the local proxy layer
+     // Pass `<pool>:<session_id>` via username to pin a sticky residential IP!
      // (NO page.route() needed — HTTP disk cache and TLS fingerprint stay 100% intact!)
-     proxy: { server: 'http://127.0.0.1:3128' },
+     proxy: {
+       server: 'http://127.0.0.1:3128',
+       username: 'residential:sheerid-session-01',
+       password: 'x',
+     },
      args: [
        '--disable-background-networking',
        '--disable-component-update',
        '--disable-default-apps',
        '--no-default-browser-check',
        '--disable-sync',
+       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+       '--enforce-webrtc-ip-permission-check',
      ],
    });
    ```
 
-   **Python (`launch_persistent_context` + Proxy Guard Split Routing):**
+   **Python (`launch_persistent_context` + Proxy Guard Split Routing + Sticky Session + WebRTC Protection):**
    ```python
    from playwright.sync_api import sync_playwright
 
@@ -235,13 +244,21 @@ To achieve maximum GB savings **without** triggering the `page.route()` cache tr
        context = p.chromium.launch_persistent_context(
            user_data_dir="./cache/pw-profile",
            headless=True,
-           proxy={"server": "http://127.0.0.1:3128"},
+           timezone_id="America/New_York",
+           locale="en-US",
+           proxy={
+               "server": "http://127.0.0.1:3128",
+               "username": "residential:sheerid-session-01",
+               "password": "x",
+           },
            args=[
                "--disable-background-networking",
                "--disable-component-update",
                "--disable-default-apps",
                "--no-default-browser-check",
                "--disable-sync",
+               "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+               "--enforce-webrtc-ip-permission-check",
            ],
        )
        page = context.new_page()

@@ -4,13 +4,14 @@
 //! Pure business rules with zero transport, framework, or database dependencies.
 
 pub mod proxy;
+mod proxy_parser;
 pub mod rules;
 
 pub use proxy::{
     parse_country_input, PlaywrightProxyConfig, ProxyAuth, ProxyProtocol, ProxyRotationStrategy,
-    ProxySelectionQuery, UpstreamProxy,
+    ProxySelectionQuery, StickySessionConfig, UpstreamProxy,
 };
 pub use rules::{
-    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, MockPayload, PatternType,
-    RequestLogEntry, ResourceType, Rule, RuleAction, RuleCategory,
+    DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, MockPayload,
+    PatternType, PoolTrafficStats, RequestLogEntry, ResourceType, Rule, RuleAction, RuleCategory,
 };

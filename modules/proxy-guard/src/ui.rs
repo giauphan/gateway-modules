@@ -45,7 +45,9 @@ pub fn render_dashboard_html(service: &ProxyGuardService) -> String {
     let mb_upstream = (metrics.upstream_bytes_used as f64) / 1_048_576.0;
     let gb_saved = (metrics.bytes_saved as f64) / 1_073_741_824.0;
     let gb_upstream = (metrics.upstream_bytes_used as f64) / 1_073_741_824.0;
-    let total_data_bytes = metrics.bytes_saved.saturating_add(metrics.upstream_bytes_used);
+    let total_data_bytes = metrics
+        .bytes_saved
+        .saturating_add(metrics.upstream_bytes_used);
     let gb_total = (total_data_bytes as f64) / 1_073_741_824.0;
     let data_opt_pct = if total_data_bytes > 0 {
         (metrics.bytes_saved as f64 / total_data_bytes as f64) * 100.0

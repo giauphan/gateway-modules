@@ -1,13 +1,106 @@
 {
-  "upstream_proxy_url": "http://user:pass@upstream-proxy.example.com:8080",
-  "default_country": "US",
   "proxy_listener_port": 3128,
+  "default_country": "US",
+  "rotation_strategy": "sticky_session",
+  "cost_per_gb_usd": 3.5,
   "block_analytics": true,
   "block_ads": true,
   "block_telemetry": true,
   "block_media": true,
   "block_fonts": true,
-  "cost_per_gb_usd": 3.5,
+  "default_route": "direct",
+  "upstream_proxies": [
+    {
+      "name": "dataimpulse-residential-us",
+      "pool_name": "residential",
+      "url": "http://your_resi_user:your_resi_pass@gw.dataimpulse.com:823",
+      "country": "US",
+      "tags": ["residential", "sheerid"],
+      "sticky_session": {
+        "enabled": true,
+        "ttl_secs": 600,
+        "username_template": "{base_user}_cr.{country}_sid.{session_id}_ttl.{ttl_mins}m"
+      }
+    },
+    {
+      "name": "static-isp-us-1",
+      "pool_name": "static_isp_us",
+      "url": "http://your_isp_user:your_isp_pass@us-isp.provider.example.com:8080",
+      "country": "US",
+      "tags": ["static_isp_us", "muse"],
+      "sticky_session": {
+        "enabled": false,
+        "ttl_secs": 600
+      }
+    }
+  ],
+  "routing_rules": [
+    {
+      "domain": "services.sheerid.com",
+      "action": "pool",
+      "pool": "residential",
+      "name": "SheerID Verification API (Residential)"
+    },
+    {
+      "domain": "*.sheerid.com",
+      "action": "pool",
+      "pool": "residential",
+      "name": "SheerID Subdomains (Residential)"
+    },
+    {
+      "domain": "muse.ai",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Muse.ai Apex (Static US ISP)"
+    },
+    {
+      "domain": "*.muse.ai",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Muse.ai Auth & API Subdomains (Static US ISP)"
+    },
+    {
+      "domain": "auth.meta.com",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Meta Auth Domain (Static US ISP)"
+    },
+    {
+      "domain": "static.xx.fbcdn.net",
+      "action": "direct",
+      "name": "Meta Public Static JS/CSS CDN"
+    },
+    {
+      "domain": "js.stripe.com",
+      "action": "direct",
+      "name": "Stripe Public JS SDK"
+    },
+    {
+      "domain": "*.googletagmanager.com",
+      "action": "reject",
+      "name": "Reject GTM"
+    },
+    {
+      "domain": "*.google-analytics.com",
+      "action": "reject",
+      "name": "Reject GA"
+    },
+    {
+      "domain": "*.fonts.gstatic.com",
+      "action": "reject",
+      "name": "Reject Web Fonts"
+    }
+  ],
+  "cache": {
+    "enabled": true,
+    "max_entries": 512,
+    "max_body_bytes": 1048576,
+    "default_ttl_secs": 300,
+    "domain_ttl_overrides": {
+      "orgsearch.sheerid.net": 3600
+    },
+    "auth_whitelisted_domains": []
+  },
   "whitelist_domains": [],
   "custom_blocked_domains": []
 }

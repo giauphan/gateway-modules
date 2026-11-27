@@ -49,13 +49,35 @@ pub fn find_header_end(buf: &[u8]) -> Option<usize> {
 
 pub fn extract_proxy_query_from_headers(header_str: &str) -> ProxySelectionQuery {
     let mut query = ProxySelectionQuery::default();
+    let mut auth_session: Option<String> = None;
+    let mut auth_pool: Option<String> = None;
+    let mut header_session: Option<String> = None;
+    let mut header_pool: Option<String> = None;
+
     for line in header_str.lines() {
         if let Some((name, val)) = line.split_once(':') {
             let name_lower = name.trim().to_ascii_lowercase();
             let val_trimmed = val.trim();
             match name_lower.as_str() {
+                "proxy-authorization" => {
+                    if let Some((pool_opt, sess_opt)) = parse_proxy_auth_session(val_trimmed) {
+                        if pool_opt.is_some() {
+                            auth_pool = pool_opt;
+                        }
+                        if sess_opt.is_some() {
+                            auth_session = sess_opt;
+                        }
+                    }
+                }
                 "x-proxy-session" | "x-proxy-session-id" => {
-                    query.session_id = Some(val_trimmed.to_string())
+                    if !val_trimmed.is_empty() {
+                        header_session = Some(val_trimmed.to_string());
+                    }
+                }
+                "x-proxy-pool" => {
+                    if !val_trimmed.is_empty() {
+                        header_pool = Some(val_trimmed.to_string());
+                    }
                 }
                 "x-proxy-country" => query.country = Some(val_trimmed.to_string()),
                 "x-proxy-tag" => query.tag = Some(val_trimmed.to_string()),
@@ -67,7 +89,52 @@ pub fn extract_proxy_query_from_headers(header_str: &str) -> ProxySelectionQuery
             }
         }
     }
+
+    // Priority 1: Proxy-Authorization username (`<pool>:<session_id>` or `session-<id>`)
+    // Priority 2: X-Proxy-Session / X-Proxy-Session-Id header
+    query.session_id = auth_session.or(header_session);
+    query.pool = auth_pool.or(header_pool);
     query
+}
+
+/// Parses `Basic <base64>` from a client `Proxy-Authorization` header into `(pool, session_id)`.
+/// Supported username conventions:
+/// - `<pool>:<session_id>` (e.g. `residential:sheerid-01`)
+/// - `session-<id>` (e.g. `session-abc123`)
+/// - `<session_id>` (any non-empty username)
+fn parse_proxy_auth_session(header_val: &str) -> Option<(Option<String>, Option<String>)> {
+    let mut parts = header_val.split_whitespace();
+    let scheme = parts.next()?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let encoded = parts.next()?;
+    let decoded_bytes = base64_decode(encoded)?;
+    let decoded = std::str::from_utf8(&decoded_bytes).ok()?;
+    let username = decoded.split(':').next().unwrap_or(decoded).trim();
+    if username.is_empty() {
+        return None;
+    }
+
+    // Check `<pool>~<session>` or `<pool>/<session>` or `pool-<name>-session-<id>` or `<pool>.<session>`
+    // Also handle when client passes `Basic base64("residential:sheerid-01:password")` -> splitn
+    if let Some((first, rest)) = decoded.split_once(':') {
+        if let Some((second, _third)) = rest.split_once(':') {
+            let p = first.trim();
+            let s = second.trim();
+            if !p.is_empty() && !s.is_empty() {
+                return Some((Some(p.to_string()), Some(s.to_string())));
+            }
+        }
+    }
+
+    if let Some(rest) = username.strip_prefix("session-") {
+        if !rest.trim().is_empty() {
+            return Some((None, Some(rest.trim().to_string())));
+        }
+    }
+
+    Some((None, Some(username.to_string())))
 }
 
 pub fn extract_host_port(url_or_addr: &str, default_port: u16) -> String {
@@ -219,6 +286,41 @@ pub fn base64_encode(input: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Decodes a standard RFC 4648 Base64 string without panicking.
+pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if cleaned.is_empty() || !cleaned.len().is_multiple_of(4) {
+        return None;
+    }
+
+    let decode_val = |b: u8| -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+
+    let mut out = Vec::with_capacity((cleaned.len() / 4) * 3);
+    for chunk in cleaned.as_chunks::<4>().0 {
+        let a = decode_val(chunk[0])?;
+        let b = decode_val(chunk[1])?;
+        out.push((a << 2) | (b >> 4));
+        if chunk[2] != b'=' {
+            let c = decode_val(chunk[2])?;
+            out.push((b << 4) | (c >> 2));
+            if chunk[3] != b'=' {
+                let d = decode_val(chunk[3])?;
+                out.push((c << 6) | d);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Performs RFC 1928 / RFC 1929 SOCKS5 client handshake and establishes CONNECT tunnel.

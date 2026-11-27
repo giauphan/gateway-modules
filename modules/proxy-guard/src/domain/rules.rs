@@ -4,6 +4,7 @@
 //! Pure business rules with zero transport, framework, or database dependencies.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// High-level category of filtering rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -33,8 +34,23 @@ pub enum RuleAction {
     Block403,
     /// Bypass the paid upstream proxy (fetch direct via local network if safe).
     BypassDirect,
+    /// Route to a specific named upstream proxy pool (e.g. `residential`, `static_isp_us`).
+    RoutePool(String),
     /// Forward to paid upstream residential/datacenter proxy.
     ForwardUpstream,
+}
+
+/// Fallback route applied when no explicit rule or built-in catalog rule matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultRoute {
+    /// Forward to the default upstream proxy pool (backward-compatible default).
+    #[default]
+    ForwardUpstream,
+    /// Dial target directly (with mandatory SSRF filtering).
+    Direct,
+    /// Route to a specific named upstream proxy pool.
+    Pool(String),
 }
 
 /// Pattern matching strategy.
@@ -226,8 +242,15 @@ impl FilterDecision {
     pub fn is_blocked(&self) -> bool {
         !matches!(
             self.action,
-            RuleAction::ForwardUpstream | RuleAction::BypassDirect
+            RuleAction::ForwardUpstream | RuleAction::BypassDirect | RuleAction::RoutePool(_)
         )
+    }
+
+    pub fn target_pool(&self) -> Option<&str> {
+        match self.action {
+            RuleAction::RoutePool(ref pool) => Some(pool.as_str()),
+            _ => None,
+        }
     }
 }
 
@@ -240,15 +263,39 @@ pub struct FlowRequestDto {
     pub size_bytes: Option<u64>,
 }
 
+/// Per-pool or per-route actual traffic counters.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoolTrafficStats {
+    #[serde(default)]
+    pub requests: u64,
+    #[serde(default)]
+    pub bytes_tx: u64,
+    #[serde(default)]
+    pub bytes_rx: u64,
+}
+
 /// Cumulative flow optimization metrics and cost savings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FlowMetrics {
     pub total_requests: u64,
     pub blocked_requests: u64,
     pub forwarded_requests: u64,
+    #[serde(default)]
     pub direct_bypassed_requests: u64,
     pub bytes_saved: u64,
     pub upstream_bytes_used: u64,
+    #[serde(default)]
+    pub bytes_tx: u64,
+    #[serde(default)]
+    pub bytes_rx: u64,
+    #[serde(default)]
+    pub pool_stats: HashMap<String, PoolTrafficStats>,
+    #[serde(default)]
+    pub cache_hits: u64,
+    #[serde(default)]
+    pub cache_misses: u64,
+    #[serde(default)]
+    pub cache_bytes_saved: u64,
     pub cost_per_gb_usd: f64,
     pub estimated_cost_saved_usd: f64,
 }
@@ -278,6 +325,38 @@ impl FlowMetrics {
             self.upstream_bytes_used = self.upstream_bytes_used.saturating_add(bytes);
         }
 
+        self.recompute_cost_saved();
+    }
+
+    /// Records actual metered wire bytes transferred for a pool or direct route.
+    pub fn record_upstream_transfer(&mut self, pool_key: &str, bytes_tx: u64, bytes_rx: u64) {
+        let total = bytes_tx.saturating_add(bytes_rx);
+        if pool_key != "direct" {
+            self.bytes_tx = self.bytes_tx.saturating_add(bytes_tx);
+            self.bytes_rx = self.bytes_rx.saturating_add(bytes_rx);
+        }
+        let entry = self.pool_stats.entry(pool_key.to_string()).or_default();
+        entry.requests = entry.requests.saturating_add(1);
+        entry.bytes_tx = entry.bytes_tx.saturating_add(bytes_tx);
+        entry.bytes_rx = entry.bytes_rx.saturating_add(bytes_rx);
+        if pool_key == "direct" && total > 0 {
+            self.bytes_saved = self.bytes_saved.saturating_add(total);
+            self.recompute_cost_saved();
+        }
+    }
+
+    pub fn record_cache_hit(&mut self, bytes_saved: u64) {
+        self.cache_hits = self.cache_hits.saturating_add(1);
+        self.cache_bytes_saved = self.cache_bytes_saved.saturating_add(bytes_saved);
+        self.bytes_saved = self.bytes_saved.saturating_add(bytes_saved);
+        self.recompute_cost_saved();
+    }
+
+    pub fn record_cache_miss(&mut self) {
+        self.cache_misses = self.cache_misses.saturating_add(1);
+    }
+
+    fn recompute_cost_saved(&mut self) {
         let saved_gb = (self.bytes_saved as f64) / 1_073_741_824.0;
         self.estimated_cost_saved_usd =
             (saved_gb * self.cost_per_gb_usd * 10_000.0).round() / 10_000.0;

@@ -9,8 +9,9 @@ use super::utils::{
 use crate::domain::{
     FilterDecision, ProxyProtocol, ProxySelectionQuery, RuleAction, UpstreamProxy,
 };
+use crate::http_cache::{is_not_modified_response, CacheLookup, HttpResponseCache};
 use crate::mock_factory::MockFactory;
-use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
+use crate::ports::{FlowOptimizerPort, MetricsPort, ProxyPoolManagementPort};
 use crate::request_optimizer::optimize_request_headers;
 use crate::service::ProxyGuardService;
 use std::io::{Read, Write};
@@ -165,12 +166,43 @@ fn forward_request_body(
     }
 }
 
-fn pipe_response(upstream: &mut TcpStream, client: &mut TcpStream) {
+fn inject_header_before_end(mut headers: Vec<u8>, header_line: &str) -> Vec<u8> {
+    if headers.ends_with(b"\r\n\r\n") {
+        let insert_pos = headers.len() - 2;
+        let mut new_hdr = Vec::with_capacity(headers.len() + header_line.len());
+        new_hdr.extend_from_slice(&headers[..insert_pos]);
+        new_hdr.extend_from_slice(header_line.as_bytes());
+        new_hdr.extend_from_slice(b"\r\n");
+        headers = new_hdr;
+    }
+    headers
+}
+
+fn pipe_response(
+    upstream: &mut TcpStream,
+    client: &mut TcpStream,
+    max_capture_bytes: usize,
+) -> (u64, Option<Vec<u8>>) {
     let mut resp_buf = [0u8; 8192];
+    let mut total_rx = 0u64;
+    let mut captured = if max_capture_bytes > 0 {
+        Some(Vec::with_capacity(max_capture_bytes.min(65536)))
+    } else {
+        None
+    };
+
     loop {
         match upstream.read(&mut resp_buf) {
             Ok(0) => break,
             Ok(n) => {
+                total_rx = total_rx.saturating_add(n as u64);
+                if let Some(ref mut buf) = captured {
+                    if buf.len().saturating_add(n) <= max_capture_bytes {
+                        buf.extend_from_slice(&resp_buf[..n]);
+                    } else {
+                        captured = None;
+                    }
+                }
                 if client.write_all(&resp_buf[..n]).is_err() {
                     break;
                 }
@@ -179,6 +211,25 @@ fn pipe_response(upstream: &mut TcpStream, client: &mut TcpStream) {
         }
     }
     let _ = client.flush();
+    (total_rx, captured)
+}
+
+fn read_bounded_response(upstream: &mut TcpStream, max_bytes: usize) -> Option<Vec<u8>> {
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 8192];
+    loop {
+        match upstream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len().saturating_add(n) > max_bytes {
+                    return None;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(_) => break,
+        }
+    }
+    Some(buf)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -198,31 +249,78 @@ pub fn handle_http_request(
         return;
     }
 
-    let target_host_port = extract_host_port(target, 80);
-    let (mut upstream, proxy_opt) = if decision.action == RuleAction::BypassDirect {
-        match try_connect_target_socket(&target_host_port) {
-            Some(s) => (s, None),
-            None => {
-                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-                return;
-            }
-        }
+    // Safe HTTP Response Cache (opt-in, strictly no MITM, bypasses auth/write/sensitive paths)
+    let cache = service.http_cache();
+    let cacheable = cache.is_request_cacheable(method, target, header_bytes);
+    let cache_key = if cacheable {
+        Some(HttpResponseCache::cache_key(method, target))
     } else {
-        match dial_upstream(
-            service,
-            query,
-            fallback_upstream.as_deref(),
-            &target_host_port,
-        ) {
-            Some(res) => res,
-            None => {
-                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        None
+    };
+    let mut revalidate_state: Option<(String, Vec<u8>)> = None;
+
+    if let Some(ref key) = cache_key {
+        match cache.lookup(key) {
+            CacheLookup::Hit(cached) => {
+                let _ = client.write_all(&cached.raw_response);
+                let _ = client.flush();
+                service.record_cache_hit(cached.raw_response.len() as u64);
                 return;
             }
+            CacheLookup::Revalidate { etag, entry } => {
+                revalidate_state = Some((etag, entry.raw_response));
+            }
+            CacheLookup::Miss => {
+                service.record_cache_miss();
+            }
         }
-    };
+    }
 
-    let optimized_headers = inject_proxy_auth(header_bytes, proxy_opt.as_ref());
+    let target_host_port = extract_host_port(target, 80);
+    let (mut upstream, proxy_opt, pool_label): (TcpStream, Option<UpstreamProxy>, String) =
+        match &decision.action {
+            RuleAction::BypassDirect => match try_connect_target_socket(&target_host_port) {
+                Some(s) => (s, None, "direct".to_string()),
+                None => {
+                    let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                    return;
+                }
+            },
+            RuleAction::RoutePool(pool_name) => {
+                let mut pool_query = query.clone();
+                pool_query.pool = Some(pool_name.clone());
+                match dial_named_pool_upstream(service, &pool_query, &target_host_port) {
+                    Some((s, p)) => (s, Some(p), pool_name.clone()),
+                    None => {
+                        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                        return;
+                    }
+                }
+            }
+            _ => {
+                let label = query.pool.clone().unwrap_or_else(|| "default".to_string());
+                match dial_upstream(
+                    service,
+                    query,
+                    fallback_upstream.as_deref(),
+                    &target_host_port,
+                ) {
+                    Some((s, p)) => (s, p, label),
+                    None => {
+                        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                        return;
+                    }
+                }
+            }
+        };
+
+    let mut optimized_headers = inject_proxy_auth(header_bytes, proxy_opt.as_ref());
+    if let Some((ref etag, _)) = revalidate_state {
+        optimized_headers =
+            inject_header_before_end(optimized_headers, &format!("If-None-Match: {etag}\r\n"));
+    }
+
+    let mut bytes_tx = optimized_headers.len() as u64;
     if upstream.write_all(&optimized_headers).is_err() {
         if let Some(ref proxy) = proxy_opt {
             service.record_proxy_result(&proxy.id, false);
@@ -238,6 +336,7 @@ pub fn handle_http_request(
         let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
         return;
     }
+    bytes_tx = bytes_tx.saturating_add(body_prefix.len() as u64);
 
     if let Some(ref proxy) = proxy_opt {
         service.record_proxy_result(&proxy.id, true);
@@ -245,7 +344,60 @@ pub fn handle_http_request(
 
     let _ = client.shutdown(Shutdown::Read);
     let _ = upstream.shutdown(Shutdown::Write);
-    pipe_response(&mut upstream, client);
+
+    let cache_cfg = cache.config();
+    let max_capture = if cacheable {
+        cache_cfg.max_body_bytes.saturating_add(16_384)
+    } else {
+        0
+    };
+
+    if let (Some(key), Some((_, cached_raw))) = (&cache_key, revalidate_state) {
+        if let Some(resp_bytes) = read_bounded_response(&mut upstream, max_capture.max(65536)) {
+            let rx = resp_bytes.len() as u64;
+            service.record_upstream_transfer(&pool_label, bytes_tx, rx);
+            if is_not_modified_response(&resp_bytes) {
+                let served = cache
+                    .refresh_not_modified(key, target)
+                    .map(|e| e.raw_response)
+                    .unwrap_or(cached_raw);
+                let _ = client.write_all(&served);
+                let _ = client.flush();
+                service.record_cache_hit(served.len() as u64);
+                return;
+            }
+            cache.store(key, target, &resp_bytes);
+            let _ = client.write_all(&resp_bytes);
+            let _ = client.flush();
+            return;
+        }
+    }
+
+    let (bytes_rx, captured_opt) = pipe_response(&mut upstream, client, max_capture);
+    service.record_upstream_transfer(&pool_label, bytes_tx, bytes_rx);
+    if let (Some(key), Some(captured)) = (cache_key, captured_opt) {
+        cache.store(&key, target, &captured);
+    }
+}
+
+/// Dials strictly from the requested named pool (fail-closed).
+fn dial_named_pool_upstream(
+    service: &ProxyGuardService,
+    query: &ProxySelectionQuery,
+    target_host_port: &str,
+) -> Option<(TcpStream, UpstreamProxy)> {
+    let proxy = service.select_proxy(query)?;
+    if let Some(stream) = try_dial_proxy(&proxy, target_host_port) {
+        return Some((stream, proxy));
+    }
+    service.record_proxy_result(&proxy.id, false);
+    if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
+        if let Some(stream) = try_dial_proxy(&fallback_proxy, target_host_port) {
+            return Some((stream, fallback_proxy));
+        }
+        service.record_proxy_result(&fallback_proxy.id, false);
+    }
+    None
 }
 
 fn try_dial_proxy(proxy: &UpstreamProxy, target_host_port: &str) -> Option<TcpStream> {

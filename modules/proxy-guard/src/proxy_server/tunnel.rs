@@ -7,7 +7,7 @@ use super::utils::{
     try_connect_target_socket,
 };
 use crate::domain::{ProxyProtocol, ProxySelectionQuery, RuleAction, UpstreamProxy};
-use crate::ports::{FlowOptimizerPort, ProxyPoolManagementPort};
+use crate::ports::{FlowOptimizerPort, MetricsPort, ProxyPoolManagementPort};
 use crate::service::ProxyGuardService;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -31,20 +31,34 @@ pub fn handle_https_connect(
         return;
     }
 
-    let (mut upstream, leftover) = if decision.action == RuleAction::BypassDirect {
-        match try_connect_target_socket(host_port) {
-            Some(s) => (s, Vec::new()),
+    let (mut upstream, leftover, pool_label): (TcpStream, Vec<u8>, String) = match &decision.action
+    {
+        RuleAction::BypassDirect => match try_connect_target_socket(host_port) {
+            Some(s) => (s, Vec::new(), "direct".to_string()),
             None => {
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
                 return;
             }
+        },
+        RuleAction::RoutePool(pool_name) => {
+            let mut pool_query = query.clone();
+            pool_query.pool = Some(pool_name.clone());
+            match dial_named_pool_connect_tunnel(service, &pool_query, host_port) {
+                Some((s, l)) => (s, l, pool_name.clone()),
+                None => {
+                    let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                    return;
+                }
+            }
         }
-    } else {
-        match dial_connect_tunnel(service, query, fallback_upstream.as_deref(), host_port) {
-            Some(res) => res,
-            None => {
-                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-                return;
+        _ => {
+            let label = query.pool.clone().unwrap_or_else(|| "default".to_string());
+            match dial_connect_tunnel(service, query, fallback_upstream.as_deref(), host_port) {
+                Some((s, l)) => (s, l, label),
+                None => {
+                    let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                    return;
+                }
             }
         }
     };
@@ -57,14 +71,23 @@ pub fn handle_https_connect(
         return;
     }
 
+    let mut total_tx = 0u64;
+    let mut total_rx = 0u64;
+
     // Forward buffered leftover bytes from upstream handshake if any
-    if !leftover.is_empty() && client.write_all(&leftover).is_err() {
-        return;
+    if !leftover.is_empty() {
+        if client.write_all(&leftover).is_err() {
+            return;
+        }
+        total_rx = total_rx.saturating_add(leftover.len() as u64);
     }
 
     // Forward pipelined client data (e.g. TLS ClientHello) to upstream
-    if !client_prefix.is_empty() && upstream.write_all(client_prefix).is_err() {
-        return;
+    if !client_prefix.is_empty() {
+        if upstream.write_all(client_prefix).is_err() {
+            return;
+        }
+        total_tx = total_tx.saturating_add(client_prefix.len() as u64);
     }
 
     // Set a reasonable idle timeout (120s) to prevent permanent thread/socket leaks
@@ -74,7 +97,10 @@ pub fn handle_https_connect(
     let _ = upstream.set_read_timeout(idle_timeout);
     let _ = upstream.set_write_timeout(idle_timeout);
 
-    bidirectional_splice(client, &mut upstream);
+    let (spliced_tx, spliced_rx) = bidirectional_splice(client, &mut upstream);
+    total_tx = total_tx.saturating_add(spliced_tx);
+    total_rx = total_rx.saturating_add(spliced_rx);
+    service.record_upstream_transfer(&pool_label, total_tx, total_rx);
 }
 
 fn perform_connect_handshake(
@@ -143,6 +169,32 @@ fn try_dial_connect_proxy(
     }
 }
 
+/// Dials strictly through the requested named pool (fail-closed: never falls back to direct).
+fn dial_named_pool_connect_tunnel(
+    service: &ProxyGuardService,
+    query: &ProxySelectionQuery,
+    host_port: &str,
+) -> Option<(TcpStream, Vec<u8>)> {
+    let proxy = service.select_proxy(query)?;
+    match try_dial_connect_proxy(&proxy, host_port) {
+        Ok((stream, leftover)) => {
+            service.record_proxy_result(&proxy.id, true);
+            Some((stream, leftover))
+        }
+        Err(()) => {
+            service.record_proxy_result(&proxy.id, false);
+            if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
+                if let Ok((stream, leftover)) = try_dial_connect_proxy(&fallback_proxy, host_port) {
+                    service.record_proxy_result(&fallback_proxy.id, true);
+                    return Some((stream, leftover));
+                }
+                service.record_proxy_result(&fallback_proxy.id, false);
+            }
+            None
+        }
+    }
+}
+
 fn dial_connect_tunnel(
     service: &ProxyGuardService,
     query: &ProxySelectionQuery,
@@ -184,26 +236,28 @@ fn dial_connect_tunnel(
     try_connect_target_socket(host_port).map(|s| (s, Vec::new()))
 }
 
-pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) {
+/// Splices two TCP streams bidirectionally without TLS termination, returning `(bytes_a_to_b, bytes_b_to_a)`.
+pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) -> (u64, u64) {
     let mut a_reader = match stream_a.try_clone() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return (0, 0),
     };
     let mut b_writer = match stream_b.try_clone() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return (0, 0),
     };
     let mut a_writer = match stream_a.try_clone() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return (0, 0),
     };
     let mut b_reader = match stream_b.try_clone() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return (0, 0),
     };
 
-    let t1 = thread::spawn(move || {
+    let t1 = thread::spawn(move || -> u64 {
         let mut buf = [0u8; 8192];
+        let mut tx_bytes = 0u64;
         loop {
             match a_reader.read(&mut buf) {
                 Ok(0) => {
@@ -219,12 +273,15 @@ pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) 
                         let _ = a_reader.shutdown(Shutdown::Both);
                         break;
                     }
+                    tx_bytes = tx_bytes.saturating_add(n as u64);
                 }
             }
         }
+        tx_bytes
     });
 
     let mut buf = [0u8; 8192];
+    let mut rx_bytes = 0u64;
     loop {
         match b_reader.read(&mut buf) {
             Ok(0) => {
@@ -241,11 +298,13 @@ pub fn bidirectional_splice(stream_a: &mut TcpStream, stream_b: &mut TcpStream) 
                     let _ = b_reader.shutdown(Shutdown::Both);
                     break;
                 }
+                rx_bytes = rx_bytes.saturating_add(n as u64);
             }
         }
     }
 
     let _ = stream_a.shutdown(Shutdown::Both);
     let _ = stream_b.shutdown(Shutdown::Both);
-    let _ = t1.join();
+    let tx_bytes = t1.join().unwrap_or(0);
+    (tx_bytes, rx_bytes)
 }
