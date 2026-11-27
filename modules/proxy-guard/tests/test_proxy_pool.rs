@@ -804,3 +804,38 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_round_robin_and_health_persist_across_restarts() {
+    let temp_dir = std::env::temp_dir().join("proxy_guard_test_rr_persist");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    // Process 1: register 2 proxies and select first via RoundRobin
+    let storage1 = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool1 = ProxyPool::new(storage1, ProxyRotationStrategy::RoundRobin);
+    pool1
+        .add_proxy(UpstreamProxy::parse("http://u1:p1@1.1.1.1:8080", None, None, None).unwrap())
+        .unwrap();
+    pool1
+        .add_proxy(UpstreamProxy::parse("http://u2:p2@2.2.2.2:8080", None, None, None).unwrap())
+        .unwrap();
+
+    let first = pool1.select_proxy(&ProxySelectionQuery::default()).unwrap();
+    assert_eq!(first.host, "1.1.1.1");
+    pool1.record_proxy_result(&first.id, false);
+
+    // Process 2 (fresh ProxyPool from same storage): must rotate to second proxy & retain failure_count
+    let storage2 = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool2 = ProxyPool::new(storage2, ProxyRotationStrategy::RoundRobin);
+    let second = pool2.select_proxy(&ProxySelectionQuery::default()).unwrap();
+    assert_eq!(second.host, "2.2.2.2");
+    assert_eq!(pool2.list_proxies()[0].failure_count, 1);
+
+    // Process 3: wraps back to first proxy
+    let storage3 = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool3 = ProxyPool::new(storage3, ProxyRotationStrategy::RoundRobin);
+    let third = pool3.select_proxy(&ProxySelectionQuery::default()).unwrap();
+    assert_eq!(third.host, "1.1.1.1");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

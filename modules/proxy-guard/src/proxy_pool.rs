@@ -29,11 +29,12 @@ impl ProxyPool {
         initial_strategy: ProxyRotationStrategy,
     ) -> Self {
         let loaded = storage.load_proxies();
+        let initial_rr = storage.load_rr_counter();
         Self {
             storage,
             proxies: RwLock::new(loaded),
             strategy: RwLock::new(initial_strategy),
-            rr_counter: AtomicUsize::new(0),
+            rr_counter: AtomicUsize::new(initial_rr),
             sticky_sessions: RwLock::new(HashMap::new()),
             mutation_lock: Mutex::new(()),
         }
@@ -147,7 +148,12 @@ impl ProxyPool {
                 Some(candidates[idx].clone())
             }
             ProxyRotationStrategy::RoundRobin => {
-                let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                let current = self.rr_counter.fetch_add(1, Ordering::Relaxed);
+                let next = current.wrapping_add(1);
+                if let Err(e) = self.storage.save_rr_counter(next) {
+                    eprintln!("[proxy-guard] Warning: Failed to persist round-robin counter: {e}");
+                }
+                let idx = current % candidates.len();
                 Some(candidates[idx].clone())
             }
         }
@@ -300,7 +306,7 @@ impl ProxyPoolManagementPort for ProxyPool {
     }
 
     fn record_proxy_result(&self, id: &str, success: bool) {
-        if let Ok(mut list) = self.proxies.write() {
+        let updated_snapshot = if let Ok(mut list) = self.proxies.write() {
             let target_pos = list.iter().position(|p| p.id == id).or_else(|| {
                 // Fallback for dynamically country-adapted residential proxy IDs (e.g. `host:port:user-cc-vn`)
                 let mut parts = id.splitn(3, ':');
@@ -319,6 +325,17 @@ impl ProxyPoolManagementPort for ProxyPool {
                 } else {
                     p.failure_count = p.failure_count.saturating_add(1);
                 }
+                Some(list.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(snapshot) = updated_snapshot {
+            if let Err(e) = self.storage.save_proxies(&snapshot) {
+                eprintln!("[proxy-guard] Warning: Failed to persist proxy health result: {e}");
             }
         }
     }
