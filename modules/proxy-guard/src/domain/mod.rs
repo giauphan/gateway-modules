@@ -5,6 +5,7 @@
 
 pub mod proxy;
 mod proxy_parser;
+mod proxy_types;
 pub mod rules;
 
 pub use proxy::{

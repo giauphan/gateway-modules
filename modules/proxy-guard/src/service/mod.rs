@@ -1,17 +1,18 @@
 //! Application Orchestrator Service.
 //!
 //! Clean Architecture: Application Layer (Use Cases).
-//! Orchestrates the domain rules engine, metrics recording, and storage ports.
+//! Orchestrates the domain rules engine, metrics recording, HTTP cache port, and storage ports.
+
+mod management;
 
 use crate::domain::{
-    DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType,
-    ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, Rule, RuleAction, RuleCategory,
-    UpstreamProxy,
+    DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto,
+    ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, RuleAction, UpstreamProxy,
 };
 use crate::http_cache::{HttpCacheConfig, HttpResponseCache};
 use crate::ports::{
-    FlowOptimizerPort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
-    RuleManagementPort, RuleRepositoryPort,
+    FlowOptimizerPort, HttpCachePort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
+    RuleRepositoryPort,
 };
 use crate::rules_engine::RulesEngine;
 use crate::script_generator::ScriptGenerator;
@@ -20,18 +21,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub struct ProxyGuardService {
-    rule_repo: Arc<dyn RuleRepositoryPort>,
-    metrics_repo: Arc<dyn MetricsStoragePort>,
-    proxy_pool: Arc<dyn ProxyPoolManagementPort>,
-    cost_per_gb_usd: RwLock<f64>,
-    default_route: RwLock<DefaultRoute>,
-    cached_engine: RwLock<RulesEngine>,
-    cached_metrics: RwLock<FlowMetrics>,
-    dirty_metrics_count: AtomicU64,
-    request_logs: RwLock<VecDeque<RequestLogEntry>>,
-    http_cache: Arc<HttpResponseCache>,
-    rule_edit_lock: Mutex<()>,
-    metrics_lock: Mutex<()>,
+    pub(super) rule_repo: Arc<dyn RuleRepositoryPort>,
+    pub(super) metrics_repo: Arc<dyn MetricsStoragePort>,
+    pub(super) proxy_pool: Arc<dyn ProxyPoolManagementPort>,
+    pub(super) cost_per_gb_usd: RwLock<f64>,
+    pub(super) default_route: RwLock<DefaultRoute>,
+    pub(super) cached_engine: RwLock<RulesEngine>,
+    pub(super) cached_metrics: RwLock<FlowMetrics>,
+    pub(super) dirty_metrics_count: AtomicU64,
+    pub(super) request_logs: RwLock<VecDeque<RequestLogEntry>>,
+    http_cache: Arc<dyn HttpCachePort>,
+    pub(super) rule_edit_lock: Mutex<()>,
+    pub(super) metrics_lock: Mutex<()>,
 }
 
 impl ProxyGuardService {
@@ -39,6 +40,24 @@ impl ProxyGuardService {
         rule_repo: Arc<dyn RuleRepositoryPort>,
         metrics_repo: Arc<dyn MetricsStoragePort>,
         proxy_pool: Arc<dyn ProxyPoolManagementPort>,
+        cost_per_gb_usd: f64,
+    ) -> Self {
+        let default_cache = Arc::new(HttpResponseCache::new(HttpCacheConfig::default()));
+        Self::with_http_cache(
+            rule_repo,
+            metrics_repo,
+            proxy_pool,
+            default_cache,
+            cost_per_gb_usd,
+        )
+    }
+
+    /// Dependency-injection constructor allowing a custom `HttpCachePort` implementation.
+    pub fn with_http_cache(
+        rule_repo: Arc<dyn RuleRepositoryPort>,
+        metrics_repo: Arc<dyn MetricsStoragePort>,
+        proxy_pool: Arc<dyn ProxyPoolManagementPort>,
+        http_cache: Arc<dyn HttpCachePort>,
         cost_per_gb_usd: f64,
     ) -> Self {
         let rules = rule_repo.load_rules();
@@ -58,7 +77,7 @@ impl ProxyGuardService {
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
             request_logs: RwLock::new(VecDeque::with_capacity(100)),
-            http_cache: Arc::new(HttpResponseCache::new(HttpCacheConfig::default())),
+            http_cache,
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
         }
@@ -68,7 +87,7 @@ impl ProxyGuardService {
         &self.proxy_pool
     }
 
-    pub fn http_cache(&self) -> &Arc<HttpResponseCache> {
+    pub fn http_cache(&self) -> &Arc<dyn HttpCachePort> {
         &self.http_cache
     }
 
@@ -90,7 +109,7 @@ impl ProxyGuardService {
 
     /// Persists the latest in-memory metrics under the metrics lock, preventing
     /// out-of-order writes or stale snapshots overwriting newer state.
-    fn persist_latest_metrics(&self) {
+    pub(super) fn persist_latest_metrics(&self) {
         if let Ok(_guard) = self.metrics_lock.lock() {
             if let Ok(metrics) = self.cached_metrics.read() {
                 let snapshot = metrics.clone();
@@ -102,7 +121,7 @@ impl ProxyGuardService {
         }
     }
 
-    fn rebuild_engine_locked(&self) {
+    pub(super) fn rebuild_engine_locked(&self) {
         let rules = self.rule_repo.load_rules();
         let whitelist = self.rule_repo.load_whitelist();
         let default_route = self
@@ -137,10 +156,8 @@ impl FlowOptimizerPort for ProxyGuardService {
             RulesEngine::with_builtin_rules().evaluate(url, method, resource_type)
         };
 
-        // Automatically record to metrics
         self.record_decision(&decision, None);
 
-        // Record to live audit logs
         let host_candidate = url
             .split("://")
             .nth(1)
@@ -232,7 +249,6 @@ impl FlowOptimizerPort for ProxyGuardService {
             decisions.push(decision);
         }
 
-        // Aggregate flow decisions into metrics once per flow (off hot path)
         if let Ok(mut metrics) = self.cached_metrics.write() {
             for (d, sz) in &recorded_items {
                 metrics.record_decision(d, Some(*sz));
@@ -282,268 +298,6 @@ impl FlowOptimizerPort for ProxyGuardService {
             _ => Err(format!(
                 "Unsupported script target '{target}'. Supported: playwright_ts, playwright_py, puppeteer_ts, mitmproxy_py"
             )),
-        }
-    }
-}
-
-impl RuleManagementPort for ProxyGuardService {
-    fn get_rules(&self) -> Vec<Rule> {
-        self.rule_repo.load_rules()
-    }
-
-    fn toggle_category(&self, category: RuleCategory, enabled: bool) -> Result<(), String> {
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        let mut rules = self.rule_repo.load_rules();
-        for r in &mut rules {
-            if r.category == category {
-                r.enabled = enabled;
-            }
-        }
-        self.rule_repo.save_rules(&rules)?;
-        self.rebuild_engine_locked();
-        Ok(())
-    }
-
-    fn add_whitelist_domain(&self, domain: &str) -> Result<(), String> {
-        let clean = domain.trim().to_ascii_lowercase();
-        if clean.is_empty() {
-            return Ok(());
-        }
-
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        let mut wl = self.rule_repo.load_whitelist();
-        if !wl.contains(&clean) {
-            wl.push(clean);
-            self.rule_repo.save_whitelist(&wl)?;
-            self.rebuild_engine_locked();
-        }
-        Ok(())
-    }
-
-    fn add_blocked_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String> {
-        let trimmed = domain.trim().to_ascii_lowercase();
-        if trimmed.is_empty() {
-            return Ok(());
-        }
-        let clean = trimmed.strip_prefix("*.").unwrap_or(&trimmed).to_string();
-
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        let rule_name = name.unwrap_or(&clean).to_string();
-        let rule = Rule::new(
-            format!("custom:{clean}"),
-            rule_name,
-            RuleCategory::Custom,
-            PatternType::DomainSuffix,
-            clean,
-            RuleAction::Block204,
-            120, // high priority for custom additions
-            "User defined custom blocked domain",
-        );
-
-        let mut rules = self.rule_repo.load_rules();
-        rules.retain(|r| r.id != rule.id);
-        rules.push(rule);
-        self.rule_repo.save_rules(&rules)?;
-        self.rebuild_engine_locked();
-        Ok(())
-    }
-
-    fn add_direct_bypass_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String> {
-        let trimmed = domain.trim().to_ascii_lowercase();
-        if trimmed.is_empty() {
-            return Ok(());
-        }
-        let clean = trimmed.strip_prefix("*.").unwrap_or(&trimmed).to_string();
-
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        let rule_name = name.unwrap_or(&clean).to_string();
-        let rule = Rule::new(
-            format!("direct:{clean}"),
-            rule_name,
-            RuleCategory::Custom,
-            PatternType::DomainSuffix,
-            clean,
-            RuleAction::BypassDirect,
-            125, // takes precedence over generic blocking rules for explicit split routing
-            "User defined direct-bypass (split-routing) domain",
-        );
-
-        let mut rules = self.rule_repo.load_rules();
-        rules.retain(|r| r.id != rule.id);
-        rules.push(rule);
-        self.rule_repo.save_rules(&rules)?;
-        self.rebuild_engine_locked();
-        Ok(())
-    }
-
-    fn add_pool_route_domain(
-        &self,
-        domain: &str,
-        pool: &str,
-        name: Option<&str>,
-    ) -> Result<(), String> {
-        let trimmed_domain = domain.trim().to_ascii_lowercase();
-        let trimmed_pool = pool.trim().to_string();
-        if trimmed_domain.is_empty() || trimmed_pool.is_empty() {
-            return Err("Both domain and pool must be non-empty".to_string());
-        }
-
-        let (pattern_type, clean, priority) =
-            if let Some(suffix) = trimmed_domain.strip_prefix("*.") {
-                (PatternType::DomainSuffix, suffix.to_string(), 130)
-            } else {
-                (PatternType::ExactDomain, trimmed_domain, 140)
-            };
-
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        let rule_name = name
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| format!("{clean} -> {trimmed_pool}"));
-        let rule_id = format!(
-            "pool:{}:{}:{}",
-            if pattern_type == PatternType::ExactDomain {
-                "exact"
-            } else {
-                "suffix"
-            },
-            clean,
-            trimmed_pool
-        );
-        let rule = Rule::new(
-            rule_id,
-            rule_name,
-            RuleCategory::Custom,
-            pattern_type,
-            clean,
-            RuleAction::RoutePool(trimmed_pool),
-            priority,
-            "User defined domain split-routing rule to named proxy pool",
-        );
-
-        let mut rules = self.rule_repo.load_rules();
-        rules.retain(|r| r.id != rule.id);
-        rules.push(rule);
-        self.rule_repo.save_rules(&rules)?;
-        self.rebuild_engine_locked();
-        Ok(())
-    }
-
-    fn set_default_route(&self, route: DefaultRoute) -> Result<(), String> {
-        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
-        if let Ok(mut lock) = self.default_route.write() {
-            *lock = route;
-        }
-        self.rebuild_engine_locked();
-        Ok(())
-    }
-
-    fn get_default_route(&self) -> DefaultRoute {
-        self.default_route
-            .read()
-            .map(|r| r.clone())
-            .unwrap_or_default()
-    }
-}
-
-impl MetricsPort for ProxyGuardService {
-    fn record_decision(&self, decision: &FilterDecision, actual_bytes: Option<u64>) {
-        let should_persist = if let Ok(mut metrics) = self.cached_metrics.write() {
-            metrics.record_decision(decision, actual_bytes);
-            let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
-            count >= 64
-        } else {
-            false
-        };
-
-        if should_persist {
-            self.dirty_metrics_count.store(0, Ordering::Relaxed);
-            self.persist_latest_metrics();
-        }
-    }
-
-    fn get_metrics(&self) -> FlowMetrics {
-        self.cached_metrics
-            .read()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| self.metrics_repo.load_metrics())
-    }
-
-    fn set_cost_per_gb(&self, rate: f64) -> Result<(), String> {
-        if rate < 0.0 || !rate.is_finite() {
-            return Err("cost_per_gb_usd must be a non-negative finite number".to_string());
-        }
-        let _guard = self.metrics_lock.lock().map_err(|e| e.to_string())?;
-        let mut metrics_lock = self.cached_metrics.write().map_err(|e| e.to_string())?;
-        let mut updated = metrics_lock.clone();
-        updated.cost_per_gb_usd = rate;
-        let gb_saved = updated.bytes_saved as f64 / (1024.0 * 1024.0 * 1024.0);
-        updated.estimated_cost_saved_usd = gb_saved * rate;
-
-        // Save to persistence first
-        self.metrics_repo.save_metrics(&updated)?;
-
-        // Commit in-memory only after save succeeds
-        *metrics_lock = updated;
-        if let Ok(mut lock) = self.cost_per_gb_usd.write() {
-            *lock = rate;
-        }
-        self.dirty_metrics_count.store(0, Ordering::Relaxed);
-        Ok(())
-    }
-
-    fn reset_metrics(&self) {
-        self.clear_request_logs();
-        if let Ok(_guard) = self.metrics_lock.lock() {
-            if let Ok(mut metrics_lock) = self.cached_metrics.write() {
-                let rate = self.cost_per_gb_usd.read().map(|r| *r).unwrap_or(3.5);
-                let blank = FlowMetrics::new(rate);
-                if self.metrics_repo.save_metrics(&blank).is_ok() {
-                    *metrics_lock = blank;
-                    self.dirty_metrics_count.store(0, Ordering::Relaxed);
-                }
-            }
-        }
-    }
-
-    fn log_request(&self, entry: RequestLogEntry) {
-        if let Ok(mut logs) = self.request_logs.write() {
-            if logs.len() >= 100 {
-                logs.pop_front();
-            }
-            logs.push_back(entry);
-        }
-    }
-
-    fn get_request_logs(&self, limit: usize) -> Vec<RequestLogEntry> {
-        if let Ok(logs) = self.request_logs.read() {
-            let count = if limit == 0 { 50 } else { limit.min(100) };
-            logs.iter().rev().take(count).cloned().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn clear_request_logs(&self) {
-        if let Ok(mut logs) = self.request_logs.write() {
-            logs.clear();
-        }
-    }
-
-    fn record_upstream_transfer(&self, pool_key: &str, bytes_tx: u64, bytes_rx: u64) {
-        if let Ok(mut metrics) = self.cached_metrics.write() {
-            metrics.record_upstream_transfer(pool_key, bytes_tx, bytes_rx);
-        }
-    }
-
-    fn record_cache_hit(&self, bytes_saved: u64) {
-        if let Ok(mut metrics) = self.cached_metrics.write() {
-            metrics.record_cache_hit(bytes_saved);
-        }
-    }
-
-    fn record_cache_miss(&self) {
-        if let Ok(mut metrics) = self.cached_metrics.write() {
-            metrics.record_cache_miss();
         }
     }
 }
