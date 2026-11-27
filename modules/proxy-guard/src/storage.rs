@@ -3,7 +3,7 @@
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 //! Implements RuleRepositoryPort and MetricsStoragePort with atomic file replacement.
 
-use crate::domain::{FlowMetrics, Rule, UpstreamProxy};
+use crate::domain::{DefaultRoute, FlowMetrics, Rule, UpstreamProxy};
 use crate::ports::{MetricsStoragePort, ProxyPoolStoragePort, RuleRepositoryPort};
 use crate::rules_engine::RulesEngine;
 use std::fs;
@@ -20,10 +20,12 @@ pub struct FileStorageAdapter {
     base_dir: PathBuf,
     rules_cache: RwLock<Vec<Rule>>,
     whitelist_cache: RwLock<Vec<String>>,
+    default_route_cache: RwLock<DefaultRoute>,
     metrics_cache: RwLock<FlowMetrics>,
     proxies_cache: RwLock<Vec<UpstreamProxy>>,
     rules_corrupted: AtomicBool,
     whitelist_corrupted: AtomicBool,
+    default_route_corrupted: AtomicBool,
     metrics_corrupted: AtomicBool,
     proxies_corrupted: AtomicBool,
 }
@@ -37,10 +39,12 @@ impl FileStorageAdapter {
             base_dir: base_dir.to_path_buf(),
             rules_cache: RwLock::new(RulesEngine::builtin_rules()),
             whitelist_cache: RwLock::new(Vec::new()),
+            default_route_cache: RwLock::new(DefaultRoute::ForwardUpstream),
             metrics_cache: RwLock::new(FlowMetrics::new(3.5)),
             proxies_cache: RwLock::new(Vec::new()),
             rules_corrupted: AtomicBool::new(false),
             whitelist_corrupted: AtomicBool::new(false),
+            default_route_corrupted: AtomicBool::new(false),
             metrics_corrupted: AtomicBool::new(false),
             proxies_corrupted: AtomicBool::new(false),
         };
@@ -55,6 +59,10 @@ impl FileStorageAdapter {
 
     fn whitelist_file(&self) -> PathBuf {
         self.base_dir.join(".state").join("whitelist.json")
+    }
+
+    fn default_route_file(&self) -> PathBuf {
+        self.base_dir.join(".state").join("default_route.json")
     }
 
     fn metrics_file(&self) -> PathBuf {
@@ -205,6 +213,32 @@ impl FileStorageAdapter {
                     wl_path
                 );
                 self.whitelist_corrupted.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let dr_path = self.default_route_file();
+        match fs::read_to_string(&dr_path) {
+            Ok(data) => match serde_json::from_str::<DefaultRoute>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.default_route_cache.write() {
+                        *lock = loaded;
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse default_route file {:?}: {e}",
+                        dr_path
+                    );
+                    self.default_route_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read default_route file {:?}: {e}",
+                    dr_path
+                );
+                self.default_route_corrupted.store(true, Ordering::SeqCst);
             }
         }
 
@@ -424,6 +458,30 @@ impl RuleRepositoryPort for FileStorageAdapter {
         let json = serde_json::to_string_pretty(whitelist).map_err(|e| e.to_string())?;
         self.atomic_write_file(&self.whitelist_file(), &json)?;
         *lock = whitelist.to_vec();
+        Ok(())
+    }
+
+    fn load_default_route(&self) -> DefaultRoute {
+        self.default_route_cache
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_default()
+    }
+
+    fn save_default_route(&self, route: &DefaultRoute) -> Result<(), String> {
+        if self.default_route_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted default_route file {:?}; manual recovery required",
+                self.default_route_file()
+            ));
+        }
+        let mut lock = self
+            .default_route_cache
+            .write()
+            .map_err(|e| format!("Lock acquisition error: {e}"))?;
+        let json = serde_json::to_string_pretty(route).map_err(|e| e.to_string())?;
+        self.atomic_write_file(&self.default_route_file(), &json)?;
+        *lock = route.clone();
         Ok(())
     }
 }

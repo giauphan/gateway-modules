@@ -24,13 +24,13 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.15.1)
+## 2. Architecture & Clean Architecture Layers (v1.15.2)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.15.1)
+├── Cargo.toml          # Single source of truth (v1.15.2)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary
@@ -61,7 +61,7 @@ modules/proxy-guard/
 │   ├── handlers/       # Interface adapters (routes & dispatcher)
 │   ├── rpc.rs          # stdio-stream framing helpers
 │   └── mcp.rs          # Model Context Protocol tools adapter
-└── tests/              # Automated integration & unit test suite (100 tests)
+└── tests/              # Automated integration & unit test suite (103 tests)
 ```
 
 > [!NOTE]
@@ -136,4 +136,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 100 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 103 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.

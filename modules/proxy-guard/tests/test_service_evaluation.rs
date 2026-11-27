@@ -1,8 +1,9 @@
 use proxy_guard::domain::{
-    FlowRequestDto, ProxyRotationStrategy, ProxySelectionQuery, RuleAction, StickySessionConfig,
-    UpstreamProxy,
+    DefaultRoute, FlowRequestDto, ProxyRotationStrategy, ProxySelectionQuery, RuleAction,
+    StickySessionConfig, UpstreamProxy,
 };
 use proxy_guard::handlers::handle_request;
+use proxy_guard::mcp::handle_mcp_tool_request;
 use proxy_guard::ports::{
     FlowOptimizerPort, MetricsPort, ProxyPoolManagementPort, RuleManagementPort,
 };
@@ -310,6 +311,233 @@ fn test_sticky_session_template_ttl_rotation_and_credential_masking() {
         "Plaintext proxy password must NEVER leak in API responses"
     );
     assert!(body_str.contains("***"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_v1_15_2_pool_route_update_overwrites_without_duplicates() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_pool_overwrite_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    );
+
+    service
+        .add_pool_route_domain("services.sheerid.com", "residential", None)
+        .expect("add initial pool route");
+    assert_eq!(
+        service
+            .evaluate_url("https://services.sheerid.com/rest/v2", "GET", None)
+            .action,
+        RuleAction::RoutePool("residential".to_string())
+    );
+
+    // Re-route the same domain to a different pool -> MUST overwrite cleanly
+    service
+        .add_pool_route_domain("services.sheerid.com", "static_isp_us", None)
+        .expect("update pool route");
+    assert_eq!(
+        service
+            .evaluate_url("https://services.sheerid.com/rest/v2", "GET", None)
+            .action,
+        RuleAction::RoutePool("static_isp_us".to_string())
+    );
+
+    let matching_rules: Vec<_> = service
+        .get_rules()
+        .into_iter()
+        .filter(|r| {
+            r.id == "pool:exact:services.sheerid.com" || r.pattern == "services.sheerid.com"
+        })
+        .collect();
+    assert_eq!(
+        matching_rules.len(),
+        1,
+        "Updating a domain's pool must not leave duplicate rules"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_v1_15_2_malformed_sticky_session_rejected_and_invalid_default_route() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_validation_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    );
+
+    // 1. Malformed sticky_session (ttl_secs is string instead of u64) via HTTP POST /proxies/add
+    let http_bad = handle_request(
+        serde_json::json!({
+            "method": "POST",
+            "path": "/proxies/add",
+            "body": {
+                "url": "http://u:p@gw.example.com:823",
+                "sticky_session": { "enabled": true, "ttl_secs": "600" }
+            }
+        }),
+        &service,
+    );
+    assert_eq!(http_bad["status"], 400);
+    assert!(http_bad["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("sticky_session"));
+
+    // 2. Malformed sticky_session via MCP tool_add_upstream_proxy
+    let mcp_bad = handle_mcp_tool_request(
+        "proxy-guard__add_upstream_proxy",
+        &serde_json::json!({
+            "url": "http://u:p@gw.example.com:823",
+            "sticky_session": { "enabled": "yes", "ttl_secs": 600 }
+        }),
+        &service,
+    );
+    assert_eq!(mcp_bad["isError"], true);
+
+    // 3. Invalid default_route keywords rejected
+    for bad in [
+        "reject",
+        "block",
+        "deny",
+        "drop",
+        "none",
+        "allow",
+        "",
+        "bad pool!",
+    ] {
+        assert!(
+            DefaultRoute::parse_str(bad).is_err(),
+            "Expected '{bad}' to be rejected as invalid default_route"
+        );
+    }
+    assert_eq!(
+        DefaultRoute::parse_str("pool:residential").expect("valid pool prefix"),
+        DefaultRoute::Pool("residential".to_string())
+    );
+    assert_eq!(
+        DefaultRoute::parse_str("static_isp_us").expect("valid bare pool"),
+        DefaultRoute::Pool("static_isp_us".to_string())
+    );
+
+    let rules_bad_dr = handle_request(
+        serde_json::json!({
+            "method": "POST",
+            "path": "/rules",
+            "body": { "default_route": "reject" }
+        }),
+        &service,
+    );
+    assert_eq!(rules_bad_dr["status"], 400);
+
+    let mcp_bad_dr = handle_mcp_tool_request(
+        "proxy-guard__configure_rules",
+        &serde_json::json!({ "default_route": "block" }),
+        &service,
+    );
+    assert_eq!(mcp_bad_dr["isError"], true);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_v1_15_2_default_route_and_transfer_cache_metrics_persist_across_restart() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_persist_restart_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // First service lifecycle: set default_route and record >64 transfer/cache events to trigger batch persistence
+    {
+        let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+        let pool = Arc::new(ProxyPool::new(
+            Arc::clone(&storage) as Arc<_>,
+            ProxyRotationStrategy::RoundRobin,
+        ));
+        let service = ProxyGuardService::new(
+            Arc::clone(&storage) as Arc<_>,
+            Arc::clone(&storage) as Arc<_>,
+            pool,
+            3.5,
+        );
+
+        service
+            .set_default_route(DefaultRoute::Direct)
+            .expect("persist default_route");
+        for _ in 0..70 {
+            service.record_upstream_transfer("residential", 100, 500);
+            service.record_cache_hit(1024);
+            service.record_cache_miss();
+        }
+    }
+
+    // Second service lifecycle (simulated restart): reload from disk
+    let storage2 = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool2 = Arc::new(ProxyPool::new(
+        Arc::clone(&storage2) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service2 = ProxyGuardService::new(
+        Arc::clone(&storage2) as Arc<_>,
+        Arc::clone(&storage2) as Arc<_>,
+        pool2,
+        3.5,
+    );
+
+    assert_eq!(service2.get_default_route(), DefaultRoute::Direct);
+    assert_eq!(
+        service2
+            .evaluate_url("https://unmatched-static.example.org/file.js", "GET", None)
+            .action,
+        RuleAction::BypassDirect
+    );
+
+    let loaded_metrics = service2.get_metrics();
+    assert_eq!(loaded_metrics.bytes_tx, 7_000);
+    assert_eq!(loaded_metrics.bytes_rx, 35_000);
+    assert_eq!(loaded_metrics.cache_hits, 70);
+    assert_eq!(loaded_metrics.cache_misses, 70);
+    assert_eq!(loaded_metrics.cache_bytes_saved, 70 * 1024);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

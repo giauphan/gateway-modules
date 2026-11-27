@@ -77,10 +77,12 @@ pub fn handle_update_rules(body: &Value, service: &ProxyGuardService) -> Value {
         }
     }
     if let Some(dr_val) = body.get("default_route") {
-        if let Some(route) = DefaultRoute::from_json_value(dr_val) {
-            if let Err(e) = service.set_default_route(route) {
-                return make_error_resp(500, &e);
-            }
+        let route = match DefaultRoute::from_json_value(dr_val) {
+            Ok(r) => r,
+            Err(e) => return make_error_resp(400, &e),
+        };
+        if let Err(e) = service.set_default_route(route) {
+            return make_error_resp(500, &e);
         }
     }
     if let Some(cache_val) = body.get("cache") {

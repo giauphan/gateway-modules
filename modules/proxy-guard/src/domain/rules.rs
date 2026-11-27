@@ -54,25 +54,61 @@ pub enum DefaultRoute {
 }
 
 impl DefaultRoute {
-    /// Parses a string representation (`"direct"`, `"forward_upstream"`, or a named pool).
-    pub fn parse_str(raw: &str) -> Option<Self> {
+    /// Parses a string representation (`"direct"`, `"forward_upstream"`, `"pool:<name>"`,
+    /// or a valid named pool identifier). Rejects ambiguous/invalid keywords like `"reject"` or `"block"`.
+    pub fn parse_str(raw: &str) -> Result<Self, String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            return None;
+            return Err("default_route cannot be empty".to_string());
         }
-        match trimmed.to_ascii_lowercase().as_str() {
-            "direct" | "bypass_direct" => Some(Self::Direct),
-            "forward_upstream" | "upstream" => Some(Self::ForwardUpstream),
-            _ => Some(Self::Pool(trimmed.to_string())),
+        let lower = trimmed.to_ascii_lowercase();
+        match lower.as_str() {
+            "direct" | "bypass_direct" => return Ok(Self::Direct),
+            "forward_upstream" | "upstream" => return Ok(Self::ForwardUpstream),
+            "reject" | "block" | "deny" | "drop" | "allow" | "none" | "null" => {
+                return Err(format!(
+                    "Invalid default_route '{trimmed}': expected 'direct', 'forward_upstream', or 'pool:<name>'"
+                ));
+            }
+            _ => {}
         }
+
+        let pool_name = trimmed
+            .strip_prefix("pool:")
+            .or_else(|| trimmed.strip_prefix("POOL:"))
+            .unwrap_or(trimmed)
+            .trim();
+
+        let is_valid_pool = !pool_name.is_empty()
+            && pool_name.len() <= 64
+            && pool_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && pool_name
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphanumeric());
+
+        if !is_valid_pool {
+            return Err(format!(
+                "Invalid default_route pool name '{trimmed}': must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
+            ));
+        }
+
+        Ok(Self::Pool(pool_name.to_string()))
     }
 
     /// Parses either a JSON string or a structured `DefaultRoute` JSON value.
-    pub fn from_json_value(val: &serde_json::Value) -> Option<Self> {
+    pub fn from_json_value(val: &serde_json::Value) -> Result<Self, String> {
         if let Some(s) = val.as_str() {
             Self::parse_str(s)
         } else {
-            serde_json::from_value::<Self>(val.clone()).ok()
+            let parsed = serde_json::from_value::<Self>(val.clone())
+                .map_err(|e| format!("Invalid default_route value: {e}"))?;
+            if let Self::Pool(ref name) = parsed {
+                Self::parse_str(&format!("pool:{name}"))?;
+            }
+            Ok(parsed)
         }
     }
 }

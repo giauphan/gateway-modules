@@ -99,6 +99,16 @@ pub trait RuleRepositoryPort: Send + Sync {
 
     /// Persists whitelist domains.
     fn save_whitelist(&self, whitelist: &[String]) -> Result<(), String>;
+
+    /// Loads persisted default fallback route (defaults to `ForwardUpstream`).
+    fn load_default_route(&self) -> DefaultRoute {
+        DefaultRoute::ForwardUpstream
+    }
+
+    /// Persists default fallback route.
+    fn save_default_route(&self, _route: &DefaultRoute) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Outward Port: Storage abstraction for cumulative metrics.

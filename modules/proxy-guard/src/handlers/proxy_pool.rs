@@ -55,11 +55,11 @@ pub fn handle_add_proxy(body: &Value, service: &ProxyGuardService) -> Value {
                         .or_else(|| obj.get("pool"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    let sticky = obj.get("sticky_session").and_then(|v| {
-                        serde_json::from_value::<StickySessionConfig>(v.clone()).ok()
-                    });
-                    UpstreamProxy::parse(url, name, country, tags)
-                        .map(|p| p.with_pool_and_sticky(pool_name, sticky))
+                    match StickySessionConfig::parse_optional_from_json(item) {
+                        Ok(sticky) => UpstreamProxy::parse(url, name, country, tags)
+                            .map(|p| p.with_pool_and_sticky(pool_name, sticky)),
+                        Err(e) => Err(e),
+                    }
                 }
                 _ => Err(format!("Item at index {idx} has invalid format")),
             };
@@ -101,9 +101,10 @@ pub fn handle_add_proxy(body: &Value, service: &ProxyGuardService) -> Value {
         .or_else(|| body.get("pool"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let sticky = body
-        .get("sticky_session")
-        .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
+    let sticky = match StickySessionConfig::parse_optional_from_json(body) {
+        Ok(cfg) => cfg,
+        Err(e) => return make_error_resp(400, &e),
+    };
 
     match UpstreamProxy::parse(url, name, country, tags)
         .map(|p| p.with_pool_and_sticky(pool_name, sticky))
