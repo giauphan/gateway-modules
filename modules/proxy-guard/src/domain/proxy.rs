@@ -680,9 +680,20 @@ fn replace_country_in_username(username: &str, target_country: &str) -> Option<S
                 .count();
             if code_len == 2 {
                 let suffix = &remainder[code_len..];
-                return Some(format!("{prefix}{target}{suffix}"));
+                let formatted = if *pattern == "-country-" || *pattern == "_country-" {
+                    target.to_ascii_uppercase()
+                } else {
+                    target.clone()
+                };
+                return Some(format!("{prefix}{formatted}{suffix}"));
             }
         }
+    }
+    if (u_lower.starts_with("user-dc") || u_lower.contains("-dc_") || u_lower.contains("_dc_"))
+        && !u_lower.contains("-country-")
+    {
+        let target_upper = target.to_ascii_uppercase();
+        return Some(format!("{username}-country-{target_upper}"));
     }
     if (u_lower.starts_with("customer-") || u_lower.contains("resi")) && !u_lower.contains("-cc-") {
         return Some(format!("{username}-cc-{target}"));

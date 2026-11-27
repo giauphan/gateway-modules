@@ -839,3 +839,50 @@ fn test_round_robin_and_health_persist_across_restarts() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_oxylabs_datacenter_country_adaptation_and_round_robin() {
+    let temp_dir = std::env::temp_dir().join("proxy_guard_test_dc_country_rr");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = ProxyPool::new(storage, ProxyRotationStrategy::RoundRobin);
+
+    pool.add_proxy(
+        UpstreamProxy::parse(
+            "http://customer-resi_f4012494:pass1@pr.oxylabs.io:7777#oxylabs",
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    pool.add_proxy(
+        UpstreamProxy::parse(
+            "http://user-dc_0abe5c4c:pass2@dc.oxylabs.io:8000#oxylabs",
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let query = ProxySelectionQuery {
+        country: Some("US".to_string()),
+        ..Default::default()
+    };
+    let p1 = pool.select_proxy(&query).unwrap();
+    let p2 = pool.select_proxy(&query).unwrap();
+
+    assert_eq!(
+        p1.auth.as_ref().map(|a| a.username.as_str()),
+        Some("customer-resi_f4012494-cc-us")
+    );
+    assert_eq!(
+        p2.auth.as_ref().map(|a| a.username.as_str()),
+        Some("user-dc_0abe5c4c-country-US")
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
