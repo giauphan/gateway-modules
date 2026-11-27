@@ -249,6 +249,14 @@ fn handle_proxy_subroutes(
         return Some(handle_set_strategy(&body, service));
     }
 
+    if clean_path.ends_with("/proxies/report") {
+        let body = match extract_request_body(req) {
+            Ok(b) => b,
+            Err(e) => return Some(make_error_resp(400, &e)),
+        };
+        return Some(handle_report_proxy(&body, service));
+    }
+
     if let Some(target) = clean_path.strip_prefix("/custom/proxy-guard/scripts/") {
         return Some(handle_get_script(target, service));
     }

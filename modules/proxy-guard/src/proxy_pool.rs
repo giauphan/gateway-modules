@@ -232,7 +232,12 @@ impl ProxyPoolManagementPort for ProxyPool {
         // 1. Direct ID match if requested
         if let Some(ref pref_id) = query.preferred_id {
             if let Some(found) = all_proxies.iter().find(|p| p.id == *pref_id && p.enabled) {
-                return Some(found.clone());
+                let selected = if let Some(ref sid) = query.session_id {
+                    found.with_sticky_session(sid)
+                } else {
+                    found.clone()
+                };
+                return Some(selected);
             }
         }
 
@@ -248,7 +253,12 @@ impl ProxyPoolManagementPort for ProxyPool {
                 .unwrap_or(ProxyRotationStrategy::RoundRobin)
         });
 
-        self.apply_strategy(strategy, &candidates, query.session_id.as_ref())
+        let selected = self.apply_strategy(strategy, &candidates, query.session_id.as_ref())?;
+        if let Some(ref sid) = query.session_id {
+            Some(selected.with_sticky_session(sid))
+        } else {
+            Some(selected)
+        }
     }
 
     fn select_fallback(
