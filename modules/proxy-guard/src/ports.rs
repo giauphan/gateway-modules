@@ -124,4 +124,14 @@ pub trait ProxyPoolStoragePort: Send + Sync {
 
     /// Persists upstream proxies to storage.
     fn save_proxies(&self, proxies: &[UpstreamProxy]) -> Result<(), String>;
+
+    /// Loads persisted round-robin cursor index (defaults to 0).
+    fn load_rr_counter(&self) -> usize {
+        0
+    }
+
+    /// Persists round-robin cursor index so rotation works across process restarts.
+    fn save_rr_counter(&self, _counter: usize) -> Result<(), String> {
+        Ok(())
+    }
 }

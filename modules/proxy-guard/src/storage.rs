@@ -65,6 +65,10 @@ impl FileStorageAdapter {
         self.base_dir.join(".state").join("proxies.json")
     }
 
+    fn rr_counter_file(&self) -> PathBuf {
+        self.base_dir.join(".state").join("rr_counter.txt")
+    }
+
     pub fn config_file(&self) -> PathBuf {
         if let Ok(env_path) = std::env::var("PROXY_GUARD_CONFIG_PATH") {
             let p = PathBuf::from(env_path);
@@ -473,5 +477,16 @@ impl ProxyPoolStoragePort for FileStorageAdapter {
         self.atomic_write_file(&self.proxies_file(), &json)?;
         *lock = proxies.to_vec();
         Ok(())
+    }
+
+    fn load_rr_counter(&self) -> usize {
+        fs::read_to_string(self.rr_counter_file())
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+
+    fn save_rr_counter(&self, counter: usize) -> Result<(), String> {
+        self.atomic_write_file(&self.rr_counter_file(), &counter.to_string())
     }
 }
