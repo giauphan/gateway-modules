@@ -425,6 +425,29 @@ Updates the global rotation strategy for the pool.
 
 ---
 
+### 4.4 `POST /proxies/report`
+Reports proxy health feedback (`success: true | false`) from clients so `lowest_failures` routing avoids blocked or failing proxies.
+
+#### Request Payload:
+```json
+{
+  "id": "pr.oxylabs.io:7777:customer-resi_f4012494",
+  "success": false
+}
+```
+
+#### Response (HTTP 200):
+```json
+{
+  "status": "ok",
+  "id": "pr.oxylabs.io:7777:customer-resi_f4012494",
+  "success": false,
+  "message": "Proxy health result recorded"
+}
+```
+
+---
+
 ## 5. Traffic Optimization & Audit Logs
 
 ### 5.1 `GET /logs` & Request Reduction %

@@ -87,6 +87,9 @@ Proxy Guard manages a pool of paid upstream proxies with automatic rotation:
 - **Sticky Session**: Ties `X-Proxy-Session-Id` header to a dedicated proxy until failure.
 - **Lowest Failures**: Dynamically routes through the healthiest proxy in the pool.
 - **Random**: Randomly selects a proxy from the pool.
+- **Sticky Residential Sessions (`-sessid-<hex>-sesstime-10`)**: Passing `session_id` to `POST /proxies/next` automatically injects a provider-safe alphanumeric sticky session token into residential proxy usernames so all requests in a session keep one clean exit IP.
+- **Automatic Tier Tagging (`residential` / `datacenter`)**: Residential (`pr.*`, `customer-*`, `*resi*`) and Datacenter (`dc.*`, `user-dc*`) proxies are auto-tagged; filter with `"tag": "residential"` to avoid mixing datacenter IPs.
+- **Health Reporting (`POST /proxies/report`)**: Clients can report `{"id": "...", "success": false}` to increment `failure_count` and guide `lowest_failures` failover.
 - **Per-Request Strategy Setting**: Override strategy per request via `X-Proxy-Strategy` header or `GET /proxies/next?strategy=lowest_failures`.
 
 Manage proxies via API, Gateway Settings UI (`/modules/proxy-guard/config`), or Interactive Dashboard (`/custom/proxy-guard/ui`):
