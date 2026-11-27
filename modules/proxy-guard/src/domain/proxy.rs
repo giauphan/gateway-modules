@@ -3,6 +3,11 @@
 //! Clean Architecture: Core Domain Layer.
 //! Pure business rules with zero transport, framework, or database dependencies.
 
+pub use super::proxy_parser::parse_country_input;
+use super::proxy_parser::{
+    extract_country_from_username, infer_proxy_tier_tag, parse_proxy_components,
+    replace_country_in_username, split_inline_country_and_tag, url_encode_userinfo,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -40,6 +45,33 @@ pub struct ProxyAuth {
     pub password: String,
 }
 
+fn default_sticky_ttl_secs() -> u64 {
+    600
+}
+
+/// Sticky session configuration for rotating residential proxies.
+/// Supports dynamic username templates for DataImpulse, Oxylabs, Evomi, IPRoyal, etc.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StickySessionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_sticky_ttl_secs")]
+    pub ttl_secs: u64,
+    /// Optional template with placeholders: `{base_user}`, `{session_id}`, `{country}`, `{COUNTRY}`, `{ttl_mins}`, `{ttl_secs}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_template: Option<String>,
+}
+
+impl Default for StickySessionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_secs: default_sticky_ttl_secs(),
+            username_template: None,
+        }
+    }
+}
+
 /// Upstream proxy configuration and health metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamProxy {
@@ -56,6 +88,10 @@ pub struct UpstreamProxy {
     pub failure_count: u32,
     pub success_count: u64,
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticky_session: Option<StickySessionConfig>,
 }
 
 impl UpstreamProxy {
@@ -114,11 +150,16 @@ impl UpstreamProxy {
 
         let mut merged_tags = tags.unwrap_or_default();
         if let Some(t) = inline_tag {
-            if !merged_tags.iter().any(|existing| existing.eq_ignore_ascii_case(&t)) {
+            if !merged_tags
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&t))
+            {
                 merged_tags.push(t);
             }
         }
-        if let Some(tier_tag) = infer_proxy_tier_tag(&host, auth.as_ref().map(|a| a.username.as_str())) {
+        if let Some(tier_tag) =
+            infer_proxy_tier_tag(&host, auth.as_ref().map(|a| a.username.as_str()))
+        {
             if !merged_tags
                 .iter()
                 .any(|existing| existing.eq_ignore_ascii_case(tier_tag))
@@ -127,6 +168,7 @@ impl UpstreamProxy {
             }
         }
 
+        let inferred_pool = merged_tags.first().cloned();
         let proxy = Self {
             id,
             name: proxy_name,
@@ -141,6 +183,8 @@ impl UpstreamProxy {
             failure_count: 0,
             success_count: 0,
             tags: merged_tags,
+            pool_name: inferred_pool,
+            sticky_session: None,
         };
 
         if force_cc_username {
@@ -234,10 +278,54 @@ impl UpstreamProxy {
         updated
     }
 
-    /// Injects a deterministic, provider-safe sticky session token (`-sessid-<hex>-sesstime-10`)
-    /// into residential proxy usernames so all requests sharing `session_id` exit from the same
-    /// clean residential IP instead of rotating mid-session.
+    /// Returns true if this proxy belongs to the named pool (matches `pool_name` or any tag).
+    pub fn matches_pool(&self, pool: &str) -> bool {
+        let target = pool.trim();
+        if target.is_empty() {
+            return true;
+        }
+        if let Some(ref pn) = self.pool_name {
+            if pn.eq_ignore_ascii_case(target) {
+                return true;
+            }
+        }
+        self.tags.iter().any(|t| t.eq_ignore_ascii_case(target))
+    }
+
+    /// Returns a copy of this proxy with an explicit pool name and optional sticky session config.
+    pub fn with_pool_and_sticky(
+        mut self,
+        pool_name: Option<String>,
+        sticky_session: Option<StickySessionConfig>,
+    ) -> Self {
+        if let Some(pool) = pool_name {
+            let trimmed = pool.trim().to_string();
+            if !trimmed.is_empty() {
+                if !self.tags.iter().any(|t| t.eq_ignore_ascii_case(&trimmed)) {
+                    self.tags.push(trimmed.clone());
+                }
+                self.pool_name = Some(trimmed);
+            }
+        }
+        if sticky_session.is_some() {
+            self.sticky_session = sticky_session;
+        }
+        self
+    }
+
+    /// Injects a deterministic, provider-safe sticky session token into the proxy username.
+    /// Uses `sticky_session.username_template` when configured; otherwise falls back to
+    /// `-sessid-<hex>-sesstime-10` for residential proxies.
     pub fn with_sticky_session(&self, session_id: &str) -> Self {
+        self.with_sticky_session_for(session_id, None)
+    }
+
+    /// Variant of `with_sticky_session` that also accepts an optional country override for template rendering.
+    pub fn with_sticky_session_for(
+        &self,
+        session_id: &str,
+        country_override: Option<&str>,
+    ) -> Self {
         let trimmed = session_id.trim();
         if trimmed.is_empty() {
             return self.clone();
@@ -246,24 +334,8 @@ impl UpstreamProxy {
             Some(auth) => auth,
             None => return self.clone(),
         };
-        let host_lower = self.host.to_ascii_lowercase();
-        let user_lower = a.username.to_ascii_lowercase();
-        let is_residential = host_lower.starts_with("pr.")
-            || user_lower.starts_with("customer-")
-            || user_lower.contains("resi")
-            || user_lower.contains("-sessid-");
-        if !is_residential {
-            return self.clone();
-        }
 
-        // Strip any existing -sessid-... suffix before appending the new clean token
-        let base_username = if let Some(idx) = user_lower.find("-sessid-") {
-            &a.username[..idx]
-        } else {
-            a.username.as_str()
-        };
-
-        // Oxylabs/BrightData require strictly alphanumeric sessid tokens (no `@`, `.`, or `-`)
+        // Compute deterministic 12-char alphanumeric token safe for all proxy vendors
         let digest = Sha256::digest(trimmed.as_bytes());
         let mut token = String::with_capacity(12);
         const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -272,7 +344,53 @@ impl UpstreamProxy {
             token.push(HEX[(b & 0x0f) as usize] as char);
         }
 
-        let new_username = format!("{base_username}-sessid-{token}-sesstime-10");
+        let new_username = if let Some(ref cfg) = self.sticky_session {
+            if !cfg.enabled {
+                return self.clone();
+            }
+            if let Some(ref tmpl) = cfg.username_template {
+                let country_lower = country_override
+                    .or(self.country.as_deref())
+                    .unwrap_or("us")
+                    .trim()
+                    .to_ascii_lowercase();
+                let country_upper = country_lower.to_ascii_uppercase();
+                let ttl_secs = cfg.ttl_secs.max(60);
+                let ttl_mins = ttl_secs.div_ceil(60);
+                tmpl.replace("{base_user}", &a.username)
+                    .replace("{session_id}", &token)
+                    .replace("{country}", &country_lower)
+                    .replace("{COUNTRY}", &country_upper)
+                    .replace("{ttl_mins}", &ttl_mins.to_string())
+                    .replace("{ttl_secs}", &ttl_secs.to_string())
+            } else {
+                let user_lower = a.username.to_ascii_lowercase();
+                let base_username = if let Some(idx) = user_lower.find("-sessid-") {
+                    &a.username[..idx]
+                } else {
+                    a.username.as_str()
+                };
+                let ttl_mins = cfg.ttl_secs.max(60).div_ceil(60);
+                format!("{base_username}-sessid-{token}-sesstime-{ttl_mins}")
+            }
+        } else {
+            let host_lower = self.host.to_ascii_lowercase();
+            let user_lower = a.username.to_ascii_lowercase();
+            let is_residential = host_lower.starts_with("pr.")
+                || user_lower.starts_with("customer-")
+                || user_lower.contains("resi")
+                || user_lower.contains("-sessid-");
+            if !is_residential {
+                return self.clone();
+            }
+            let base_username = if let Some(idx) = user_lower.find("-sessid-") {
+                &a.username[..idx]
+            } else {
+                a.username.as_str()
+            };
+            format!("{base_username}-sessid-{token}-sesstime-10")
+        };
+
         let mut updated = self.clone();
         let new_auth = ProxyAuth {
             username: new_username.clone(),
@@ -315,235 +433,6 @@ impl UpstreamProxy {
         );
         adapted.auth = Some(new_auth);
         Some(adapted)
-    }
-}
-
-fn infer_proxy_tier_tag(host: &str, username: Option<&str>) -> Option<&'static str> {
-    let h = host.to_ascii_lowercase();
-    let u = username.unwrap_or("").to_ascii_lowercase();
-    if h.starts_with("dc.") || u.starts_with("user-dc") || u.contains("-dc_") || u.contains("_dc_")
-    {
-        Some("datacenter")
-    } else if h.starts_with("pr.") || u.starts_with("customer-") || u.contains("resi") {
-        Some("residential")
-    } else {
-        None
-    }
-}
-
-fn is_country_acronym(s: &str) -> bool {
-    let t = s.trim();
-    t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())
-}
-
-/// Parses a country input such as `"VN"` or `"-cc-vn"`, returning `(normalized_cc, force_cc_username)`.
-pub fn parse_country_input(raw: &str) -> Option<(String, bool)> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    for prefix in &["-cc-", "_cc_"] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let cc = rest.trim();
-            if is_country_acronym(cc) {
-                return Some((cc.to_ascii_uppercase(), true));
-            }
-        }
-    }
-    Some((trimmed.to_ascii_uppercase(), false))
-}
-
-/// Extracts an optional inline 2-letter country acronym (`#CC`, `|CC`, `CC|`)
-/// or non-country `#tag` fragment (e.g. `#oxylabs`) from the host/URL tail.
-fn split_inline_country_and_tag(s: &str) -> (&str, Option<String>, Option<String>) {
-    if let Some((base, frag)) = s.rsplit_once('#') {
-        // Only treat `#frag` as a trailing country/tag if it is after `@` (or there is no `@`),
-        // so passwords containing `#` before `@` are never truncated.
-        let after_userinfo = base.rfind('@').map(|idx| &base[idx + 1..]).unwrap_or(base);
-        let frag_trimmed = frag.trim();
-        if !base.trim().is_empty() && !after_userinfo.is_empty() {
-            if is_country_acronym(frag_trimmed) {
-                return (
-                    base.trim(),
-                    Some(frag_trimmed.to_ascii_uppercase()),
-                    None,
-                );
-            }
-            let tag = if frag_trimmed.is_empty() {
-                None
-            } else {
-                Some(frag_trimmed.to_string())
-            };
-            return (base.trim(), None, tag);
-        }
-    }
-    if let Some((base, suffix)) = s.rsplit_once('|') {
-        if is_country_acronym(suffix) && !base.trim().is_empty() {
-            return (base.trim(), Some(suffix.trim().to_ascii_uppercase()), None);
-        }
-    }
-    if let Some((prefix, rest)) = s.split_once('|') {
-        if is_country_acronym(prefix) && !rest.trim().is_empty() {
-            return (rest.trim(), Some(prefix.trim().to_ascii_uppercase()), None);
-        }
-    }
-    (s, None, None)
-}
-
-type ParsedProxyComponents = (ProxyProtocol, String, u16, Option<ProxyAuth>, Option<String>);
-
-/// Helper to parse URL or vendor string `host:port:user:pass[:CC]`
-fn parse_proxy_components(s: &str) -> Result<ParsedProxyComponents, String> {
-    if s.contains("://") {
-        let parts: Vec<&str> = s.splitn(2, "://").collect();
-        let protocol = ProxyProtocol::parse(parts[0]);
-        let rest = parts[1];
-
-        let (auth, host_port) = if let Some(idx) = rest.find('@') {
-            let auth_part = &rest[..idx];
-            let hp = &rest[idx + 1..];
-            let creds: Vec<&str> = auth_part.splitn(2, ':').collect();
-            let auth = if creds.len() == 2 {
-                Some(ProxyAuth {
-                    username: url_decode(creds[0]),
-                    password: url_decode(creds[1]),
-                })
-            } else {
-                None
-            };
-            (auth, hp)
-        } else {
-            (None, rest)
-        };
-
-        let clean_hp = host_port.split(['/', '?', '#']).next().unwrap_or(host_port);
-        let (host, port) = parse_host_port(clean_hp)?;
-
-        Ok((protocol, host, port, auth, None))
-    } else if s.starts_with('[') {
-        let (host, remainder) = if let Some(close_idx) = s.find(']') {
-            (s[..=close_idx].to_string(), &s[close_idx + 1..])
-        } else {
-            return Err("Mismatched brackets in IPv6 address".to_string());
-        };
-        let rest = remainder.strip_prefix(':').unwrap_or(remainder);
-        let segments: Vec<&str> = rest.split(':').collect();
-        match segments.len() {
-            1 => {
-                let port: u16 = segments[0]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                Ok((ProxyProtocol::Http, host, port, None, None))
-            }
-            3 => {
-                let port: u16 = segments[0]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                let auth = Some(ProxyAuth {
-                    username: segments[1].to_string(),
-                    password: segments[2].to_string(),
-                });
-                Ok((ProxyProtocol::Http, host, port, auth, None))
-            }
-            4 if is_country_acronym(segments[3]) => {
-                let port: u16 = segments[0]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                let auth = Some(ProxyAuth {
-                    username: segments[1].to_string(),
-                    password: segments[2].to_string(),
-                });
-                Ok((
-                    ProxyProtocol::Http,
-                    host,
-                    port,
-                    auth,
-                    Some(segments[3].to_ascii_uppercase()),
-                ))
-            }
-            _ => Err(
-                "Invalid IPv6 proxy format. Expected '[ipv6]:port' or '[ipv6]:port:user:pass[:CC]'"
-                    .to_string(),
-            ),
-        }
-    } else {
-        // Vendor format: host:port:user:pass[:CC] or host:port
-        let segments: Vec<&str> = s.split(':').collect();
-        match segments.len() {
-            2 => {
-                let host = segments[0].to_string();
-                let port: u16 = segments[1]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                Ok((ProxyProtocol::Http, host, port, None, None))
-            }
-            4 => {
-                let host = segments[0].to_string();
-                let port: u16 = segments[1]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                let auth = Some(ProxyAuth {
-                    username: segments[2].to_string(),
-                    password: segments[3].to_string(),
-                });
-                Ok((ProxyProtocol::Http, host, port, auth, None))
-            }
-            5 if is_country_acronym(segments[4]) => {
-                let host = segments[0].to_string();
-                let port: u16 = segments[1]
-                    .parse()
-                    .map_err(|_| "Invalid proxy port".to_string())?;
-                let auth = Some(ProxyAuth {
-                    username: segments[2].to_string(),
-                    password: segments[3].to_string(),
-                });
-                Ok((
-                    ProxyProtocol::Http,
-                    host,
-                    port,
-                    auth,
-                    Some(segments[4].to_ascii_uppercase()),
-                ))
-            }
-            _ => Err(
-                "Invalid proxy format. Expected 'protocol://host:port' or 'host:port:user:pass[:CC]'"
-                    .to_string(),
-            ),
-        }
-    }
-}
-
-fn parse_host_port(hp: &str) -> Result<(String, u16), String> {
-    if hp.starts_with('[') {
-        if let Some(close_idx) = hp.find(']') {
-            let host = hp[..=close_idx].to_string();
-            let remainder = &hp[close_idx + 1..];
-            let port = if let Some(stripped) = remainder.strip_prefix(':') {
-                stripped
-                    .parse::<u16>()
-                    .map_err(|_| "Invalid proxy port".to_string())?
-            } else {
-                8080
-            };
-            Ok((host, port))
-        } else {
-            Err("Mismatched brackets in IPv6 address".to_string())
-        }
-    } else {
-        let hp_parts: Vec<&str> = hp.split(':').collect();
-        if hp_parts.is_empty() || hp_parts[0].is_empty() {
-            return Err("Invalid proxy host".to_string());
-        }
-        let host = hp_parts[0].to_string();
-        let port: u16 = if hp_parts.len() > 1 {
-            hp_parts[1]
-                .parse()
-                .map_err(|_| "Invalid proxy port".to_string())?
-        } else {
-            8080
-        };
-        Ok((host, port))
     }
 }
 
@@ -599,104 +488,8 @@ pub struct ProxySelectionQuery {
     pub session_id: Option<String>,
     pub country: Option<String>,
     pub tag: Option<String>,
+    #[serde(default)]
+    pub pool: Option<String>,
     pub preferred_id: Option<String>,
     pub strategy: Option<ProxyRotationStrategy>,
-}
-
-fn url_decode(s: &str) -> String {
-    let mut decoded = Vec::with_capacity(s.len());
-    let mut bytes = s.as_bytes().iter();
-    while let Some(&b) = bytes.next() {
-        if b == b'%' {
-            if let (Some(&h1), Some(&h2)) = (bytes.next(), bytes.next()) {
-                let hex_str = [h1, h2];
-                if let Ok(hex) = std::str::from_utf8(&hex_str) {
-                    if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                        decoded.push(byte);
-                        continue;
-                    }
-                }
-                decoded.push(b'%');
-                decoded.push(h1);
-                decoded.push(h2);
-            } else {
-                decoded.push(b'%');
-            }
-        } else {
-            decoded.push(b);
-        }
-    }
-    String::from_utf8(decoded).unwrap_or_else(|_| s.to_string())
-}
-
-fn url_encode_userinfo(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-                out.push(HEX_CHARS[(b >> 4) as usize] as char);
-                out.push(HEX_CHARS[(b & 0x0F) as usize] as char);
-            }
-        }
-    }
-    out
-}
-
-fn extract_country_from_username(username: &str) -> Option<String> {
-    let u = username.to_ascii_lowercase();
-    for pattern in &["-cc-", "_cc_", "-country-", "_country-", "-zone-"] {
-        if let Some(pos) = u.find(pattern) {
-            let after = &u[pos + pattern.len()..];
-            let code: String = after
-                .chars()
-                .take_while(|c| c.is_ascii_alphabetic())
-                .collect();
-            if code.len() == 2 {
-                return Some(code.to_ascii_uppercase());
-            }
-        }
-    }
-    None
-}
-
-fn replace_country_in_username(username: &str, target_country: &str) -> Option<String> {
-    let u_lower = username.to_ascii_lowercase();
-    let target = target_country.trim().to_ascii_lowercase();
-    if target.len() != 2 || !target.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    for pattern in &["-cc-", "_cc_", "-country-", "_country-", "-zone-"] {
-        if let Some(pos) = u_lower.find(pattern) {
-            let prefix = &username[..pos + pattern.len()];
-            let remainder = &username[pos + pattern.len()..];
-            let code_len = remainder
-                .chars()
-                .take_while(|c| c.is_ascii_alphabetic())
-                .count();
-            if code_len == 2 {
-                let suffix = &remainder[code_len..];
-                let formatted = if *pattern == "-country-" || *pattern == "_country-" {
-                    target.to_ascii_uppercase()
-                } else {
-                    target.clone()
-                };
-                return Some(format!("{prefix}{formatted}{suffix}"));
-            }
-        }
-    }
-    if (u_lower.starts_with("user-dc") || u_lower.contains("-dc_") || u_lower.contains("_dc_"))
-        && !u_lower.contains("-country-")
-    {
-        let target_upper = target.to_ascii_uppercase();
-        return Some(format!("{username}-country-{target_upper}"));
-    }
-    if (u_lower.starts_with("customer-") || u_lower.contains("resi")) && !u_lower.contains("-cc-") {
-        return Some(format!("{username}-cc-{target}"));
-    }
-    None
 }

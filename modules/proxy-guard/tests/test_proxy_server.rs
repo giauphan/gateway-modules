@@ -1,12 +1,14 @@
-use proxy_guard::domain::ProxyRotationStrategy;
+use proxy_guard::domain::{DefaultRoute, ProxyRotationStrategy, UpstreamProxy};
+use proxy_guard::http_cache::HttpCacheConfig;
+use proxy_guard::ports::{MetricsPort, ProxyPoolManagementPort, RuleManagementPort};
 use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::proxy_server::ProxyServer;
 use proxy_guard::service::ProxyGuardService;
 use proxy_guard::storage::FileStorageAdapter;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -236,4 +238,228 @@ fn test_proxy_server_origin_form_request() {
     );
 
     shutdown.store(true, Ordering::Relaxed);
+}
+
+#[test]
+fn test_rejected_connect_makes_zero_upstream_connections() {
+    let workspace = TestWorkspace::new("pg_connect_reject_zero");
+    let storage = Arc::new(FileStorageAdapter::new(&workspace.path));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+
+    // Mock upstream proxy listener that counts every TCP accept
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+    let upstream_port = upstream_listener.local_addr().expect("addr").port();
+    let _ = upstream_listener.set_nonblocking(true);
+    let upstream_accepts = Arc::new(AtomicUsize::new(0));
+    let upstream_stop = Arc::new(AtomicBool::new(false));
+
+    let accepts_clone = Arc::clone(&upstream_accepts);
+    let stop_clone = Arc::clone(&upstream_stop);
+    let upstream_thread = thread::spawn(move || {
+        while !stop_clone.load(Ordering::Relaxed) {
+            if upstream_listener.accept().is_ok() {
+                accepts_clone.fetch_add(1, Ordering::Relaxed);
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    let upstream_url = format!("http://127.0.0.1:{upstream_port}");
+    service
+        .add_proxy(
+            UpstreamProxy::parse(&upstream_url, Some("mock-up"), Some("US"), None).expect("parse"),
+        )
+        .expect("add proxy");
+
+    let server = ProxyServer::new(0, Some(upstream_url), Arc::clone(&service));
+    let shutdown = server.shutdown_handle();
+    let (_handle, test_port) = server.start_background().expect("start proxy");
+    thread::sleep(Duration::from_millis(40));
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{test_port}")).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    client
+        .write_all(b"CONNECT www.google-analytics.com:443 HTTP/1.1\r\nHost: www.google-analytics.com:443\r\n\r\n")
+        .expect("write");
+
+    let resp = read_full_response(&mut client);
+    assert!(resp.contains("HTTP/1.1 403 Forbidden"));
+    assert_eq!(
+        upstream_accepts.load(Ordering::Relaxed),
+        0,
+        "Rejected CONNECT must open 0 upstream connections"
+    );
+    let metrics = service.get_metrics();
+    assert_eq!(metrics.blocked_requests, 1);
+    assert_eq!(metrics.bytes_tx, 0);
+    assert_eq!(metrics.bytes_rx, 0);
+
+    shutdown.store(true, Ordering::Relaxed);
+    upstream_stop.store(true, Ordering::Relaxed);
+    let _ = upstream_thread.join();
+}
+
+#[test]
+fn test_direct_split_route_enforces_ssrf_on_loopback_and_private_ips() {
+    let workspace = TestWorkspace::new("pg_direct_ssrf");
+    let storage = Arc::new(FileStorageAdapter::new(&workspace.path));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+    service
+        .set_default_route(DefaultRoute::Direct)
+        .expect("set direct");
+
+    let server = ProxyServer::new(0, None, Arc::clone(&service));
+    let shutdown = server.shutdown_handle();
+    let (_handle, test_port) = server.start_background().expect("start proxy");
+    thread::sleep(Duration::from_millis(40));
+
+    for target in ["127.0.0.1:80", "10.0.0.1:443", "169.254.169.254:80"] {
+        let mut client = TcpStream::connect(format!("127.0.0.1:{test_port}")).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        let req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+        client.write_all(req.as_bytes()).expect("write");
+        let resp = read_full_response(&mut client);
+        assert!(
+            resp.contains("HTTP/1.1 502 Bad Gateway"),
+            "SSRF target {target} must be blocked on Direct route, got: {resp}"
+        );
+    }
+
+    shutdown.store(true, Ordering::Relaxed);
+}
+
+#[test]
+fn test_http_response_cache_hits_and_mandatory_bypasses() {
+    let workspace = TestWorkspace::new("pg_http_cache_test");
+    let storage = Arc::new(FileStorageAdapter::new(&workspace.path));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+
+    service.configure_cache(HttpCacheConfig {
+        enabled: true,
+        max_entries: 64,
+        max_body_bytes: 65536,
+        default_ttl_secs: 120,
+        ..Default::default()
+    });
+
+    // Mock upstream HTTP proxy that serves a 200 OK JSON body and counts every hit
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+    let upstream_port = upstream_listener.local_addr().expect("addr").port();
+    let _ = upstream_listener.set_nonblocking(true);
+    let upstream_hits = Arc::new(AtomicUsize::new(0));
+    let upstream_stop = Arc::new(AtomicBool::new(false));
+
+    let hits_clone = Arc::clone(&upstream_hits);
+    let stop_clone = Arc::clone(&upstream_stop);
+    let upstream_thread = thread::spawn(move || {
+        while !stop_clone.load(Ordering::Relaxed) {
+            if let Ok((mut stream, _)) = upstream_listener.accept() {
+                let count = hits_clone.fetch_add(1, Ordering::Relaxed) + 1;
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut req_buf = [0u8; 2048];
+                let _ = stream.read(&mut req_buf);
+                let body = format!("{{\"schools\":[\"MIT\"],\"hit\":{count}}}");
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: public, max-age=120\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    let upstream_url = format!("http://127.0.0.1:{upstream_port}");
+    service
+        .add_proxy(
+            UpstreamProxy::parse(&upstream_url, Some("mock-up"), Some("US"), None).expect("parse"),
+        )
+        .expect("add proxy");
+
+    let server = ProxyServer::new(0, Some(upstream_url), Arc::clone(&service));
+    let shutdown = server.shutdown_handle();
+    let (_handle, test_port) = server.start_background().expect("start proxy");
+    thread::sleep(Duration::from_millis(40));
+
+    let send_req = |raw: &str| -> String {
+        let mut c = TcpStream::connect(format!("127.0.0.1:{test_port}")).expect("connect");
+        c.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        c.write_all(raw.as_bytes()).expect("write");
+        read_full_response(&mut c)
+    };
+
+    // 1. First GET -> miss -> upstream hit #1
+    let r1 = send_req("GET http://orgsearch.example.com/schools?q=mit HTTP/1.1\r\nHost: orgsearch.example.com\r\n\r\n");
+    assert!(r1.contains("\"hit\":1"));
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 1);
+
+    // 2. Second identical GET -> cache HIT -> upstream STILL 1!
+    let r2 = send_req("GET http://orgsearch.example.com/schools?q=mit HTTP/1.1\r\nHost: orgsearch.example.com\r\n\r\n");
+    assert!(r2.contains("\"hit\":1"));
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 1);
+
+    // 3. GET with Cookie -> MUST bypass cache -> upstream hit #2
+    let r3 = send_req("GET http://orgsearch.example.com/schools?q=mit HTTP/1.1\r\nHost: orgsearch.example.com\r\nCookie: sid=secret\r\n\r\n");
+    assert!(r3.contains("\"hit\":2"));
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 2);
+
+    // 4. GET with Authorization -> MUST bypass cache -> upstream hit #3
+    let r4 = send_req("GET http://orgsearch.example.com/schools?q=mit HTTP/1.1\r\nHost: orgsearch.example.com\r\nAuthorization: Bearer tok123\r\n\r\n");
+    assert!(r4.contains("\"hit\":3"));
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 3);
+
+    // 5. POST -> MUST bypass cache -> upstream hit #4
+    let r5 = send_req("POST http://orgsearch.example.com/schools?q=mit HTTP/1.1\r\nHost: orgsearch.example.com\r\nContent-Length: 2\r\n\r\n{}");
+    assert!(r5.contains("\"hit\":4"));
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 4);
+
+    // 6. Sensitive path (/login) -> MUST bypass cache -> upstream hit #5 & #6
+    let _ = send_req("GET http://orgsearch.example.com/api/login HTTP/1.1\r\nHost: orgsearch.example.com\r\n\r\n");
+    let _ = send_req("GET http://orgsearch.example.com/api/login HTTP/1.1\r\nHost: orgsearch.example.com\r\n\r\n");
+    assert_eq!(upstream_hits.load(Ordering::Relaxed), 6);
+
+    let metrics = service.get_metrics();
+    assert_eq!(metrics.cache_hits, 1);
+    assert_eq!(metrics.cache_misses, 1);
+    assert!(metrics.cache_bytes_saved > 0);
+
+    shutdown.store(true, Ordering::Relaxed);
+    upstream_stop.store(true, Ordering::Relaxed);
+    let _ = upstream_thread.join();
 }

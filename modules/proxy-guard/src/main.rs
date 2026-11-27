@@ -4,9 +4,12 @@
 //! Reads JSON requests from stdin, dispatches to interface adapter handlers,
 //! and writes JSON responses to stdout.
 
-use proxy_guard::domain::{parse_country_input, ProxyRotationStrategy, UpstreamProxy};
+use proxy_guard::domain::{
+    parse_country_input, DefaultRoute, ProxyRotationStrategy, StickySessionConfig, UpstreamProxy,
+};
 use proxy_guard::handlers::handle_request;
-use proxy_guard::ports::ProxyPoolManagementPort;
+use proxy_guard::http_cache::HttpCacheConfig;
+use proxy_guard::ports::{ProxyPoolManagementPort, RuleManagementPort};
 use proxy_guard::proxy_pool::ProxyPool;
 use proxy_guard::proxy_server::ProxyServer;
 use proxy_guard::rpc::make_json_resp;
@@ -197,6 +200,89 @@ fn init_proxies(
                                     let _ = service.add_proxy(parsed);
                                 }
                             }
+                        }
+                    }
+                    // Structured upstream_proxies with pool_name & sticky_session support
+                    if service.list_proxies().is_empty() {
+                        if let Some(arr) = val.get("upstream_proxies").and_then(|v| v.as_array()) {
+                            for item in arr {
+                                if let Some(url) = item.get("url").and_then(|v| v.as_str()) {
+                                    let name = item.get("name").and_then(|v| v.as_str());
+                                    let country = item.get("country").and_then(|v| v.as_str());
+                                    let tags =
+                                        item.get("tags").and_then(|v| v.as_array()).map(|t| {
+                                            t.iter()
+                                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                                .collect()
+                                        });
+                                    let pool_name = item
+                                        .get("pool_name")
+                                        .or_else(|| item.get("pool"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let sticky = item.get("sticky_session").and_then(|v| {
+                                        serde_json::from_value::<StickySessionConfig>(v.clone())
+                                            .ok()
+                                    });
+                                    if let Ok(parsed) =
+                                        UpstreamProxy::parse(url, name, country, tags)
+                                            .map(|p| p.with_pool_and_sticky(pool_name, sticky))
+                                    {
+                                        let _ = service.add_proxy(parsed);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Domain split-routing rules (`pool` / `direct` / `reject`)
+                    if let Some(arr) = val.get("routing_rules").and_then(|v| v.as_array()) {
+                        for item in arr {
+                            let domain = item.get("domain").and_then(|v| v.as_str()).unwrap_or("");
+                            let action = item.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                            let name = item.get("name").and_then(|v| v.as_str());
+                            if domain.is_empty() {
+                                continue;
+                            }
+                            match action.to_ascii_lowercase().as_str() {
+                                "reject" | "block" => {
+                                    let _ = service.add_blocked_domain(domain, name);
+                                }
+                                "direct" | "bypass_direct" => {
+                                    let _ = service.add_direct_bypass_domain(domain, name);
+                                }
+                                "pool" | "route_pool" => {
+                                    if let Some(pool) = item.get("pool").and_then(|v| v.as_str()) {
+                                        let _ = service.add_pool_route_domain(domain, pool, name);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if let Some(dr_val) = val.get("default_route") {
+                        let parsed = if let Some(s) = dr_val.as_str() {
+                            match s.trim().to_ascii_lowercase().as_str() {
+                                "direct" | "bypass_direct" => Some(DefaultRoute::Direct),
+                                "forward_upstream" | "upstream" => {
+                                    Some(DefaultRoute::ForwardUpstream)
+                                }
+                                other if !other.is_empty() => {
+                                    Some(DefaultRoute::Pool(other.to_string()))
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            serde_json::from_value::<DefaultRoute>(dr_val.clone()).ok()
+                        };
+                        if let Some(route) = parsed {
+                            let _ = service.set_default_route(route);
+                        }
+                    }
+                    if let Some(cache_val) = val.get("cache") {
+                        if let Ok(cache_cfg) =
+                            serde_json::from_value::<HttpCacheConfig>(cache_val.clone())
+                        {
+                            service.configure_cache(cache_cfg);
                         }
                     }
                     break;

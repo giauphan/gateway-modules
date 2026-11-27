@@ -1,6 +1,6 @@
 # Proxy Guard & Multi-Proxy API Payload Reference
 
-> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.14.0).**  
+> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.15.0).**  
 > Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, and MCP tool arguments.
 
 ---
@@ -50,7 +50,7 @@ All endpoints are reachable under either direct paths (e.g. `http://127.0.0.1:31
 | **POST** | `/metrics/reset`| Reset cumulative metrics counters | *(none)* |
 | **POST** | `/evaluate` | Test if a single URL will be blocked, mocked, direct-bypassed, or forwarded | `{"url": "...", "method": "..."}` |
 | **POST** | `/optimize-flow`| Analyze batch of requests or HAR log for bandwidth savings | `{"requests": [...]}` |
-| **POST** | `/rules` | Toggle categories, add whitelist/blocked domains, or add `add_direct_bypass_domains` split-routing rules | `{"add_direct_bypass_domains": [...]}` |
+| **POST** | `/rules` | Toggle categories, add whitelist/blocked/direct-bypass domains, named `add_pool_routes`, `default_route`, or `cache` settings | `{"add_pool_routes": [...], "default_route": "direct"}` |
 | **POST** | `/tools/call` | Model Context Protocol (MCP) tool execution | `{"name": "...", "arguments": {...}}` |
 
 ---
@@ -599,7 +599,7 @@ When using AI agents (Gemini, Antigravity, Claude, OpenAI), Proxy Guard register
 | `proxy-guard__get_request_logs` | `{"limit": 25}` | Ring-buffer logs and request reduction percentage. |
 | `proxy-guard__get_metrics` | `{}` | Cumulative metrics counters and dollar savings. |
 | `proxy-guard__evaluate_url` | `{"url": "...", "method": "GET"}` | Diagnostic match report (`block_204`, `mock_script`, `bypass_direct`, `forward_upstream`). |
-| `proxy-guard__configure_rules` | `{"add_direct_bypass_domains": ["cdn.jsdelivr.net"], "add_blocked_domains": [...], "add_whitelist_domains": [...]}` | Updates category toggles, custom block/whitelist rules, and `BypassDirect` split-routing domains. |
+| `proxy-guard__configure_rules` | `{"add_pool_routes": [{"domain": "services.sheerid.com", "pool": "residential"}], "add_direct_bypass_domains": ["cdn.jsdelivr.net"], "default_route": "direct", "cache": {"enabled": true}}` | Updates category toggles, custom block/whitelist/direct-bypass rules, named pool split-routing, fallback route, and bounded HTTP response cache. |
 
 ---
 

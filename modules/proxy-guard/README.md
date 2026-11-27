@@ -24,43 +24,44 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.14.0)
+## 2. Architecture & Clean Architecture Layers (v1.15.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.14.0)
+├── Cargo.toml          # Single source of truth (v1.15.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
-├── proxy-guard         # Native prebuilt release binary (635 KB)
-├── config.example.json # Gateway configuration template
+├── proxy-guard         # Native prebuilt release binary
+├── config.example.json # Gateway configuration template (SheerID + Muse.ai split-routing preset)
 ├── src/
 │   ├── domain/         # Pure business rules, entities, and value objects
-│   │   ├── rules.rs    # Domain filtering rules and actions
-│   │   ├── proxy.rs    # Upstream proxy entities, parsing, and rotation strategies
+│   │   ├── rules.rs    # Domain split-routing rules (Reject / Direct / Pool), metrics & per-pool stats
+│   │   ├── proxy.rs    # Upstream proxy entities, pool tagging, and sticky session templates
 │   │   └── mod.rs      # Domain re-exports
 │   ├── ports.rs        # Inbound and Outbound port traits
 │   ├── service.rs      # Application orchestrator service
-│   ├── rules_engine/   # Domain rules matcher & catalog
+│   ├── rules_engine/   # Domain rules matcher & catalog (exact > suffix > catalog > default_route)
 │   │   ├── catalog/    # Static catalogs: analytics, advertising, media_fonts, browser_noise
-│   │   └── mod.rs      # Engine dispatcher & pre-sorted matching
+│   │   └── mod.rs      # Engine dispatcher & deterministic precedence
+│   ├── http_cache.rs   # Opt-in bounded LRU HTTP response cache (GET/HEAD, ETag, no MITM)
 │   ├── request_optimizer/ # Hop-by-hop & tracking query rewriter
 │   │   ├── constants.rs# Static query and header stripped lists
 │   │   └── mod.rs      # Header rewriting & RFC 9110 compression negotiator
-│   ├── proxy_pool.rs   # Upstream multi-proxy pool manager (rotation & failover)
-│   ├── proxy_server/   # Multithreaded HTTP/CONNECT interceptor with SOCKS5 & SSRF protection
-│   │   ├── http.rs     # Plain HTTP request interception & origin-form parsing
-│   │   ├── tunnel.rs   # HTTPS CONNECT tunneling & idle-timeout socket splicing
-│   │   ├── utils.rs    # SSRF verification & RFC 1928 SOCKS5 handshake
+│   ├── proxy_pool.rs   # Named multi-proxy pool manager (TTL sticky sessions & failover)
+│   ├── proxy_server/   # Multithreaded HTTP/CONNECT interceptor with zero-MITM tunneling & SSRF protection
+│   │   ├── http.rs     # Plain HTTP request interception, safe cache & byte metering
+│   │   ├── tunnel.rs   # Early CONNECT blocking, transparent TCP splicing & per-pool TX/RX metering
+│   │   ├── utils.rs    # SSRF verification, Proxy-Authorization session parser & SOCKS5 handshake
 │   │   └── mod.rs      # Server loop & atomic RAII connection guard
 │   ├── mock_factory.rs # Synthetic mock generation (prevents client JS crashes)
-│   ├── script_generator.rs # Code generator for Playwright, Puppeteer, mitmproxy
+│   ├── script_generator.rs # Persistent-context Playwright (no page.route() by default), Puppeteer, mitmproxy
 │   ├── storage.rs      # File & In-Memory storage with private 0o600 permissions
 │   ├── handlers/       # Interface adapters (routes & dispatcher)
 │   ├── rpc.rs          # stdio-stream framing helpers
 │   └── mcp.rs          # Model Context Protocol tools adapter
-└── tests/              # Automated integration test suite (78 integration + 16 unit tests)
+└── tests/              # Automated integration & unit test suite (100 tests)
 ```
 
 > [!NOTE]
@@ -135,4 +136,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 94 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 100 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.

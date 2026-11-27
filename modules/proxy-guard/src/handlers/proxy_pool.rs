@@ -3,7 +3,9 @@
 //! Clean Architecture: Interface Adapters.
 //! Provides endpoints to register, list, query, and balance multiple upstream proxies.
 
-use crate::domain::{ProxyRotationStrategy, ProxySelectionQuery, UpstreamProxy};
+use crate::domain::{
+    ProxyRotationStrategy, ProxySelectionQuery, StickySessionConfig, UpstreamProxy,
+};
 use crate::ports::ProxyPoolManagementPort;
 use crate::rpc::{make_error_resp, make_json_resp};
 use crate::service::ProxyGuardService;
@@ -48,7 +50,16 @@ pub fn handle_add_proxy(body: &Value, service: &ProxyGuardService) -> Value {
                             .filter_map(|x| x.as_str().map(|s| s.to_string()))
                             .collect()
                     });
+                    let pool_name = obj
+                        .get("pool_name")
+                        .or_else(|| obj.get("pool"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let sticky = obj.get("sticky_session").and_then(|v| {
+                        serde_json::from_value::<StickySessionConfig>(v.clone()).ok()
+                    });
                     UpstreamProxy::parse(url, name, country, tags)
+                        .map(|p| p.with_pool_and_sticky(pool_name, sticky))
                 }
                 _ => Err(format!("Item at index {idx} has invalid format")),
             };
@@ -85,8 +96,18 @@ pub fn handle_add_proxy(body: &Value, service: &ProxyGuardService) -> Value {
             .filter_map(|x| x.as_str().map(|s| s.to_string()))
             .collect()
     });
+    let pool_name = body
+        .get("pool_name")
+        .or_else(|| body.get("pool"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let sticky = body
+        .get("sticky_session")
+        .and_then(|v| serde_json::from_value::<StickySessionConfig>(v.clone()).ok());
 
-    match UpstreamProxy::parse(url, name, country, tags) {
+    match UpstreamProxy::parse(url, name, country, tags)
+        .map(|p| p.with_pool_and_sticky(pool_name, sticky))
+    {
         Ok(proxy) => match service.add_proxy(proxy) {
             Ok(id) => make_json_resp(
                 200,
@@ -140,6 +161,11 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
             .map(|s| s.to_string()),
         tag: query_val
             .get("tag")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        pool: query_val
+            .get("pool")
+            .or_else(|| query_val.get("pool_name"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         preferred_id: query_val

@@ -91,6 +91,7 @@ pub static STRIPPED_REQUEST_HEADERS: &[&str] = &[
     // Internal proxy routing headers (must not leak to upstream targets)
     "x-proxy-session",
     "x-proxy-session-id",
+    "x-proxy-pool",
     "x-proxy-country",
     "x-proxy-tag",
     "x-proxy-id",

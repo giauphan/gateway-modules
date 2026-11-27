@@ -647,17 +647,13 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     let p_pipe_suffix =
         UpstreamProxy::parse("socks5://u2:p2@2.3.4.5:1080|vn", None, None, None).unwrap();
     assert_eq!(p_pipe_suffix.country.as_deref(), Some("VN"));
-    assert_eq!(
-        p_pipe_suffix.pool_line(),
-        "socks5://u2:p2@2.3.4.5:1080#VN"
-    );
+    assert_eq!(p_pipe_suffix.pool_line(), "socks5://u2:p2@2.3.4.5:1080#VN");
 
     let p_pipe_prefix =
         UpstreamProxy::parse("jp|http://u3:p3@3.4.5.6:8080", None, None, None).unwrap();
     assert_eq!(p_pipe_prefix.country.as_deref(), Some("JP"));
 
-    let p_vendor5 =
-        UpstreamProxy::parse("10.0.0.1:9000:u4:p4:sg", None, None, None).unwrap();
+    let p_vendor5 = UpstreamProxy::parse("10.0.0.1:9000:u4:p4:sg", None, None, None).unwrap();
     assert_eq!(p_vendor5.country.as_deref(), Some("SG"));
     assert_eq!(
         p_vendor5.auth.as_ref().map(|a| a.username.as_str()),
@@ -785,7 +781,8 @@ fn test_inline_country_acronym_formats_and_uniqueness() {
     });
     let res_resp = handle_request(res_req, &service);
     assert_eq!(res_resp["status"], 200);
-    let res_body: serde_json::Value = serde_json::from_str(res_resp["body"].as_str().unwrap()).unwrap();
+    let res_body: serde_json::Value =
+        serde_json::from_str(res_resp["body"].as_str().unwrap()).unwrap();
     let sticky_user = res_body["playwright_config"]["username"].as_str().unwrap();
     assert!(sticky_user.contains("-sessid-"));
     assert!(sticky_user.ends_with("-sesstime-10"));

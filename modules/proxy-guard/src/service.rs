@@ -4,10 +4,11 @@
 //! Orchestrates the domain rules engine, metrics recording, and storage ports.
 
 use crate::domain::{
-    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType,
+    DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, PatternType,
     ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, Rule, RuleAction, RuleCategory,
     UpstreamProxy,
 };
+use crate::http_cache::{HttpCacheConfig, HttpResponseCache};
 use crate::ports::{
     FlowOptimizerPort, MetricsPort, MetricsStoragePort, ProxyPoolManagementPort,
     RuleManagementPort, RuleRepositoryPort,
@@ -23,10 +24,12 @@ pub struct ProxyGuardService {
     metrics_repo: Arc<dyn MetricsStoragePort>,
     proxy_pool: Arc<dyn ProxyPoolManagementPort>,
     cost_per_gb_usd: RwLock<f64>,
+    default_route: RwLock<DefaultRoute>,
     cached_engine: RwLock<RulesEngine>,
     cached_metrics: RwLock<FlowMetrics>,
     dirty_metrics_count: AtomicU64,
     request_logs: RwLock<VecDeque<RequestLogEntry>>,
+    http_cache: Arc<HttpResponseCache>,
     rule_edit_lock: Mutex<()>,
     metrics_lock: Mutex<()>,
 }
@@ -40,7 +43,8 @@ impl ProxyGuardService {
     ) -> Self {
         let rules = rule_repo.load_rules();
         let whitelist = rule_repo.load_whitelist();
-        let engine = RulesEngine::new(rules, whitelist);
+        let engine =
+            RulesEngine::with_default_route(rules, whitelist, DefaultRoute::ForwardUpstream);
         let mut metrics = metrics_repo.load_metrics();
         metrics.cost_per_gb_usd = cost_per_gb_usd;
 
@@ -49,10 +53,12 @@ impl ProxyGuardService {
             metrics_repo,
             proxy_pool,
             cost_per_gb_usd: RwLock::new(cost_per_gb_usd),
+            default_route: RwLock::new(DefaultRoute::ForwardUpstream),
             cached_engine: RwLock::new(engine),
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
             request_logs: RwLock::new(VecDeque::with_capacity(100)),
+            http_cache: Arc::new(HttpResponseCache::new(HttpCacheConfig::default())),
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
         }
@@ -60,6 +66,14 @@ impl ProxyGuardService {
 
     pub fn proxy_pool(&self) -> &Arc<dyn ProxyPoolManagementPort> {
         &self.proxy_pool
+    }
+
+    pub fn http_cache(&self) -> &Arc<HttpResponseCache> {
+        &self.http_cache
+    }
+
+    pub fn configure_cache(&self, config: HttpCacheConfig) {
+        self.http_cache.update_config(config);
     }
 
     pub fn flush_metrics(&self) -> Result<(), String> {
@@ -91,7 +105,12 @@ impl ProxyGuardService {
     fn rebuild_engine_locked(&self) {
         let rules = self.rule_repo.load_rules();
         let whitelist = self.rule_repo.load_whitelist();
-        let new_engine = RulesEngine::new(rules, whitelist);
+        let default_route = self
+            .default_route
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_default();
+        let new_engine = RulesEngine::with_default_route(rules, whitelist, default_route);
         if let Ok(mut lock) = self.cached_engine.write() {
             *lock = new_engine;
         }
@@ -137,17 +156,19 @@ impl FlowOptimizerPort for ProxyGuardService {
 
         let action_str = if decision.is_blocked() {
             match decision.action {
-                RuleAction::Block204 => "Blocked (204)",
-                RuleAction::MockScript => "Mocked (JS Stub)",
-                RuleAction::MockPixel => "Mocked (1x1 Pixel)",
-                RuleAction::BlockEmptyJson => "Blocked (Empty JSON)",
-                RuleAction::Block403 => "Blocked (403)",
-                _ => "Blocked",
+                RuleAction::Block204 => "Blocked (204)".to_string(),
+                RuleAction::MockScript => "Mocked (JS Stub)".to_string(),
+                RuleAction::MockPixel => "Mocked (1x1 Pixel)".to_string(),
+                RuleAction::BlockEmptyJson => "Blocked (Empty JSON)".to_string(),
+                RuleAction::Block403 => "Blocked (403)".to_string(),
+                _ => "Blocked".to_string(),
             }
-        } else if decision.action == RuleAction::BypassDirect {
-            "Bypassed (Direct)"
         } else {
-            "Forwarded (Upstream)"
+            match decision.action {
+                RuleAction::BypassDirect => "Bypassed (Direct)".to_string(),
+                RuleAction::RoutePool(ref pool) => format!("Proxied (Pool: {pool})"),
+                _ => "Forwarded (Upstream)".to_string(),
+            }
         };
 
         let req_id = format!(
@@ -164,7 +185,7 @@ impl FlowOptimizerPort for ProxyGuardService {
             method: method.to_ascii_uppercase(),
             url: url.to_string(),
             host,
-            action: action_str.to_string(),
+            action: action_str,
             category: format!("{:?}", decision.category),
             reason: decision.reason.clone(),
             bytes_saved: decision.estimated_bytes_saved,
@@ -300,15 +321,16 @@ impl RuleManagementPort for ProxyGuardService {
     }
 
     fn add_blocked_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String> {
-        let clean = domain.trim().to_ascii_lowercase();
-        if clean.is_empty() {
+        let trimmed = domain.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
             return Ok(());
         }
+        let clean = trimmed.strip_prefix("*.").unwrap_or(&trimmed).to_string();
 
         let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
         let rule_name = name.unwrap_or(&clean).to_string();
         let rule = Rule::new(
-            format!("custom:{}", clean),
+            format!("custom:{clean}"),
             rule_name,
             RuleCategory::Custom,
             PatternType::DomainSuffix,
@@ -327,10 +349,11 @@ impl RuleManagementPort for ProxyGuardService {
     }
 
     fn add_direct_bypass_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String> {
-        let clean = domain.trim().to_ascii_lowercase();
-        if clean.is_empty() {
+        let trimmed = domain.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
             return Ok(());
         }
+        let clean = trimmed.strip_prefix("*.").unwrap_or(&trimmed).to_string();
 
         let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
         let rule_name = name.unwrap_or(&clean).to_string();
@@ -351,6 +374,74 @@ impl RuleManagementPort for ProxyGuardService {
         self.rule_repo.save_rules(&rules)?;
         self.rebuild_engine_locked();
         Ok(())
+    }
+
+    fn add_pool_route_domain(
+        &self,
+        domain: &str,
+        pool: &str,
+        name: Option<&str>,
+    ) -> Result<(), String> {
+        let trimmed_domain = domain.trim().to_ascii_lowercase();
+        let trimmed_pool = pool.trim().to_string();
+        if trimmed_domain.is_empty() || trimmed_pool.is_empty() {
+            return Err("Both domain and pool must be non-empty".to_string());
+        }
+
+        let (pattern_type, clean, priority) =
+            if let Some(suffix) = trimmed_domain.strip_prefix("*.") {
+                (PatternType::DomainSuffix, suffix.to_string(), 130)
+            } else {
+                (PatternType::ExactDomain, trimmed_domain, 140)
+            };
+
+        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
+        let rule_name = name
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("{clean} -> {trimmed_pool}"));
+        let rule_id = format!(
+            "pool:{}:{}:{}",
+            if pattern_type == PatternType::ExactDomain {
+                "exact"
+            } else {
+                "suffix"
+            },
+            clean,
+            trimmed_pool
+        );
+        let rule = Rule::new(
+            rule_id,
+            rule_name,
+            RuleCategory::Custom,
+            pattern_type,
+            clean,
+            RuleAction::RoutePool(trimmed_pool),
+            priority,
+            "User defined domain split-routing rule to named proxy pool",
+        );
+
+        let mut rules = self.rule_repo.load_rules();
+        rules.retain(|r| r.id != rule.id);
+        rules.push(rule);
+        self.rule_repo.save_rules(&rules)?;
+        self.rebuild_engine_locked();
+        Ok(())
+    }
+
+    fn set_default_route(&self, route: DefaultRoute) -> Result<(), String> {
+        let _guard = self.rule_edit_lock.lock().map_err(|e| e.to_string())?;
+        if let Ok(mut lock) = self.default_route.write() {
+            *lock = route;
+        }
+        self.rebuild_engine_locked();
+        Ok(())
+    }
+
+    fn get_default_route(&self) -> DefaultRoute {
+        self.default_route
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -435,6 +526,24 @@ impl MetricsPort for ProxyGuardService {
     fn clear_request_logs(&self) {
         if let Ok(mut logs) = self.request_logs.write() {
             logs.clear();
+        }
+    }
+
+    fn record_upstream_transfer(&self, pool_key: &str, bytes_tx: u64, bytes_rx: u64) {
+        if let Ok(mut metrics) = self.cached_metrics.write() {
+            metrics.record_upstream_transfer(pool_key, bytes_tx, bytes_rx);
+        }
+    }
+
+    fn record_cache_hit(&self, bytes_saved: u64) {
+        if let Ok(mut metrics) = self.cached_metrics.write() {
+            metrics.record_cache_hit(bytes_saved);
+        }
+    }
+
+    fn record_cache_miss(&self) {
+        if let Ok(mut metrics) = self.cached_metrics.write() {
+            metrics.record_cache_miss();
         }
     }
 }

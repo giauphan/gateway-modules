@@ -4,8 +4,8 @@
 //! Ensures high-level business logic is decoupled from transport, frameworks, and storage.
 
 use crate::domain::{
-    FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto, ProxyRotationStrategy,
-    ProxySelectionQuery, RequestLogEntry, Rule, RuleCategory, UpstreamProxy,
+    DefaultRoute, FilterDecision, FlowMetrics, FlowOptimizationResult, FlowRequestDto,
+    ProxyRotationStrategy, ProxySelectionQuery, RequestLogEntry, Rule, RuleCategory, UpstreamProxy,
 };
 
 /// Inbound Port: Application operations for analyzing and optimizing traffic flows.
@@ -36,6 +36,20 @@ pub trait RuleManagementPort: Send + Sync {
 
     /// Adds a domain to the custom direct-bypass (split-routing) list (0 GB paid proxy).
     fn add_direct_bypass_domain(&self, domain: &str, name: Option<&str>) -> Result<(), String>;
+
+    /// Adds a domain split-routing rule directing traffic to a specific named upstream proxy pool.
+    fn add_pool_route_domain(
+        &self,
+        domain: &str,
+        pool: &str,
+        name: Option<&str>,
+    ) -> Result<(), String>;
+
+    /// Sets the default fallback route when no rule matches.
+    fn set_default_route(&self, route: DefaultRoute) -> Result<(), String>;
+
+    /// Returns the currently active default fallback route.
+    fn get_default_route(&self) -> DefaultRoute;
 }
 
 /// Inbound Port: Tracking and querying bandwidth and cost savings.
@@ -60,6 +74,15 @@ pub trait MetricsPort: Send + Sync {
 
     /// Clears the request log buffer.
     fn clear_request_logs(&self);
+
+    /// Records actual metered wire bytes transferred for a pool (or `"direct"`).
+    fn record_upstream_transfer(&self, pool_key: &str, bytes_tx: u64, bytes_rx: u64);
+
+    /// Records a safe HTTP response cache hit and bytes saved.
+    fn record_cache_hit(&self, bytes_saved: u64);
+
+    /// Records a safe HTTP response cache miss.
+    fn record_cache_miss(&self);
 }
 
 /// Outward Port: Storage abstraction for persisting and loading rules and configuration.

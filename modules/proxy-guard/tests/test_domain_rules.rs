@@ -1,4 +1,6 @@
-use proxy_guard::domain::{PatternType, ResourceType, Rule, RuleAction, RuleCategory};
+use proxy_guard::domain::{
+    DefaultRoute, PatternType, ResourceType, Rule, RuleAction, RuleCategory,
+};
 use proxy_guard::rules_engine::RulesEngine;
 
 #[test]
@@ -335,4 +337,86 @@ fn test_fbcdn_scontent_blocked_while_static_preserved() {
 
     let stripe_telemetry = engine.evaluate("https://m.stripe.com/6", "POST", Some("xhr"));
     assert_eq!(stripe_telemetry.action, RuleAction::ForwardUpstream);
+}
+
+#[test]
+fn test_split_routing_precedence_reject_direct_and_named_pools() {
+    let mut rules = RulesEngine::builtin_rules();
+    // Wildcard suffix -> residential
+    rules.push(Rule::new(
+        "pool:suffix:sheerid",
+        "SheerID Suffix",
+        RuleCategory::Custom,
+        PatternType::DomainSuffix,
+        "sheerid.com",
+        RuleAction::RoutePool("residential".to_string()),
+        130,
+        "SheerID wildcard pool",
+    ));
+    // Exact domain -> higher priority (overrides suffix if different pool)
+    rules.push(Rule::new(
+        "pool:exact:services.sheerid.com",
+        "SheerID Exact",
+        RuleCategory::Custom,
+        PatternType::ExactDomain,
+        "services.sheerid.com",
+        RuleAction::RoutePool("residential".to_string()),
+        140,
+        "SheerID exact pool",
+    ));
+    // Muse.ai -> static_isp_us
+    rules.push(Rule::new(
+        "pool:suffix:muse.ai",
+        "Muse.ai Pool",
+        RuleCategory::Custom,
+        PatternType::DomainSuffix,
+        "muse.ai",
+        RuleAction::RoutePool("static_isp_us".to_string()),
+        130,
+        "Muse.ai static US ISP",
+    ));
+
+    let engine = RulesEngine::with_default_route(rules, Vec::new(), DefaultRoute::Direct);
+
+    // 1. Sensitive SheerID -> Pool("residential")
+    let d_sheerid = engine.evaluate(
+        "https://services.sheerid.com/rest/v2/verification",
+        "POST",
+        None,
+    );
+    assert_eq!(
+        d_sheerid.action,
+        RuleAction::RoutePool("residential".to_string())
+    );
+    assert_eq!(d_sheerid.target_pool(), Some("residential"));
+    assert!(!d_sheerid.is_blocked());
+
+    let d_sheerid_sub = engine.evaluate("https://my.sheerid.com/verify", "GET", None);
+    assert_eq!(
+        d_sheerid_sub.action,
+        RuleAction::RoutePool("residential".to_string())
+    );
+
+    // 2. Muse.ai & auth subdomain -> Pool("static_isp_us")
+    let d_muse = engine.evaluate("https://auth.muse.ai/oauth/login", "POST", None);
+    assert_eq!(
+        d_muse.action,
+        RuleAction::RoutePool("static_isp_us".to_string())
+    );
+
+    // 3. Built-in tracker/font -> Reject
+    let d_gtm = engine.evaluate(
+        "https://www.googletagmanager.com/gtm.js",
+        "GET",
+        Some("script"),
+    );
+    assert!(d_gtm.is_blocked());
+
+    // 4. Unmatched public domain -> DefaultRoute::Direct
+    let d_other = engine.evaluate(
+        "https://cdn.example-static.org/app.js",
+        "GET",
+        Some("script"),
+    );
+    assert_eq!(d_other.action, RuleAction::BypassDirect);
 }

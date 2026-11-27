@@ -98,6 +98,7 @@ fn test_storage_metrics_persistence() {
         upstream_bytes_used: 100_000,
         cost_per_gb_usd: 3.5,
         estimated_cost_saved_usd: 0.0175,
+        ..Default::default()
     };
 
     assert!(storage.save_metrics(&m1).is_ok());

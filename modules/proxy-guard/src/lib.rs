@@ -15,6 +15,7 @@
 
 pub mod domain;
 pub mod handlers;
+pub mod http_cache;
 pub mod mcp;
 pub mod mock_factory;
 pub mod ports;

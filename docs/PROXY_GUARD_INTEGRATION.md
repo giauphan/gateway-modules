@@ -322,9 +322,23 @@ The interactive web dashboard displays:
    - Domain, route path, category badge, timestamp, and bytes saved per entry.
    - **One-click "Clear Logs" button** with automatic host/path resolution for reverse proxy environments.
 
-### 3.3 Domain Split Routing, Caching & TLS Fingerprint Strategy (v1.14.0+)
+### 3.3 Domain Split Routing, Caching & TLS Fingerprint Strategy (v1.15.0+)
 
 For strict anti-bot platforms such as **`services.sheerid.com`** and **`muse.ai`**, the most effective way to cut paid residential proxy GB consumption is **not just caching**, but **domain-based split routing** so heavy non-sensitive assets never traverse pay-per-GB proxies while sensitive hosts retain their exact original browser TLS fingerprint.
+
+#### Built-In v1.15.0 Split Routing, Sticky Sessions & Safe HTTP Cache
+- **3-Way Split Routing (`Reject` / `Direct` / `Pool(name)`)**:
+  - `Reject`: dropped early at `HTTP CONNECT` with `403 Forbidden` (**0 upstream connections, 0 upstream bytes**).
+  - `Direct`: dials target directly with mandatory SSRF protection (blocks loopback, RFC1918, ULA, and `169.254.169.254`).
+  - `Pool(name)`: fail-closed routing to a named upstream pool (e.g. `services.sheerid.com` & `*.sheerid.com` → `Pool("residential")`; `muse.ai` & `*.muse.ai` → `Pool("static_isp_us")`).
+  - Deterministic precedence: **explicit user rules (exact > wildcard/suffix) → built-in catalog (`Reject`) → configurable `default_route` (`direct` / `forward_upstream` / `pool`)**.
+- **Sticky Sessions for Rotating Residential Proxies**:
+  - Configure `sticky_session: { enabled: true, ttl_secs: 600, username_template: "{base_user}_cr.{country}_sid.{session_id}_ttl.{ttl_mins}m" }` per upstream proxy (compatible with DataImpulse, Oxylabs, Evomi, IPRoyal).
+  - Session key resolution priority: `Proxy-Authorization` (`<pool>:<session_id>` or `session-<id>`) → `X-Proxy-Session` header → auto-generated TTL-pinned internal session ID.
+- **Safe Bounded HTTP Response Cache (Opt-In, No MITM)**:
+  - Bounded LRU cache for repeatable plain-HTTP `GET`/`HEAD` API reads with `ETag`/`If-None-Match` revalidation and per-domain TTL overrides.
+  - Mandatory bypass for write methods (`POST`/`PUT`/`PATCH`/`DELETE`), `Cookie`/`Authorization` headers, `Cache-Control: no-store`/`private`, and sensitive paths (`login`, `auth`, `token`, `oauth`, `verify`, `submit`).
+  - Real-time metering in `GET /metrics`: `bytes_tx`, `bytes_rx`, `pool_stats`, `cache_hits`, `cache_misses`, and `cache_bytes_saved`.
 
 #### Recommended 3-Tier Solution Architecture
 

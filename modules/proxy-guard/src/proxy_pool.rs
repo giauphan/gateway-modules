@@ -9,17 +9,27 @@ use crate::domain::{
 };
 use crate::ports::{ProxyPoolManagementPort, ProxyPoolStoragePort};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 const MAX_STICKY_SESSIONS: usize = 10_000;
+const DEFAULT_STICKY_TTL_SECS: u64 = 600;
+
+#[derive(Debug, Clone)]
+struct StickyAssignment {
+    proxy_id: String,
+    session_token: String,
+    expires_at: Instant,
+}
 
 pub struct ProxyPool {
     storage: Arc<dyn ProxyPoolStoragePort>,
     proxies: RwLock<Vec<UpstreamProxy>>,
     strategy: RwLock<ProxyRotationStrategy>,
     rr_counter: AtomicUsize,
-    sticky_sessions: RwLock<HashMap<String, String>>,
+    session_epoch: AtomicU64,
+    sticky_sessions: RwLock<HashMap<String, StickyAssignment>>,
     mutation_lock: Mutex<()>,
 }
 
@@ -35,6 +45,7 @@ impl ProxyPool {
             proxies: RwLock::new(loaded),
             strategy: RwLock::new(initial_strategy),
             rr_counter: AtomicUsize::new(initial_rr),
+            session_epoch: AtomicU64::new(1),
             sticky_sessions: RwLock::new(HashMap::new()),
             mutation_lock: Mutex::new(()),
         }
@@ -48,12 +59,107 @@ impl ProxyPool {
         self.select_proxy(query).map(|p| p.to_playwright_config())
     }
 
+    /// Resolves the active sticky session token for a selected proxy, honoring TTL expiry
+    /// and auto-generating a pinned internal session ID when `sticky_session.enabled == true`.
+    fn resolve_effective_session_token(
+        &self,
+        selected: &UpstreamProxy,
+        query: &ProxySelectionQuery,
+    ) -> Option<String> {
+        let now = Instant::now();
+        let sticky_cfg = selected.sticky_session.as_ref().filter(|c| c.enabled);
+
+        if let Some(ref sid) = query.session_id {
+            let trimmed = sid.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Some(cfg) = sticky_cfg {
+                let key = format!(
+                    "sid:{}:{}",
+                    selected.pool_name.as_deref().unwrap_or("default"),
+                    trimmed
+                );
+                if let Ok(sessions) = self.sticky_sessions.read() {
+                    if let Some(existing) = sessions.get(&key) {
+                        if now < existing.expires_at {
+                            return Some(existing.session_token.clone());
+                        }
+                    }
+                }
+                let epoch = self.session_epoch.fetch_add(1, Ordering::Relaxed);
+                let token = format!("{trimmed}-r{epoch}");
+                let ttl = Duration::from_secs(cfg.ttl_secs.max(1));
+                if let Ok(mut sessions) = self.sticky_sessions.write() {
+                    if sessions.len() >= MAX_STICKY_SESSIONS {
+                        sessions.retain(|_, v| now < v.expires_at);
+                    }
+                    sessions.insert(
+                        key,
+                        StickyAssignment {
+                            proxy_id: selected.id.clone(),
+                            session_token: token.clone(),
+                            expires_at: now + ttl,
+                        },
+                    );
+                }
+                return Some(token);
+            }
+            return Some(trimmed.to_string());
+        }
+
+        // No client session_id supplied: auto-generate pinned session when sticky_session is enabled
+        if let Some(cfg) = sticky_cfg {
+            let auto_key = format!(
+                "auto:{}",
+                selected.pool_name.as_deref().unwrap_or(&selected.id)
+            );
+            if let Ok(sessions) = self.sticky_sessions.read() {
+                if let Some(existing) = sessions.get(&auto_key) {
+                    if now < existing.expires_at {
+                        return Some(existing.session_token.clone());
+                    }
+                }
+            }
+            let epoch = self.session_epoch.fetch_add(1, Ordering::Relaxed);
+            let token = format!("auto-session-{epoch}");
+            let ttl = Duration::from_secs(cfg.ttl_secs.max(1));
+            if let Ok(mut sessions) = self.sticky_sessions.write() {
+                if sessions.len() >= MAX_STICKY_SESSIONS {
+                    sessions.retain(|_, v| now < v.expires_at);
+                }
+                sessions.insert(
+                    auto_key,
+                    StickyAssignment {
+                        proxy_id: selected.id.clone(),
+                        session_token: token.clone(),
+                        expires_at: now + ttl,
+                    },
+                );
+            }
+            return Some(token);
+        }
+
+        None
+    }
+
     fn filter_candidates(
         all_proxies: Vec<UpstreamProxy>,
         query: &ProxySelectionQuery,
     ) -> Vec<UpstreamProxy> {
         let mut candidates: Vec<UpstreamProxy> =
             all_proxies.into_iter().filter(|p| p.enabled).collect();
+
+        // Explicit named pool filter (strict / fail-closed so sensitive traffic never leaks to wrong pool)
+        if let Some(ref pool) = query.pool {
+            let trimmed = pool.trim();
+            if !trimmed.is_empty() {
+                candidates.retain(|p| p.matches_pool(trimmed));
+                if candidates.is_empty() {
+                    return Vec::new();
+                }
+            }
+        }
 
         if let Some(ref c) = query.country {
             let target_country = c.trim().to_ascii_uppercase();
@@ -110,20 +216,46 @@ impl ProxyPool {
         match strategy {
             ProxyRotationStrategy::StickySession => {
                 if let Some(session_id) = session_id {
+                    let now = Instant::now();
                     if let Ok(sessions) = self.sticky_sessions.read() {
-                        if let Some(assigned_id) = sessions.get(session_id) {
-                            if let Some(p) = candidates.iter().find(|p| p.id == *assigned_id) {
-                                return Some(p.clone());
+                        if let Some(assignment) = sessions.get(session_id) {
+                            if now < assignment.expires_at {
+                                if let Some(p) =
+                                    candidates.iter().find(|p| p.id == assignment.proxy_id)
+                                {
+                                    return Some(p.clone());
+                                }
                             }
                         }
                     }
                     let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
                     let selected = candidates[idx].clone();
+                    let ttl_secs = selected
+                        .sticky_session
+                        .as_ref()
+                        .map(|s| s.ttl_secs)
+                        .unwrap_or(DEFAULT_STICKY_TTL_SECS);
+                    let epoch = self.session_epoch.fetch_add(1, Ordering::Relaxed);
+                    let token = if epoch == 1 {
+                        session_id.clone()
+                    } else {
+                        format!("{session_id}:{epoch}")
+                    };
                     if let Ok(mut sessions) = self.sticky_sessions.write() {
                         if sessions.len() >= MAX_STICKY_SESSIONS {
-                            sessions.clear();
+                            sessions.retain(|_, v| now < v.expires_at);
+                            if sessions.len() >= MAX_STICKY_SESSIONS {
+                                sessions.clear();
+                            }
                         }
-                        sessions.insert(session_id.clone(), selected.id.clone());
+                        sessions.insert(
+                            session_id.clone(),
+                            StickyAssignment {
+                                proxy_id: selected.id.clone(),
+                                session_token: token,
+                                expires_at: now + Duration::from_secs(ttl_secs),
+                            },
+                        );
                     }
                     Some(selected)
                 } else {
@@ -219,7 +351,7 @@ impl ProxyPoolManagementPort for ProxyPool {
 
         // Clean up sticky session references
         if let Ok(mut sessions) = self.sticky_sessions.write() {
-            sessions.retain(|_, v| v != id);
+            sessions.retain(|_, v| v.proxy_id != id);
         }
 
         Ok(())
@@ -260,8 +392,9 @@ impl ProxyPoolManagementPort for ProxyPool {
         });
 
         let selected = self.apply_strategy(strategy, &candidates, query.session_id.as_ref())?;
-        if let Some(ref sid) = query.session_id {
-            Some(selected.with_sticky_session(sid))
+        let effective_session = self.resolve_effective_session_token(&selected, query);
+        if let Some(token) = effective_session {
+            Some(selected.with_sticky_session_for(&token, query.country.as_deref()))
         } else {
             Some(selected)
         }
@@ -273,10 +406,17 @@ impl ProxyPoolManagementPort for ProxyPool {
         query: &ProxySelectionQuery,
     ) -> Option<UpstreamProxy> {
         let all_proxies = self.list_proxies();
-        let fallback_candidates: Vec<UpstreamProxy> = all_proxies
+        let mut fallback_candidates: Vec<UpstreamProxy> = all_proxies
             .into_iter()
             .filter(|p| p.enabled && p.id != failed_id)
             .collect();
+
+        if let Some(ref pool) = query.pool {
+            let trimmed = pool.trim();
+            if !trimmed.is_empty() {
+                fallback_candidates.retain(|p| p.matches_pool(trimmed));
+            }
+        }
 
         if fallback_candidates.is_empty() {
             return None;
