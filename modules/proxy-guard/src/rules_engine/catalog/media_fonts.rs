@@ -87,6 +87,27 @@ pub fn media_and_font_rules() -> Vec<Rule> {
             70,
             "Blocks Meta AI VM heavy hatch assets",
         ),
+        // ── Split Routing (Bypass Paid Proxy → Direct for Public Static CDNs) ─
+        Rule::new(
+            "split-static-fbcdn",
+            "Meta Static Core JS/CSS CDN (Direct Bypass)",
+            RuleCategory::HeavyMedia,
+            PatternType::DomainSuffix,
+            "static.xx.fbcdn.net",
+            RuleAction::BypassDirect,
+            82,
+            "Routes public static.xx.fbcdn.net JS/CSS bundles direct (0 GB paid proxy, preserves TLS & browser cache)",
+        ),
+        Rule::new(
+            "split-js-stripe",
+            "Stripe Public JS SDK CDN (Direct Bypass)",
+            RuleCategory::HeavyMedia,
+            PatternType::DomainSuffix,
+            "js.stripe.com",
+            RuleAction::BypassDirect,
+            82,
+            "Routes public js.stripe.com SDK direct (0 GB paid proxy while m.stripe.com/m.stripe.network stay on proxy)",
+        ),
         // ── Heavy Web Fonts ───────────────────────────────────────────────────
         Rule::new(
             "fonts-woff2",

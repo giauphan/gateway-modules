@@ -319,11 +319,20 @@ fn test_fbcdn_scontent_blocked_while_static_preserved() {
     );
     assert!(scontent.is_blocked());
 
-    // Core Meta JS/CSS on static.xx.fbcdn.net must NOT be blocked
+    // Core Meta JS/CSS on static.xx.fbcdn.net must NOT be blocked and uses BypassDirect split routing
     let static_js = engine.evaluate(
         "https://static.xx.fbcdn.net/rsrc.php/v3/core.js",
         "GET",
         Some("script"),
     );
     assert!(!static_js.is_blocked());
+    assert_eq!(static_js.action, RuleAction::BypassDirect);
+
+    // Stripe public JS SDK uses BypassDirect split routing while m.stripe.com stays ForwardUpstream
+    let stripe_js = engine.evaluate("https://js.stripe.com/v3/", "GET", Some("script"));
+    assert!(!stripe_js.is_blocked());
+    assert_eq!(stripe_js.action, RuleAction::BypassDirect);
+
+    let stripe_telemetry = engine.evaluate("https://m.stripe.com/6", "POST", Some("xhr"));
+    assert_eq!(stripe_telemetry.action, RuleAction::ForwardUpstream);
 }
