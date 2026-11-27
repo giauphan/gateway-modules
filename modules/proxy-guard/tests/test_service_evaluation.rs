@@ -541,3 +541,115 @@ fn test_v1_15_2_default_route_and_transfer_cache_metrics_persist_across_restart(
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_v1_15_3_short_run_metrics_flush_and_example_config_ip_alignment() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_short_flush_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    );
+
+    // 1. Short run (16 updates, well below the old 64 threshold) flushes to disk without waiting for Drop
+    for _ in 0..16 {
+        service.record_upstream_transfer("residential", 50, 200);
+    }
+    let storage_reader = FileStorageAdapter::new(&temp_dir);
+    let on_disk = proxy_guard::ports::MetricsStoragePort::load_metrics(&storage_reader);
+    assert_eq!(on_disk.bytes_tx, 800);
+    assert_eq!(on_disk.bytes_rx, 3200);
+
+    // 2. Verify config.example.json IP-alignment rules for SheerID + CAPTCHA and Muse.ai + Meta
+    let example_path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.example.json");
+    let raw = std::fs::read_to_string(&example_path).expect("read config.example.json");
+    let cfg: serde_json::Value = serde_json::from_str(&raw).expect("parse config.example.json");
+
+    if let Some(dr_val) = cfg.get("default_route") {
+        let route = DefaultRoute::from_json_value(dr_val).expect("valid default_route");
+        service.set_default_route(route).expect("set default_route");
+    }
+    for item in cfg["routing_rules"]
+        .as_array()
+        .expect("routing_rules array")
+    {
+        let domain = item["domain"].as_str().expect("domain");
+        let action = item["action"].as_str().expect("action");
+        match action {
+            "pool" => service
+                .add_pool_route_domain(domain, item["pool"].as_str().expect("pool"), None)
+                .expect("add pool route"),
+            "direct" => service
+                .add_direct_bypass_domain(domain, None)
+                .expect("add direct route"),
+            "reject" => service
+                .add_blocked_domain(domain, None)
+                .expect("add reject route"),
+            _ => {}
+        }
+    }
+
+    // SheerID + CAPTCHAs all share residential pool
+    for host in [
+        "https://services.sheerid.com/rest/v2/verification",
+        "https://my.sheerid.com/verify",
+        "https://challenges.cloudflare.com/turnstile/v0/api.js",
+        "https://api.hcaptcha.com/checksiteconfig",
+        "https://www.recaptcha.net/recaptcha/api.js",
+    ] {
+        assert_eq!(
+            service.evaluate_url(host, "GET", None).action,
+            RuleAction::RoutePool("residential".to_string()),
+            "{host} must route to residential pool"
+        );
+    }
+
+    // Muse.ai + Meta auth + Stripe telemetry all share static_isp_us pool
+    for host in [
+        "https://muse.ai/app",
+        "https://auth.muse.ai/login",
+        "https://auth.meta.com/oauth",
+        "https://accountscenter.meta.com/profiles",
+        "https://m.stripe.com/6",
+    ] {
+        assert_eq!(
+            service.evaluate_url(host, "GET", None).action,
+            RuleAction::RoutePool("static_isp_us".to_string()),
+            "{host} must route to static_isp_us pool"
+        );
+    }
+
+    // Public CDNs stay DIRECT, trackers REJECT
+    assert_eq!(
+        service
+            .evaluate_url(
+                "https://static.xx.fbcdn.net/rsrc.php/v3/core.js",
+                "GET",
+                None
+            )
+            .action,
+        RuleAction::BypassDirect
+    );
+    assert!(service
+        .evaluate_url("https://www.google-analytics.com/g/collect", "POST", None)
+        .is_blocked());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

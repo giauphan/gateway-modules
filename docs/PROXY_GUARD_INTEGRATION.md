@@ -338,7 +338,14 @@ For strict anti-bot platforms such as **`services.sheerid.com`** and **`muse.ai`
 - **Safe Bounded HTTP Response Cache (Opt-In, No MITM)**:
   - Bounded LRU cache for repeatable plain-HTTP `GET`/`HEAD` API reads with `ETag`/`If-None-Match` revalidation and per-domain TTL overrides.
   - Mandatory bypass for write methods (`POST`/`PUT`/`PATCH`/`DELETE`), `Cookie`/`Authorization` headers, `Cache-Control: no-store`/`private`, and sensitive paths (`login`, `auth`, `token`, `oauth`, `verify`, `submit`).
-  - Real-time metering in `GET /metrics`: `bytes_tx`, `bytes_rx`, `pool_stats`, `cache_hits`, `cache_misses`, and `cache_bytes_saved`.
+  - Real-time metering in `GET /metrics`: `bytes_tx`, `bytes_rx`, `pool_stats`, `cache_hits`, `cache_misses`, and `cache_bytes_saved` (auto-flushed every 16 updates or 5 seconds, plus on graceful exit).
+
+> [!IMPORTANT]
+> **Critical IP-Alignment Rule When Using `default_route: "direct"`:**
+> Never route only the bare apex domain when `default_route` is `"direct"`:
+> - **SheerID + CAPTCHA**: Route `services.sheerid.com`, `*.sheerid.com` (`my.sheerid.com`, `verify.sheerid.com`), **and** CAPTCHA domains (`challenges.cloudflare.com`, `*.hcaptcha.com`, `*.recaptcha.net`) through the **same `residential` pool + `session_id`**. If CAPTCHA falls back to `direct` (local IP) while SheerID uses a US residential IP, verification tokens will be rejected for IP mismatch.
+> - **Muse.ai + Meta Login**: Route `muse.ai`, `*.muse.ai`, **`auth.meta.com`, `*.meta.com`**, and Stripe telemetry (`m.stripe.com`, `m.stripe.network`, `api.stripe.com`) through the **same `static_isp_us` pool** (while keeping `static.xx.fbcdn.net` and `js.stripe.com` on `direct`), preventing login/session IP splits that trigger Meta checkpoints or Waitlist screens.
+> - See [`modules/proxy-guard/config.example.json`](../modules/proxy-guard/config.example.json) for the complete IP-aligned preset.
 
 #### Recommended 3-Tier Solution Architecture
 

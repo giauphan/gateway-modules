@@ -45,7 +45,37 @@
       "domain": "*.sheerid.com",
       "action": "pool",
       "pool": "residential",
-      "name": "SheerID Subdomains (Residential)"
+      "name": "SheerID Subdomains (my/verify.sheerid.com -> Residential)"
+    },
+    {
+      "domain": "challenges.cloudflare.com",
+      "action": "pool",
+      "pool": "residential",
+      "name": "Cloudflare Turnstile (IP-aligned with SheerID Residential)"
+    },
+    {
+      "domain": "hcaptcha.com",
+      "action": "pool",
+      "pool": "residential",
+      "name": "hCaptcha Apex (IP-aligned with SheerID Residential)"
+    },
+    {
+      "domain": "*.hcaptcha.com",
+      "action": "pool",
+      "pool": "residential",
+      "name": "hCaptcha Subdomains (IP-aligned with SheerID Residential)"
+    },
+    {
+      "domain": "recaptcha.net",
+      "action": "pool",
+      "pool": "residential",
+      "name": "reCAPTCHA Apex (IP-aligned with SheerID Residential)"
+    },
+    {
+      "domain": "*.recaptcha.net",
+      "action": "pool",
+      "pool": "residential",
+      "name": "reCAPTCHA Subdomains (IP-aligned with SheerID Residential)"
     },
     {
       "domain": "muse.ai",
@@ -63,7 +93,31 @@
       "domain": "auth.meta.com",
       "action": "pool",
       "pool": "static_isp_us",
-      "name": "Meta Auth Domain (Static US ISP)"
+      "name": "Meta Auth Domain (IP-aligned with Muse.ai Static US ISP)"
+    },
+    {
+      "domain": "*.meta.com",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Meta Login & Accounts Center Redirects (Static US ISP)"
+    },
+    {
+      "domain": "m.stripe.com",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Stripe Fraud Telemetry (Static US ISP)"
+    },
+    {
+      "domain": "m.stripe.network",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Stripe Network Telemetry (Static US ISP)"
+    },
+    {
+      "domain": "api.stripe.com",
+      "action": "pool",
+      "pool": "static_isp_us",
+      "name": "Stripe API (Static US ISP)"
     },
     {
       "domain": "static.xx.fbcdn.net",
