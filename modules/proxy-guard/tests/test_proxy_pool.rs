@@ -883,3 +883,78 @@ fn test_oxylabs_datacenter_country_adaptation_and_round_robin() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_v1_15_4_mixed_country_round_robin_lowest_failures_tiebreak_and_407_failover() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_v1_15_4_rr_failover_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let storage = Arc::new(FileStorageAdapter::new(&temp_dir));
+    let pool = ProxyPool::new(storage, ProxyRotationStrategy::LowestFailures);
+
+    // Proxy 1 has explicit -cc-us (country = Some("US")); Proxy 2 is unpinned adaptable DC (country = None)
+    let p_resi = UpstreamProxy::parse(
+        "http://customer-resi_abc-cc-us:pass1@pr.oxylabs.io:7777",
+        None,
+        None,
+        None,
+    )
+    .expect("parse resi");
+    let p_dc = UpstreamProxy::parse(
+        "http://user-dc_xyz:pass2@dc.oxylabs.io:8000",
+        None,
+        None,
+        None,
+    )
+    .expect("parse dc");
+    let resi_id = pool.add_proxy(p_resi).expect("add resi");
+    pool.add_proxy(p_dc).expect("add dc");
+
+    // 1. LowestFailures with tied failure_count (0 == 0) + country="US" MUST round-robin across BOTH proxies!
+    let q_us = ProxySelectionQuery {
+        country: Some("US".to_string()),
+        ..Default::default()
+    };
+    let s1 = pool.select_proxy(&q_us).expect("s1");
+    let s2 = pool.select_proxy(&q_us).expect("s2");
+    assert_ne!(
+        s1.host, s2.host,
+        "LowestFailures tie-break + mixed explicit/unpinned country must rotate across both proxies"
+    );
+
+    // 2. Simulate 3 consecutive HTTP 407 failures on pr.oxylabs.io:7777 -> RoundRobin & StickySession MUST skip it!
+    for _ in 0..3 {
+        pool.record_proxy_result(&resi_id, false);
+    }
+
+    let q_rr = ProxySelectionQuery {
+        country: Some("US".to_string()),
+        strategy: Some(ProxyRotationStrategy::RoundRobin),
+        ..Default::default()
+    };
+    for _ in 0..3 {
+        let sel = pool.select_proxy(&q_rr).expect("healthy rr");
+        assert_eq!(
+            sel.host, "dc.oxylabs.io",
+            "RoundRobin must skip proxy with >=3 consecutive failures (HTTP 407)"
+        );
+    }
+
+    // 3. StickySession pinned to a proxy that becomes unhealthy migrates cleanly to the healthy proxy
+    let q_sticky = ProxySelectionQuery {
+        country: Some("US".to_string()),
+        session_id: Some("stuck-sess".to_string()),
+        strategy: Some(ProxyRotationStrategy::StickySession),
+        ..Default::default()
+    };
+    let sel_sticky = pool.select_proxy(&q_sticky).expect("sticky failover");
+    assert_eq!(sel_sticky.host, "dc.oxylabs.io");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

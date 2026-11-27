@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 const MAX_STICKY_SESSIONS: usize = 10_000;
 const DEFAULT_STICKY_TTL_SECS: u64 = 600;
+const UNHEALTHY_FAILURE_THRESHOLD: u32 = 3;
 
 #[derive(Debug, Clone)]
 struct StickyAssignment {
@@ -163,20 +164,24 @@ impl ProxyPool {
 
         if let Some(ref c) = query.country {
             let target_country = c.trim().to_ascii_uppercase();
-            let country_matches: Vec<UpstreamProxy> = candidates
-                .iter()
-                .filter(|p| {
-                    p.country
-                        .as_ref()
-                        .map(|pc| pc.eq_ignore_ascii_case(&target_country))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            if !country_matches.is_empty() {
-                candidates = country_matches;
+            let mut matched: Vec<UpstreamProxy> = Vec::with_capacity(candidates.len());
+            for p in &candidates {
+                if p.country
+                    .as_ref()
+                    .is_some_and(|pc| pc.eq_ignore_ascii_case(&target_country))
+                {
+                    matched.push(p.clone());
+                } else if p.country.is_none() {
+                    // Include unpinned proxies that support dynamic country adaptation (e.g. Oxylabs DC/Resi)
+                    if let Some(adapted) = p.adapt_country(&target_country) {
+                        matched.push(adapted);
+                    }
+                }
+            }
+            if !matched.is_empty() {
+                candidates = matched;
             } else {
-                // If no exact match exists, adapt dynamic residential proxies (e.g. Oxylabs)
+                // Fallback: adapt proxies pinned to another country if they support dynamic country adaptation
                 let adapted: Vec<UpstreamProxy> = candidates
                     .iter()
                     .filter_map(|p| p.adapt_country(&target_country))
@@ -213,6 +218,18 @@ impl ProxyPool {
         if candidates.is_empty() {
             return None;
         }
+        // Prefer healthy proxies (< UNHEALTHY_FAILURE_THRESHOLD consecutive failures, e.g. HTTP 407);
+        // fall back to all candidates only when every proxy in the pool is currently failing.
+        let healthy: Vec<&UpstreamProxy> = candidates
+            .iter()
+            .filter(|p| p.failure_count < UNHEALTHY_FAILURE_THRESHOLD)
+            .collect();
+        let active: Vec<&UpstreamProxy> = if !healthy.is_empty() {
+            healthy
+        } else {
+            candidates.iter().collect()
+        };
+
         match strategy {
             ProxyRotationStrategy::StickySession => {
                 if let Some(session_id) = session_id {
@@ -220,16 +237,16 @@ impl ProxyPool {
                     if let Ok(sessions) = self.sticky_sessions.read() {
                         if let Some(assignment) = sessions.get(session_id) {
                             if now < assignment.expires_at {
-                                if let Some(p) =
-                                    candidates.iter().find(|p| p.id == assignment.proxy_id)
+                                // Only reuse pinned proxy if it is still in the healthy active set
+                                if let Some(p) = active.iter().find(|p| p.id == assignment.proxy_id)
                                 {
-                                    return Some(p.clone());
+                                    return Some((*p).clone());
                                 }
                             }
                         }
                     }
-                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                    let selected = candidates[idx].clone();
+                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % active.len();
+                    let selected = active[idx].clone();
                     let ttl_secs = selected
                         .sticky_session
                         .as_ref()
@@ -259,16 +276,30 @@ impl ProxyPool {
                     }
                     Some(selected)
                 } else {
-                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                    Some(candidates[idx].clone())
+                    let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % active.len();
+                    Some(active[idx].clone())
                 }
             }
             ProxyRotationStrategy::LowestFailures => {
-                candidates.iter().min_by_key(|p| p.failure_count).cloned()
+                let min_failures = candidates.iter().map(|p| p.failure_count).min()?;
+                let tied: Vec<&UpstreamProxy> = candidates
+                    .iter()
+                    .filter(|p| p.failure_count == min_failures)
+                    .collect();
+                if tied.len() == 1 {
+                    return Some(tied[0].clone());
+                }
+                let current = self.rr_counter.fetch_add(1, Ordering::Relaxed);
+                let next = current.wrapping_add(1);
+                if let Err(e) = self.storage.save_rr_counter(next) {
+                    eprintln!("[proxy-guard] Warning: Failed to persist round-robin counter: {e}");
+                }
+                let idx = current % tied.len();
+                Some(tied[idx].clone())
             }
             ProxyRotationStrategy::Random => {
-                if candidates.len() <= 1 {
-                    return candidates.first().cloned();
+                if active.len() <= 1 {
+                    return active.first().map(|p| (*p).clone());
                 }
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -276,8 +307,8 @@ impl ProxyPool {
                     .unwrap_or(0);
                 let count = self.rr_counter.fetch_add(1, Ordering::Relaxed);
                 let mixed = (nanos.rotate_left(17) ^ count).wrapping_mul(0x9e3779b97f4a7c15);
-                let idx = mixed % candidates.len();
-                Some(candidates[idx].clone())
+                let idx = mixed % active.len();
+                Some(active[idx].clone())
             }
             ProxyRotationStrategy::RoundRobin => {
                 let current = self.rr_counter.fetch_add(1, Ordering::Relaxed);
@@ -285,8 +316,8 @@ impl ProxyPool {
                 if let Err(e) = self.storage.save_rr_counter(next) {
                     eprintln!("[proxy-guard] Warning: Failed to persist round-robin counter: {e}");
                 }
-                let idx = current % candidates.len();
-                Some(candidates[idx].clone())
+                let idx = current % active.len();
+                Some(active[idx].clone())
             }
         }
     }
