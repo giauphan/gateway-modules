@@ -398,4 +398,7 @@ fn main() {
     );
     start_optional_proxy_server(effective_port, Arc::clone(&service));
     run_stdio_loop(&service);
+    if let Err(e) = service.flush_metrics() {
+        eprintln!("[proxy-guard] Warning: Failed to flush metrics on exit: {e}");
+    }
 }

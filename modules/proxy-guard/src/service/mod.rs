@@ -19,6 +19,10 @@ use crate::script_generator::ScriptGenerator;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+const METRICS_FLUSH_BATCH_THRESHOLD: u64 = 16;
+const METRICS_FLUSH_MAX_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct ProxyGuardService {
     pub(super) rule_repo: Arc<dyn RuleRepositoryPort>,
@@ -29,6 +33,7 @@ pub struct ProxyGuardService {
     pub(super) cached_engine: RwLock<RulesEngine>,
     pub(super) cached_metrics: RwLock<FlowMetrics>,
     pub(super) dirty_metrics_count: AtomicU64,
+    last_metrics_flush: Mutex<Instant>,
     pub(super) request_logs: RwLock<VecDeque<RequestLogEntry>>,
     http_cache: Arc<dyn HttpCachePort>,
     pub(super) rule_edit_lock: Mutex<()>,
@@ -76,6 +81,7 @@ impl ProxyGuardService {
             cached_engine: RwLock::new(engine),
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
+            last_metrics_flush: Mutex::new(Instant::now()),
             request_logs: RwLock::new(VecDeque::with_capacity(100)),
             http_cache,
             rule_edit_lock: Mutex::new(()),
@@ -104,14 +110,23 @@ impl ProxyGuardService {
             .map_err(|e| e.to_string())?;
         self.metrics_repo.save_metrics(&metrics)?;
         self.dirty_metrics_count.store(0, Ordering::Relaxed);
+        if let Ok(mut last) = self.last_metrics_flush.lock() {
+            *last = Instant::now();
+        }
         Ok(())
     }
 
-    /// Marks metrics dirty and persists in batches (every 64 mutations) so transfer
-    /// and cache stats survive process restarts without per-request disk overhead.
+    /// Marks metrics dirty and persists when either the batch threshold (16 updates)
+    /// or the max flush interval (5s) is reached, so short sessions and long-lived tunnels
+    /// keep `.state/metrics.json` fresh without per-request disk overhead.
     pub(super) fn mark_metrics_dirty(&self) {
-        let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
-        if count >= 64 {
+        let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed) + 1;
+        let time_elapsed = self
+            .last_metrics_flush
+            .lock()
+            .map(|t| t.elapsed() >= METRICS_FLUSH_MAX_INTERVAL)
+            .unwrap_or(false);
+        if count >= METRICS_FLUSH_BATCH_THRESHOLD || time_elapsed {
             self.dirty_metrics_count.store(0, Ordering::Relaxed);
             self.persist_latest_metrics();
         }
@@ -126,6 +141,8 @@ impl ProxyGuardService {
                 drop(metrics);
                 if let Err(e) = self.metrics_repo.save_metrics(&snapshot) {
                     eprintln!("[proxy-guard] Warning: Failed to persist metrics: {e}");
+                } else if let Ok(mut last) = self.last_metrics_flush.lock() {
+                    *last = Instant::now();
                 }
             }
         }

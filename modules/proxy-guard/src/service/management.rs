@@ -171,17 +171,10 @@ impl RuleManagementPort for ProxyGuardService {
 
 impl MetricsPort for ProxyGuardService {
     fn record_decision(&self, decision: &FilterDecision, actual_bytes: Option<u64>) {
-        let should_persist = if let Ok(mut metrics) = self.cached_metrics.write() {
+        if let Ok(mut metrics) = self.cached_metrics.write() {
             metrics.record_decision(decision, actual_bytes);
-            let count = self.dirty_metrics_count.fetch_add(1, Ordering::Relaxed);
-            count >= 64
-        } else {
-            false
-        };
-
-        if should_persist {
-            self.dirty_metrics_count.store(0, Ordering::Relaxed);
-            self.persist_latest_metrics();
+            drop(metrics);
+            self.mark_metrics_dirty();
         }
     }
 
