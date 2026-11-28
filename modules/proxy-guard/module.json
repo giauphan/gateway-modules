@@ -2,7 +2,7 @@
   "id": "proxy-guard",
   "name": "Proxy Guard",
   "short_name": "Proxy Guard",
-  "version": "1.15.6",
+  "version": "1.16.0",
   "namespace": "/custom/proxy-guard",
   "entrypoint": "run.sh",
   "protocol": "stdio-stream",
