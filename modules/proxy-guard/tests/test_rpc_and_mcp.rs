@@ -303,6 +303,59 @@ fn test_dashboard_ui_endpoint() {
     assert!(body_str.contains("GB"));
     assert!(body_str.contains("Registered Upstream Proxies"));
     assert!(body_str.contains("Add Multiple Upstream Proxies"));
+    // Action menu & navigation bar
+    assert!(body_str.contains("id=\"actionMenu\""));
+    assert!(body_str.contains("Actions"));
+    assert!(body_str.contains("setStrategy('round_robin')"));
+    assert!(body_str.contains("setDefaultRoute('direct')"));
+    assert!(body_str.contains("resetMetrics()"));
+    assert!(body_str.contains("exportMetricsJson()"));
+    assert!(body_str.contains("toggleAutoRefresh()"));
+    // SVG Charts & Split-Routing panel
+    assert!(body_str.contains("<svg"));
+    assert!(body_str.contains("Request Disposition Breakdown"));
+    assert!(body_str.contains("Bandwidth Saved vs. Upstream Transfer"));
+    assert!(body_str.contains("Traffic by Route / Proxy Pool"));
+    assert!(body_str.contains("Proxy Pool Health"));
+    assert!(body_str.contains("Split-Routing &amp; Filter Rules"));
+}
+
+#[test]
+fn test_dashboard_ui_renders_pool_charts_and_407_quarantine_restore() {
+    use proxy_guard::{MetricsPort, ProxyPoolManagementPort};
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("pg_ui_quarantine_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let service = make_test_service(&temp_dir);
+
+    let proxy = proxy_guard::domain::UpstreamProxy::parse(
+        "http://user:pass@pr.oxylabs.io:7777",
+        Some("OxylabsJP"),
+        Some("JP"),
+        Some(vec!["residential".to_string()]),
+    )
+    .unwrap();
+    let proxy_id = service.add_proxy(proxy).unwrap();
+    service.record_proxy_auth_failure(&proxy_id);
+    service.record_upstream_transfer("residential", 12_000, 48_000);
+    service.record_upstream_transfer("direct", 4_000, 96_000);
+
+    let req = json!({
+        "method": "GET",
+        "path": "/custom/proxy-guard/ui"
+    });
+    let resp = handle_request(req, &service);
+    assert_eq!(resp["status"], 200);
+    let body_str = resp["body"].as_str().unwrap();
+
+    assert!(body_str.contains("407 Quarantined"));
+    assert!(body_str.contains("unquarantineProxy"));
+    assert!(body_str.contains("1 in 407 quarantine"));
+    assert!(body_str.contains("residential"));
+    assert!(body_str.contains("direct"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
