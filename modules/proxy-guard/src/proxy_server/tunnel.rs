@@ -239,17 +239,22 @@ fn dial_connect_tunnel(
         }
     }
 
-    // 2. Try static fallback CLI proxy if provided
-    if let Some(up) = fallback_url {
-        if let Ok(parsed) = UpstreamProxy::parse(up, None, None, None) {
-            if let Ok((s, leftover)) = try_dial_connect_proxy(&parsed, host_port) {
-                return Some((s, leftover));
+    // 2. Try static fallback CLI proxy ONLY when no pool proxies are configured
+    if service.list_proxies().is_empty() {
+        if let Some(up) = fallback_url {
+            if let Ok(parsed) = UpstreamProxy::parse(up, None, None, None) {
+                if let Ok((s, leftover)) = try_dial_connect_proxy(&parsed, host_port) {
+                    return Some((s, leftover));
+                }
             }
         }
     }
 
-    // 3. Direct connection to target with SSRF protection
-    try_connect_target_socket(host_port).map(|s| (s, Vec::new()))
+    // 3. Direct connection to target with SSRF protection (only when pool is empty)
+    if service.list_proxies().is_empty() {
+        return try_connect_target_socket(host_port).map(|s| (s, Vec::new()));
+    }
+    None
 }
 
 /// Splices two TCP streams bidirectionally without TLS termination, returning `(bytes_a_to_b, bytes_b_to_a)`.

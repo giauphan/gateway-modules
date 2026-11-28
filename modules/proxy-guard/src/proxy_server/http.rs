@@ -178,13 +178,24 @@ fn inject_header_before_end(mut headers: Vec<u8>, header_line: &str) -> Vec<u8> 
     headers
 }
 
+fn is_http_407_prefix(chunk: &[u8]) -> bool {
+    let head_len = chunk.len().min(64);
+    if let Ok(s) = std::str::from_utf8(&chunk[..head_len]) {
+        if let Some(first_line) = s.lines().next() {
+            return first_line.starts_with("HTTP/") && first_line.contains(" 407");
+        }
+    }
+    false
+}
+
 fn pipe_response(
     upstream: &mut TcpStream,
     client: &mut TcpStream,
     max_capture_bytes: usize,
-) -> (u64, Option<Vec<u8>>) {
+) -> (u64, Option<Vec<u8>>, bool) {
     let mut resp_buf = [0u8; 8192];
     let mut total_rx = 0u64;
+    let mut saw_407 = false;
     let mut captured = if max_capture_bytes > 0 {
         Some(Vec::with_capacity(max_capture_bytes.min(65536)))
     } else {
@@ -195,6 +206,9 @@ fn pipe_response(
         match upstream.read(&mut resp_buf) {
             Ok(0) => break,
             Ok(n) => {
+                if total_rx == 0 && is_http_407_prefix(&resp_buf[..n]) {
+                    saw_407 = true;
+                }
                 total_rx = total_rx.saturating_add(n as u64);
                 if let Some(ref mut buf) = captured {
                     if buf.len().saturating_add(n) <= max_capture_bytes {
@@ -211,7 +225,7 @@ fn pipe_response(
         }
     }
     let _ = client.flush();
-    (total_rx, captured)
+    (total_rx, captured, saw_407)
 }
 
 fn read_bounded_response(upstream: &mut TcpStream, max_bytes: usize) -> Option<Vec<u8>> {
@@ -373,10 +387,17 @@ pub fn handle_http_request(
         }
     }
 
-    let (bytes_rx, captured_opt) = pipe_response(&mut upstream, client, max_capture);
+    let (bytes_rx, captured_opt, saw_407) = pipe_response(&mut upstream, client, max_capture);
+    if saw_407 {
+        if let Some(ref proxy) = proxy_opt {
+            service.record_proxy_auth_failure(&proxy.id);
+        }
+    }
     service.record_upstream_transfer(&pool_label, bytes_tx, bytes_rx);
-    if let (Some(key), Some(captured)) = (cache_key, captured_opt) {
-        cache.store(&key, target, &captured);
+    if !saw_407 {
+        if let (Some(key), Some(captured)) = (cache_key, captured_opt) {
+            cache.store(&key, target, &captured);
+        }
     }
 }
 

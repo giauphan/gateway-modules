@@ -16,6 +16,15 @@ use std::time::{Duration, Instant};
 const MAX_STICKY_SESSIONS: usize = 10_000;
 const DEFAULT_STICKY_TTL_SECS: u64 = 600;
 const UNHEALTHY_FAILURE_THRESHOLD: u32 = 3;
+/// Cooldown duration (seconds) to cache HTTP 407 auth/quota failures and avoid redialing dead proxies.
+const AUTH_407_QUARANTINE_TTL_SECS: u64 = 300;
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Debug, Clone)]
 struct StickyAssignment {
@@ -148,10 +157,12 @@ impl ProxyPool {
         all_proxies: Vec<UpstreamProxy>,
         query: &ProxySelectionQuery,
     ) -> Vec<UpstreamProxy> {
+        let now_secs = now_epoch_secs();
         let mut candidates: Vec<UpstreamProxy> = all_proxies
             .into_iter()
             .filter(|p| {
                 p.enabled
+                    && !p.is_auth_quarantined(now_secs)
                     && !query
                         .exclude_ids
                         .iter()
@@ -415,11 +426,13 @@ impl ProxyPoolManagementPort for ProxyPool {
             return None;
         }
 
-        // 1. Direct ID match if requested (unless explicitly excluded)
+        // 1. Direct ID match if requested (unless explicitly excluded or 407-quarantined)
+        let now_secs = now_epoch_secs();
         if let Some(ref pref_id) = query.preferred_id {
             if let Some(found) = all_proxies.iter().find(|p| {
                 p.id == *pref_id
                     && p.enabled
+                    && !p.is_auth_quarantined(now_secs)
                     && !query
                         .exclude_ids
                         .iter()
@@ -461,10 +474,12 @@ impl ProxyPoolManagementPort for ProxyPool {
         query: &ProxySelectionQuery,
     ) -> Option<UpstreamProxy> {
         let all_proxies = self.list_proxies();
+        let now_secs = now_epoch_secs();
         let mut fallback_candidates: Vec<UpstreamProxy> = all_proxies
             .into_iter()
             .filter(|p| {
                 p.enabled
+                    && !p.is_auth_quarantined(now_secs)
                     && !same_proxy_identity(p, failed_id)
                     && !query
                         .exclude_ids
@@ -520,11 +535,16 @@ impl ProxyPoolManagementPort for ProxyPool {
     }
 
     fn record_proxy_result(&self, id: &str, success: bool) {
-        self.apply_health_update(id, success, 1);
+        self.apply_health_update(id, success, 1, None);
     }
 
     fn record_proxy_auth_failure(&self, id: &str) {
-        self.apply_health_update(id, false, UNHEALTHY_FAILURE_THRESHOLD);
+        self.apply_health_update(
+            id,
+            false,
+            UNHEALTHY_FAILURE_THRESHOLD,
+            Some(AUTH_407_QUARANTINE_TTL_SECS),
+        );
     }
 
     fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String> {
@@ -545,7 +565,13 @@ impl ProxyPoolManagementPort for ProxyPool {
 }
 
 impl ProxyPool {
-    fn apply_health_update(&self, id: &str, success: bool, failure_weight: u32) {
+    fn apply_health_update(
+        &self,
+        id: &str,
+        success: bool,
+        failure_weight: u32,
+        quarantine_ttl_secs: Option<u64>,
+    ) {
         let updated_snapshot = if let Ok(mut list) = self.proxies.write() {
             let target_pos = list
                 .iter()
@@ -565,8 +591,12 @@ impl ProxyPool {
                     if p.failure_count > 0 {
                         p.failure_count = p.failure_count.saturating_sub(1);
                     }
+                    p.quarantined_until_epoch_secs = None;
                 } else {
                     p.failure_count = p.failure_count.saturating_add(failure_weight);
+                    if let Some(ttl) = quarantine_ttl_secs {
+                        p.quarantined_until_epoch_secs = Some(now_epoch_secs().saturating_add(ttl));
+                    }
                 }
                 Some(list.clone())
             } else {
