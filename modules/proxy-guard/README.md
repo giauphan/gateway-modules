@@ -24,13 +24,13 @@ When running automated browser workflows (Playwright, Puppeteer, Selenium), scra
 
 ---
 
-## 2. Architecture & Clean Architecture Layers (v1.15.6)
+## 2. Architecture & Clean Architecture Layers (v1.16.0)
 
 `proxy-guard` is authored in **100% Native Rust** following Clean Architecture and Domain-Driven Design (DDD) principles:
 
 ```text
 modules/proxy-guard/
-├── Cargo.toml          # Single source of truth (v1.15.6)
+├── Cargo.toml          # Single source of truth (v1.16.0)
 ├── module.json         # Declarative gateway manifest & MCP schemas
 ├── run.sh              # Sub-millisecond precompiled binary launcher
 ├── proxy-guard         # Native prebuilt release binary
@@ -38,10 +38,10 @@ modules/proxy-guard/
 ├── src/
 │   ├── domain/         # Pure business rules, entities, and value objects
 │   │   ├── rules.rs    # Domain split-routing rules (Reject / Direct / Pool), metrics & per-pool stats
-│   │   ├── proxy.rs    # Upstream proxy entities, pool tagging, and sticky session templates
+│   │   ├── proxy.rs    # Upstream proxy entities, pool tagging, 407 quarantine TTL, and sticky session templates
 │   │   └── mod.rs      # Domain re-exports
 │   ├── ports.rs        # Inbound and Outbound port traits
-│   ├── service.rs      # Application orchestrator service
+│   ├── service/        # Application orchestrator service & management submodules
 │   ├── rules_engine/   # Domain rules matcher & catalog (exact > suffix > catalog > default_route)
 │   │   ├── catalog/    # Static catalogs: analytics, advertising, media_fonts, browser_noise
 │   │   └── mod.rs      # Engine dispatcher & deterministic precedence
@@ -49,7 +49,7 @@ modules/proxy-guard/
 │   ├── request_optimizer/ # Hop-by-hop & tracking query rewriter
 │   │   ├── constants.rs# Static query and header stripped lists
 │   │   └── mod.rs      # Header rewriting & RFC 9110 compression negotiator
-│   ├── proxy_pool.rs   # Named multi-proxy pool manager (TTL sticky sessions & failover)
+│   ├── proxy_pool.rs   # Named multi-proxy pool manager (TTL sticky sessions, 407 quarantine & failover)
 │   ├── proxy_server/   # Multithreaded HTTP/CONNECT interceptor with zero-MITM tunneling & SSRF protection
 │   │   ├── http.rs     # Plain HTTP request interception, safe cache & byte metering
 │   │   ├── tunnel.rs   # Early CONNECT blocking, transparent TCP splicing & per-pool TX/RX metering
@@ -58,10 +58,15 @@ modules/proxy-guard/
 │   ├── mock_factory.rs # Synthetic mock generation (prevents client JS crashes)
 │   ├── script_generator.rs # Persistent-context Playwright (no page.route() by default), Puppeteer, mitmproxy
 │   ├── storage.rs      # File & In-Memory storage with private 0o600 permissions
+│   ├── ui/             # Embedded interactive dashboard (0 external CDN bytes)
+│   │   ├── mod.rs      # Sticky top action bar, KPI cards, proxy pool, split-routing & logs UI
+│   │   ├── charts.rs   # Inline SVG charts (disposition donut, bandwidth bars, per-pool & 407 health)
+│   │   ├── styles.rs   # Embedded dark-theme CSS
+│   │   └── scripts.rs  # Client-side action menu, rule editor, auto-refresh & toast notifications
 │   ├── handlers/       # Interface adapters (routes & dispatcher)
 │   ├── rpc.rs          # stdio-stream framing helpers
-│   └── mcp.rs          # Model Context Protocol tools adapter
-└── tests/              # Automated integration & unit test suite (108 tests)
+│   └── mcp/            # Model Context Protocol tools adapter
+└── tests/              # Automated integration & unit test suite (109 tests)
 ```
 
 > [!NOTE]
@@ -121,6 +126,12 @@ Integrated out of the box with Toolcase Gateway via `stdio-stream`:
   - `proxy-guard__get_request_logs`: Query live intercepted request audit logs and request reduction percentages.
   - `proxy-guard__configure_rules`: Toggle categories or add custom whitelist, blacklist, or `add_direct_bypass_domains` split-routing entries.
 
+### Interactive Dashboard UI (`/custom/proxy-guard/ui`)
+`proxy-guard` serves a self-contained, zero-CDN HTML dashboard at `/custom/proxy-guard/ui` (and `/ui`):
+- **Sticky Navigation & `⚡ Actions ▾` Menu**: Switch rotation strategy (`round_robin`, `lowest_failures`, `sticky_session`, `random`), switch default split route (`forward_upstream` / `direct`), toggle 10s auto-refresh, export `/metrics` JSON, reset cumulative metrics, or clear request logs.
+- **4 Inline SVG Charts**: Request Disposition Donut (Blocked / Direct / Upstream / Cached), Bandwidth Saved vs. Upstream TX/RX, Per-Pool Traffic Breakdown, and Proxy Pool Health & HTTP 407 Quarantine summary.
+- **407 Quarantine Controls & Split-Routing Panel**: Shows remaining quarantine TTL per proxy with one-click **Restore** (`POST /proxies/report`), live category toggles, quick domain rule creation (`Route to Pool`, `Direct Bypass`, `Block`, `Whitelist`), and client-side log filtering.
+
 ### Playwright & Headless Browser Integration
 For full integration recipes (TypeScript, Python, CI `playwright.config.ts`, route interception, and proxy rotation), refer to the dedicated guide:
 👉 [**Playwright Integration Guide**](../../docs/PLAYWRIGHT_INTEGRATION.md)
@@ -136,4 +147,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 
-All 108 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
+All 109 automated tests pass with zero warnings, zero `unsafe`, and zero host dependencies.
