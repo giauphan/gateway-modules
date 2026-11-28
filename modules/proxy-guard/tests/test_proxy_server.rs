@@ -576,3 +576,92 @@ fn test_connect_automatically_fails_over_on_upstream_407() {
     let _ = bad_thread.join();
     let _ = good_thread.join();
 }
+
+#[test]
+fn test_v1_15_6_407_quarantine_cache_avoids_subsequent_dials() {
+    let workspace = TestWorkspace::new("pg_407_quarantine_cache");
+    let storage = Arc::new(FileStorageAdapter::new(&workspace.path));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+
+    // Only proxy in the pool returns HTTP 407 and counts every TCP accept
+    let bad_listener = TcpListener::bind("127.0.0.1:0").expect("bind 407 mock");
+    let bad_port = bad_listener.local_addr().expect("bad addr").port();
+    let _ = bad_listener.set_nonblocking(true);
+    let bad_accepts = Arc::new(AtomicUsize::new(0));
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let accepts_clone = Arc::clone(&bad_accepts);
+    let stop_clone = Arc::clone(&stop_flag);
+    let bad_thread = thread::spawn(move || {
+        while !stop_clone.load(Ordering::Relaxed) {
+            if let Ok((mut s, _)) = bad_listener.accept() {
+                accepts_clone.fetch_add(1, Ordering::Relaxed);
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
+                );
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    let bad_url = format!("http://customer-resi_dead:p1@127.0.0.1:{bad_port}");
+    service
+        .add_proxy(
+            UpstreamProxy::parse(&bad_url, Some("dead-407"), Some("JP"), None).expect("parse"),
+        )
+        .expect("add bad");
+
+    let server = ProxyServer::new(0, Some(bad_url.clone()), Arc::clone(&service));
+    let shutdown = server.shutdown_handle();
+    let (_handle, test_port) = server.start_background().expect("start proxy");
+    thread::sleep(Duration::from_millis(40));
+
+    // Send 4 consecutive CONNECT requests -> ONLY the 1st request should touch the 407 proxy!
+    // Requests 2, 3, 4 must hit the 407 quarantine cache and fail fast with 0 TCP dials!
+    for _ in 0..4 {
+        let mut client = TcpStream::connect(format!("127.0.0.1:{test_port}")).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        client
+            .write_all(b"CONNECT services.sheerid.com:443 HTTP/1.1\r\nHost: services.sheerid.com:443\r\nX-Proxy-Country: JP\r\n\r\n")
+            .expect("write");
+        let resp = read_full_response(&mut client);
+        assert!(resp.contains("HTTP/1.1 502 Bad Gateway"));
+    }
+
+    assert_eq!(
+        bad_accepts.load(Ordering::Relaxed),
+        1,
+        "407 quarantine cache must prevent redialing a dead 407 proxy on subsequent requests"
+    );
+
+    // Updating/re-adding the proxy clears the 407 quarantine cache immediately
+    service
+        .add_proxy(
+            UpstreamProxy::parse(&bad_url, Some("refilled"), Some("JP"), None).expect("parse"),
+        )
+        .expect("re-add");
+    assert!(
+        service
+            .list_proxies()
+            .into_iter()
+            .all(|p| p.quarantined_until_epoch_secs.is_none()),
+        "Re-adding proxy with refreshed credentials must clear 407 quarantine"
+    );
+
+    shutdown.store(true, Ordering::Relaxed);
+    stop_flag.store(true, Ordering::Relaxed);
+    let _ = bad_thread.join();
+}

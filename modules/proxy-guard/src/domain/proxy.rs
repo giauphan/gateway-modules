@@ -68,6 +68,9 @@ pub struct UpstreamProxy {
     pub pool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sticky_session: Option<StickySessionConfig>,
+    /// Unix epoch timestamp (seconds) until which this proxy is quarantined after HTTP 407.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantined_until_epoch_secs: Option<u64>,
 }
 
 impl UpstreamProxy {
@@ -161,6 +164,7 @@ impl UpstreamProxy {
             tags: merged_tags,
             pool_name: inferred_pool,
             sticky_session: None,
+            quarantined_until_epoch_secs: None,
         };
 
         if force_cc_username {
@@ -252,6 +256,12 @@ impl UpstreamProxy {
             updated.auth = Some(new_auth);
         }
         updated
+    }
+
+    /// Returns true if this proxy is currently quarantined due to HTTP 407 authentication failure.
+    pub fn is_auth_quarantined(&self, now_epoch_secs: u64) -> bool {
+        self.quarantined_until_epoch_secs
+            .is_some_and(|until| now_epoch_secs < until)
     }
 
     /// Returns true if this proxy belongs to the named pool (matches `pool_name` or any tag).
