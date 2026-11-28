@@ -1,7 +1,7 @@
 # Proxy Guard & Multi-Proxy API Payload Reference
 
-> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.15.6).**  
-> Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, and MCP tool arguments.
+> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.16.0).**  
+> Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, dashboard UI, and MCP tool arguments.
 
 ---
 
@@ -44,6 +44,8 @@ All endpoints are reachable under either direct paths (e.g. `http://127.0.0.1:31
 | **POST** | `/proxies/remove` | Unregister a proxy from the pool by ID | `{"id": "host:port"}` |
 | **GET** | `/proxies/list` | List all registered proxies with credentials masked | *(none)* |
 | **POST** | `/proxies/strategy` | Update global default rotation strategy | `{"strategy": "..."}` |
+| **POST** | `/proxies/report` | Report proxy health (`success: true` restores/unquarantines; `status_code: 407` triggers 300s quarantine) | `{"id": "...", "success": true}` |
+| **GET** | `/ui` | Interactive HTML dashboard with `⚡ Actions` menu, inline SVG charts, 407 quarantine restore & split-routing editor | *(none)* |
 | **GET** | `/logs` | Get recent intercepted request audit trail & reduction % | Query `?limit=50` |
 | **POST** | `/logs/clear` | Clear the in-memory request audit ring buffer | *(none)* |
 | **GET** | `/metrics` | Get cumulative bandwidth and dollar savings counters | *(none)* |
