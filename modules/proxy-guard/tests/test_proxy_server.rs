@@ -463,3 +463,116 @@ fn test_http_response_cache_hits_and_mandatory_bypasses() {
     upstream_stop.store(true, Ordering::Relaxed);
     let _ = upstream_thread.join();
 }
+
+#[test]
+fn test_connect_automatically_fails_over_on_upstream_407() {
+    let workspace = TestWorkspace::new("pg_connect_407_failover");
+    let storage = Arc::new(FileStorageAdapter::new(&workspace.path));
+    let pool = Arc::new(ProxyPool::new(
+        Arc::clone(&storage) as Arc<_>,
+        ProxyRotationStrategy::RoundRobin,
+    ));
+    let service = Arc::new(ProxyGuardService::new(
+        Arc::clone(&storage) as Arc<_>,
+        Arc::clone(&storage) as Arc<_>,
+        pool,
+        3.5,
+    ));
+
+    // Upstream #1: always returns HTTP 407 Proxy Authentication Required
+    let bad_listener = TcpListener::bind("127.0.0.1:0").expect("bind 407 mock");
+    let bad_port = bad_listener.local_addr().expect("bad addr").port();
+    let _ = bad_listener.set_nonblocking(true);
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_bad = Arc::clone(&stop_flag);
+    let bad_thread = thread::spawn(move || {
+        while !stop_bad.load(Ordering::Relaxed) {
+            if let Ok((mut s, _)) = bad_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
+                );
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    // Upstream #2: returns HTTP 200 Connection Established and echoes payload
+    let good_listener = TcpListener::bind("127.0.0.1:0").expect("bind 200 mock");
+    let good_port = good_listener.local_addr().expect("good addr").port();
+    let _ = good_listener.set_nonblocking(true);
+    let stop_good = Arc::clone(&stop_flag);
+    let good_thread = thread::spawn(move || {
+        while !stop_good.load(Ordering::Relaxed) {
+            if let Ok((mut s, _)) = good_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
+                let _ = s.flush();
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    service
+        .add_proxy(
+            UpstreamProxy::parse(
+                &format!("http://customer-resi_dead:p1@127.0.0.1:{bad_port}"),
+                Some("dead-407"),
+                Some("JP"),
+                None,
+            )
+            .expect("parse bad"),
+        )
+        .expect("add bad");
+    service
+        .add_proxy(
+            UpstreamProxy::parse(
+                &format!("http://user-dc_good:p2@127.0.0.1:{good_port}"),
+                Some("good-200"),
+                Some("JP"),
+                None,
+            )
+            .expect("parse good"),
+        )
+        .expect("add good");
+
+    let server = ProxyServer::new(0, None, Arc::clone(&service));
+    let shutdown = server.shutdown_handle();
+    let (_handle, test_port) = server.start_background().expect("start proxy");
+    thread::sleep(Duration::from_millis(40));
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{test_port}")).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    client
+        .write_all(b"CONNECT services.sheerid.com:443 HTTP/1.1\r\nHost: services.sheerid.com:443\r\nX-Proxy-Country: JP\r\n\r\n")
+        .expect("write");
+
+    let resp = read_full_response(&mut client);
+    assert!(
+        resp.contains("HTTP/1.1 200 Connection Established"),
+        "CONNECT must automatically fail over from 407 proxy to healthy backup proxy, got: {resp}"
+    );
+
+    // Dead 407 proxy must be immediately quarantined (failure_count >= 3)
+    let dead = service
+        .list_proxies()
+        .into_iter()
+        .find(|p| p.port == bad_port)
+        .expect("dead proxy entry");
+    assert!(
+        dead.failure_count >= 3,
+        "HTTP 407 proxy must be quarantined immediately, got failure_count={}",
+        dead.failure_count
+    );
+
+    shutdown.store(true, Ordering::Relaxed);
+    stop_flag.store(true, Ordering::Relaxed);
+    let _ = bad_thread.join();
+    let _ = good_thread.join();
+}

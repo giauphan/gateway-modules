@@ -148,8 +148,16 @@ impl ProxyPool {
         all_proxies: Vec<UpstreamProxy>,
         query: &ProxySelectionQuery,
     ) -> Vec<UpstreamProxy> {
-        let mut candidates: Vec<UpstreamProxy> =
-            all_proxies.into_iter().filter(|p| p.enabled).collect();
+        let mut candidates: Vec<UpstreamProxy> = all_proxies
+            .into_iter()
+            .filter(|p| {
+                p.enabled
+                    && !query
+                        .exclude_ids
+                        .iter()
+                        .any(|ex| same_proxy_identity(p, ex))
+            })
+            .collect();
 
         // Explicit named pool filter (strict / fail-closed so sensitive traffic never leaks to wrong pool)
         if let Some(ref pool) = query.pool {
@@ -202,7 +210,16 @@ impl ProxyPool {
                 .cloned()
                 .collect();
             if !tag_matches.is_empty() {
-                candidates = tag_matches;
+                let tag_has_healthy = tag_matches
+                    .iter()
+                    .any(|p| p.failure_count < UNHEALTHY_FAILURE_THRESHOLD);
+                let any_other_healthy = candidates
+                    .iter()
+                    .any(|p| p.failure_count < UNHEALTHY_FAILURE_THRESHOLD);
+                // Prefer tag matches when at least one is healthy (or when no other healthy proxy exists)
+                if tag_has_healthy || !any_other_healthy {
+                    candidates = tag_matches;
+                }
             }
         }
 
@@ -398,9 +415,16 @@ impl ProxyPoolManagementPort for ProxyPool {
             return None;
         }
 
-        // 1. Direct ID match if requested
+        // 1. Direct ID match if requested (unless explicitly excluded)
         if let Some(ref pref_id) = query.preferred_id {
-            if let Some(found) = all_proxies.iter().find(|p| p.id == *pref_id && p.enabled) {
+            if let Some(found) = all_proxies.iter().find(|p| {
+                p.id == *pref_id
+                    && p.enabled
+                    && !query
+                        .exclude_ids
+                        .iter()
+                        .any(|ex| same_proxy_identity(p, ex))
+            }) {
                 let selected = if let Some(ref sid) = query.session_id {
                     found.with_sticky_session(sid)
                 } else {
@@ -439,7 +463,14 @@ impl ProxyPoolManagementPort for ProxyPool {
         let all_proxies = self.list_proxies();
         let mut fallback_candidates: Vec<UpstreamProxy> = all_proxies
             .into_iter()
-            .filter(|p| p.enabled && p.id != failed_id)
+            .filter(|p| {
+                p.enabled
+                    && !same_proxy_identity(p, failed_id)
+                    && !query
+                        .exclude_ids
+                        .iter()
+                        .any(|ex| same_proxy_identity(p, ex))
+            })
             .collect();
 
         if let Some(ref pool) = query.pool {
@@ -453,18 +484,30 @@ impl ProxyPoolManagementPort for ProxyPool {
             return None;
         }
 
+        // Prefer healthy fallback proxies (< UNHEALTHY_FAILURE_THRESHOLD) before falling back to failing ones
+        let healthy: Vec<UpstreamProxy> = fallback_candidates
+            .iter()
+            .filter(|p| p.failure_count < UNHEALTHY_FAILURE_THRESHOLD)
+            .cloned()
+            .collect();
+        if !healthy.is_empty() {
+            fallback_candidates = healthy;
+        }
+
         // Apply country constraint if possible
         if let Some(ref c) = query.country {
             let target_country = c.trim().to_ascii_uppercase();
             if let Some(p) = fallback_candidates
                 .iter()
-                .find(|p| p.country.as_deref() == Some(&target_country))
+                .filter(|p| p.country.as_deref() == Some(&target_country))
+                .min_by_key(|p| p.failure_count)
             {
                 return Some(p.clone());
             }
             if let Some(p) = fallback_candidates
                 .iter()
-                .find_map(|p| p.adapt_country(&target_country))
+                .filter_map(|p| p.adapt_country(&target_country))
+                .min_by_key(|p| p.failure_count)
             {
                 return Some(p);
             }
@@ -477,38 +520,11 @@ impl ProxyPoolManagementPort for ProxyPool {
     }
 
     fn record_proxy_result(&self, id: &str, success: bool) {
-        let updated_snapshot = if let Ok(mut list) = self.proxies.write() {
-            let target_pos = list.iter().position(|p| p.id == id).or_else(|| {
-                // Fallback for dynamically country-adapted residential proxy IDs (e.g. `host:port:user-cc-vn`)
-                let mut parts = id.splitn(3, ':');
-                let host = parts.next()?;
-                let port = parts.next()?.parse::<u16>().ok()?;
-                list.iter().position(|p| p.host == host && p.port == port)
-            });
+        self.apply_health_update(id, success, 1);
+    }
 
-            if let Some(pos) = target_pos {
-                let p = &mut list[pos];
-                if success {
-                    p.success_count = p.success_count.saturating_add(1);
-                    if p.failure_count > 0 {
-                        p.failure_count = p.failure_count.saturating_sub(1);
-                    }
-                } else {
-                    p.failure_count = p.failure_count.saturating_add(1);
-                }
-                Some(list.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(snapshot) = updated_snapshot {
-            if let Err(e) = self.storage.save_proxies(&snapshot) {
-                eprintln!("[proxy-guard] Warning: Failed to persist proxy health result: {e}");
-            }
-        }
+    fn record_proxy_auth_failure(&self, id: &str) {
+        self.apply_health_update(id, false, UNHEALTHY_FAILURE_THRESHOLD);
     }
 
     fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String> {
@@ -526,4 +542,93 @@ impl ProxyPoolManagementPort for ProxyPool {
             .map(|s| *s)
             .unwrap_or(ProxyRotationStrategy::RoundRobin)
     }
+}
+
+impl ProxyPool {
+    fn apply_health_update(&self, id: &str, success: bool, failure_weight: u32) {
+        let updated_snapshot = if let Ok(mut list) = self.proxies.write() {
+            let target_pos = list
+                .iter()
+                .position(|p| p.id == id)
+                .or_else(|| list.iter().position(|p| same_proxy_identity(p, id)))
+                .or_else(|| {
+                    let mut parts = id.splitn(3, ':');
+                    let host = parts.next()?;
+                    let port = parts.next()?.parse::<u16>().ok()?;
+                    list.iter().position(|p| p.host == host && p.port == port)
+                });
+
+            if let Some(pos) = target_pos {
+                let p = &mut list[pos];
+                if success {
+                    p.success_count = p.success_count.saturating_add(1);
+                    if p.failure_count > 0 {
+                        p.failure_count = p.failure_count.saturating_sub(1);
+                    }
+                } else {
+                    p.failure_count = p.failure_count.saturating_add(failure_weight);
+                }
+                Some(list.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(snapshot) = updated_snapshot {
+            if let Err(e) = self.storage.save_proxies(&snapshot) {
+                eprintln!("[proxy-guard] Warning: Failed to persist proxy health result: {e}");
+            }
+        }
+    }
+}
+
+/// Returns true if `proxy` refers to the same underlying upstream account as `candidate_id`,
+/// even when `candidate_id` has dynamic country (`-cc-jp`, `-country-US`) or sticky (`-sessid-...`)
+/// suffixes appended.
+fn same_proxy_identity(proxy: &UpstreamProxy, candidate_id: &str) -> bool {
+    let trimmed = candidate_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if proxy.id.eq_ignore_ascii_case(trimmed) {
+        return true;
+    }
+    let mut parts = trimmed.splitn(3, ':');
+    let Some(host) = parts.next() else {
+        return false;
+    };
+    let Some(port) = parts.next().and_then(|p| p.parse::<u16>().ok()) else {
+        return false;
+    };
+    if !proxy.host.eq_ignore_ascii_case(host) || proxy.port != port {
+        return false;
+    }
+    match (parts.next(), proxy.auth.as_ref()) {
+        (Some(cand_user), Some(auth)) => strip_dynamic_username_suffixes(cand_user)
+            .eq_ignore_ascii_case(strip_dynamic_username_suffixes(&auth.username)),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn strip_dynamic_username_suffixes(username: &str) -> &str {
+    let lower = username.to_ascii_lowercase();
+    let mut cut = username.len();
+    for marker in [
+        "-sessid-",
+        "-cc-",
+        "_cc_",
+        "-country-",
+        "_country-",
+        "-zone-",
+    ] {
+        if let Some(pos) = lower.find(marker) {
+            if pos < cut {
+                cut = pos;
+            }
+        }
+    }
+    &username[..cut]
 }

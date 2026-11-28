@@ -100,4 +100,7 @@ pub struct ProxySelectionQuery {
     pub pool: Option<String>,
     pub preferred_id: Option<String>,
     pub strategy: Option<ProxyRotationStrategy>,
+    /// Proxy IDs to exclude (e.g. proxies that just returned HTTP 407 or connection errors).
+    #[serde(default)]
+    pub exclude_ids: Vec<String>,
 }
