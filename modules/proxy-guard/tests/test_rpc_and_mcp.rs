@@ -359,6 +359,46 @@ fn test_dashboard_ui_renders_pool_charts_and_407_quarantine_restore() {
 }
 
 #[test]
+fn test_dashboard_ui_reloads_persisted_logs_and_metrics_across_instances() {
+    use proxy_guard::FlowOptimizerPort;
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("pg_ui_persist_reload_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    // Instance A (e.g., proxy listener) intercepts a request and flushes metrics + logs to .state/
+    let writer_service = make_test_service(&temp_dir);
+    let _ = writer_service.evaluate_url(
+        "https://www.google-analytics.com/g/collect?tid=G-TEST",
+        "POST",
+        Some("beacon"),
+    );
+    writer_service.flush_metrics().unwrap();
+
+    // Instance B (e.g., fresh stdio-stream /ui request) starts cold on same base_dir
+    let reader_service = make_test_service(&temp_dir);
+    let resp = handle_request(
+        json!({
+            "method": "GET",
+            "path": "/custom/proxy-guard/ui"
+        }),
+        &reader_service,
+    );
+    assert_eq!(resp["status"], 200);
+    let html = resp["body"].as_str().unwrap();
+    assert!(
+        html.contains("www.google-analytics.com"),
+        "Dashboard should reload persisted request_logs.json"
+    );
+    assert!(
+        html.contains("1 blocked / 1 total"),
+        "Dashboard should reload persisted metrics.json"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_config_endpoint_get_and_post() {
     let temp_dir = std::env::temp_dir().join(format!("pg_config_test_{}", std::process::id()));
     let service = make_test_service(&temp_dir);

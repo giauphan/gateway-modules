@@ -1,6 +1,6 @@
 # Proxy Guard & Multi-Proxy API Payload Reference
 
-> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.16.0).**  
+> **Comprehensive API Reference & Request/Response Payload Specifications for `proxy-guard` (v1.16.1).**  
 > Covers REST endpoints, query parameters, JSON payloads, auto-detection rules, dashboard UI, and MCP tool arguments.
 
 ---

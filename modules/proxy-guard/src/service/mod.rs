@@ -71,6 +71,12 @@ impl ProxyGuardService {
         let engine = RulesEngine::with_default_route(rules, whitelist, default_route.clone());
         let mut metrics = metrics_repo.load_metrics();
         metrics.cost_per_gb_usd = cost_per_gb_usd;
+        let persisted_logs = metrics_repo.load_request_logs();
+        let mut initial_logs = VecDeque::with_capacity(100);
+        let skip = persisted_logs.len().saturating_sub(100);
+        for entry in persisted_logs.into_iter().skip(skip) {
+            initial_logs.push_back(entry);
+        }
 
         Self {
             rule_repo,
@@ -82,7 +88,7 @@ impl ProxyGuardService {
             cached_metrics: RwLock::new(metrics),
             dirty_metrics_count: AtomicU64::new(0),
             last_metrics_flush: Mutex::new(Instant::now()),
-            request_logs: RwLock::new(VecDeque::with_capacity(100)),
+            request_logs: RwLock::new(initial_logs),
             http_cache,
             rule_edit_lock: Mutex::new(()),
             metrics_lock: Mutex::new(()),
@@ -99,6 +105,28 @@ impl ProxyGuardService {
 
     pub fn configure_cache(&self, config: HttpCacheConfig) {
         self.http_cache.update_config(config);
+    }
+
+    /// Reloads persisted metrics and request logs from disk when available, so
+    /// `/custom/proxy-guard/ui` reflects real live traffic written by sibling processes
+    /// sharing the same `.state/` directory.
+    pub fn reload_live_state(&self) {
+        if self.dirty_metrics_count.load(Ordering::Relaxed) == 0 {
+            if let Some(fresh_metrics) = self.metrics_repo.reload_metrics_from_disk() {
+                if let Ok(mut lock) = self.cached_metrics.write() {
+                    *lock = fresh_metrics;
+                }
+            }
+        }
+        if let Some(fresh_logs) = self.metrics_repo.reload_request_logs_from_disk() {
+            if let Ok(mut lock) = self.request_logs.write() {
+                lock.clear();
+                let skip = fresh_logs.len().saturating_sub(100);
+                for entry in fresh_logs.into_iter().skip(skip) {
+                    lock.push_back(entry);
+                }
+            }
+        }
     }
 
     pub fn flush_metrics(&self) -> Result<(), String> {
