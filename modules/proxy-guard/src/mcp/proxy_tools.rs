@@ -112,6 +112,17 @@ pub(super) fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService
         .and_then(|v| v.as_str())
         .and_then(ProxyRotationStrategy::parse);
 
+    let exclude_ids: Vec<String> = arguments
+        .get("exclude_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
     let query = ProxySelectionQuery {
         session_id: arguments
             .get("session_id")
@@ -135,6 +146,7 @@ pub(super) fn tool_get_next_proxy(arguments: &Value, service: &ProxyGuardService
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         strategy: strategy_override,
+        exclude_ids,
     };
 
     let mask_credentials = arguments

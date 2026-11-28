@@ -103,11 +103,19 @@ pub fn handle_https_connect(
     service.record_upstream_transfer(&pool_label, total_tx, total_rx);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectError {
+    Auth407,
+    Other,
+}
+
+const MAX_CONNECT_FAILOVER_ATTEMPTS: usize = 5;
+
 fn perform_connect_handshake(
     mut stream: TcpStream,
     host_port: &str,
     auth: Option<&crate::domain::ProxyAuth>,
-) -> Result<(TcpStream, Vec<u8>), ()> {
+) -> Result<(TcpStream, Vec<u8>), ConnectError> {
     let auth_hdr = match auth {
         Some(a) => {
             let creds = format!("{}:{}", a.username, a.password);
@@ -122,7 +130,7 @@ fn perform_connect_handshake(
     let connect_req =
         format!("CONNECT {host_port} HTTP/1.1\r\nHost: {host_port}\r\n{auth_hdr}\r\n");
     if stream.write_all(connect_req.as_bytes()).is_err() {
-        return Err(());
+        return Err(ConnectError::Other);
     }
 
     let mut resp_header_buf = Vec::with_capacity(1024);
@@ -131,7 +139,7 @@ fn perform_connect_handshake(
 
     while resp_header_buf.len() < 16384 {
         match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(()),
+            Ok(0) | Err(_) => return Err(ConnectError::Other),
             Ok(n) => {
                 resp_header_buf.extend_from_slice(&chunk[..n]);
                 if let Some(pos) = find_header_end(&resp_header_buf) {
@@ -142,11 +150,14 @@ fn perform_connect_handshake(
         }
     }
 
-    let resp_end = resp_header_end.ok_or(())?;
+    let resp_end = resp_header_end.ok_or(ConnectError::Other)?;
     let header_str = String::from_utf8_lossy(&resp_header_buf[..resp_end]);
     let first_line = header_str.lines().next().unwrap_or("");
+    if first_line.contains(" 407") {
+        return Err(ConnectError::Auth407);
+    }
     if !first_line.contains(" 200") {
-        return Err(());
+        return Err(ConnectError::Other);
     }
 
     let leftover = resp_header_buf[resp_end..].to_vec();
@@ -156,43 +167,49 @@ fn perform_connect_handshake(
 fn try_dial_connect_proxy(
     proxy: &UpstreamProxy,
     host_port: &str,
-) -> Result<(TcpStream, Vec<u8>), ()> {
+) -> Result<(TcpStream, Vec<u8>), ConnectError> {
     let addr = format!("{}:{}", proxy.host, proxy.port);
-    let stream = try_connect_socket(&addr).ok_or(())?;
+    let stream = try_connect_socket(&addr).ok_or(ConnectError::Other)?;
     if proxy.protocol == ProxyProtocol::Socks5 {
         let (th, port_num) = split_host_port(host_port, 443);
         perform_socks5_connect(stream, th, port_num, proxy.auth.as_ref())
             .map(|s| (s, Vec::new()))
-            .ok_or(())
+            .ok_or(ConnectError::Other)
     } else {
         perform_connect_handshake(stream, host_port, proxy.auth.as_ref())
     }
 }
 
-/// Dials strictly through the requested named pool (fail-closed: never falls back to direct).
+fn record_connect_failure(service: &ProxyGuardService, proxy_id: &str, err: ConnectError) {
+    match err {
+        ConnectError::Auth407 => service.record_proxy_auth_failure(proxy_id),
+        ConnectError::Other => service.record_proxy_result(proxy_id, false),
+    }
+}
+
+/// Dials strictly through the requested named pool with multi-hop failover (fail-closed: never falls back to direct).
 fn dial_named_pool_connect_tunnel(
     service: &ProxyGuardService,
     query: &ProxySelectionQuery,
     host_port: &str,
 ) -> Option<(TcpStream, Vec<u8>)> {
-    let proxy = service.select_proxy(query)?;
-    match try_dial_connect_proxy(&proxy, host_port) {
-        Ok((stream, leftover)) => {
-            service.record_proxy_result(&proxy.id, true);
-            Some((stream, leftover))
-        }
-        Err(()) => {
-            service.record_proxy_result(&proxy.id, false);
-            if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
-                if let Ok((stream, leftover)) = try_dial_connect_proxy(&fallback_proxy, host_port) {
-                    service.record_proxy_result(&fallback_proxy.id, true);
-                    return Some((stream, leftover));
-                }
-                service.record_proxy_result(&fallback_proxy.id, false);
+    let mut attempt_query = query.clone();
+    let mut current = service.select_proxy(&attempt_query)?;
+
+    for _ in 0..MAX_CONNECT_FAILOVER_ATTEMPTS {
+        match try_dial_connect_proxy(&current, host_port) {
+            Ok((stream, leftover)) => {
+                service.record_proxy_result(&current.id, true);
+                return Some((stream, leftover));
             }
-            None
+            Err(err) => {
+                record_connect_failure(service, &current.id, err);
+                attempt_query.exclude_ids.push(current.id.clone());
+                current = service.select_fallback(&current.id, &attempt_query)?;
+            }
         }
     }
+    None
 }
 
 fn dial_connect_tunnel(
@@ -201,23 +218,22 @@ fn dial_connect_tunnel(
     fallback_url: Option<&str>,
     host_port: &str,
 ) -> Option<(TcpStream, Vec<u8>)> {
-    // 1. Try pool proxy selection
-    if let Some(proxy) = service.select_proxy(query) {
-        match try_dial_connect_proxy(&proxy, host_port) {
-            Ok((stream, leftover)) => {
-                service.record_proxy_result(&proxy.id, true);
-                return Some((stream, leftover));
-            }
-            Err(()) => {
-                service.record_proxy_result(&proxy.id, false);
-                if let Some(fallback_proxy) = service.select_fallback(&proxy.id, query) {
-                    if let Ok((stream, leftover)) =
-                        try_dial_connect_proxy(&fallback_proxy, host_port)
-                    {
-                        service.record_proxy_result(&fallback_proxy.id, true);
-                        return Some((stream, leftover));
+    // 1. Try pool proxy selection with multi-hop failover across all remaining healthy proxies
+    let mut attempt_query = query.clone();
+    if let Some(mut current) = service.select_proxy(&attempt_query) {
+        for _ in 0..MAX_CONNECT_FAILOVER_ATTEMPTS {
+            match try_dial_connect_proxy(&current, host_port) {
+                Ok((stream, leftover)) => {
+                    service.record_proxy_result(&current.id, true);
+                    return Some((stream, leftover));
+                }
+                Err(err) => {
+                    record_connect_failure(service, &current.id, err);
+                    attempt_query.exclude_ids.push(current.id.clone());
+                    match service.select_fallback(&current.id, &attempt_query) {
+                        Some(next_proxy) => current = next_proxy,
+                        None => break,
                     }
-                    service.record_proxy_result(&fallback_proxy.id, false);
                 }
             }
         }

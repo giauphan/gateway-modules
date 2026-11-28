@@ -151,6 +151,8 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
         .and_then(|v| v.as_str())
         .and_then(ProxyRotationStrategy::parse);
 
+    let exclude_ids = parse_exclude_ids(query_val);
+
     let query = ProxySelectionQuery {
         session_id: query_val
             .get("session_id")
@@ -174,6 +176,7 @@ pub fn handle_get_next_proxy(query_val: &Value, service: &ProxyGuardService) -> 
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         strategy: strategy_override,
+        exclude_ids,
     };
 
     let use_interceptor = query_val
@@ -271,14 +274,48 @@ pub fn handle_report_proxy(body: &Value, service: &ProxyGuardService) -> Value {
         None => return make_error_resp(400, "Missing required boolean 'success' field"),
     };
 
-    service.record_proxy_result(id, success);
+    let status_code = body.get("status_code").and_then(|v| v.as_u64());
+    let is_auth_error = body
+        .get("auth_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || status_code == Some(407);
+
+    if !success && is_auth_error {
+        service.record_proxy_auth_failure(id);
+    } else {
+        service.record_proxy_result(id, success);
+    }
     make_json_resp(
         200,
         json!({
             "status": "ok",
             "id": id,
             "success": success,
+            "quarantined": !success && is_auth_error,
             "message": "Proxy health result recorded"
         }),
     )
+}
+
+fn parse_exclude_ids(val: &Value) -> Vec<String> {
+    if let Some(arr) = val.get("exclude_ids").and_then(|v| v.as_array()) {
+        return arr
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Some(csv) = val
+        .get("exclude_ids")
+        .or_else(|| val.get("exclude_id"))
+        .and_then(|v| v.as_str())
+    {
+        return csv
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    Vec::new()
 }

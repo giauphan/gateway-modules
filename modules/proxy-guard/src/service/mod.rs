@@ -368,6 +368,10 @@ impl ProxyPoolManagementPort for ProxyGuardService {
         self.proxy_pool.record_proxy_result(id, success);
     }
 
+    fn record_proxy_auth_failure(&self, id: &str) {
+        self.proxy_pool.record_proxy_auth_failure(id);
+    }
+
     fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String> {
         self.proxy_pool.set_strategy(strategy)
     }

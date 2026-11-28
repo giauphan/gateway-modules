@@ -958,3 +958,110 @@ fn test_v1_15_4_mixed_country_round_robin_lowest_failures_tiebreak_and_407_failo
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_v1_15_5_adapted_id_407_quarantine_exclude_ids_and_tag_fallback() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "pg_v1_15_5_407_next_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let service = make_service_with_pool(&temp_dir);
+
+    // Residential proxy (auto-tagged "residential") + backup DC proxy (auto-tagged "datacenter")
+    service
+        .add_proxy(
+            UpstreamProxy::parse(
+                "http://customer-resi_a553ef4e:pass1@pr.oxylabs.io:7777",
+                None,
+                None,
+                None,
+            )
+            .expect("parse resi"),
+        )
+        .expect("add resi");
+    service
+        .add_proxy(
+            UpstreamProxy::parse(
+                "http://user-dc_backup:pass2@dc.oxylabs.io:8000",
+                None,
+                None,
+                None,
+            )
+            .expect("parse dc"),
+        )
+        .expect("add dc");
+
+    // 1. select_fallback with country-adapted failed_id (`-cc-jp`) MUST NOT return pr.oxylabs.io:7777!
+    let adapted_failed_id = "pr.oxylabs.io:7777:customer-resi_a553ef4e-cc-jp";
+    let q_jp = ProxySelectionQuery {
+        country: Some("JP".to_string()),
+        ..Default::default()
+    };
+    let fb = service
+        .select_fallback(adapted_failed_id, &q_jp)
+        .expect("fallback proxy");
+    assert_eq!(
+        fb.host, "dc.oxylabs.io",
+        "select_fallback must exclude the same proxy even when failed_id has -cc-jp suffix"
+    );
+
+    // 2. POST /proxies/next with exclude_ids containing adapted ID skips pr.oxylabs.io immediately
+    let next_excl = handle_request(
+        serde_json::json!({
+            "method": "POST",
+            "path": "/proxies/next",
+            "body": {
+                "country": "JP",
+                "tag": "residential",
+                "exclude_ids": [adapted_failed_id]
+            }
+        }),
+        &service,
+    );
+    assert_eq!(next_excl["status"], 200);
+    let body_excl: serde_json::Value =
+        serde_json::from_str(next_excl["body"].as_str().unwrap_or("{}")).expect("json");
+    assert_eq!(body_excl["proxy"]["host"], "dc.oxylabs.io");
+
+    // 3. Single POST /proxies/report with status_code: 407 immediately quarantines residential proxy,
+    //    so next call (even with tag="residential" and no exclude_ids) fails over to healthy dc.oxylabs.io!
+    let rep_407 = handle_request(
+        serde_json::json!({
+            "method": "POST",
+            "path": "/proxies/report",
+            "body": {
+                "id": adapted_failed_id,
+                "success": false,
+                "status_code": 407
+            }
+        }),
+        &service,
+    );
+    assert_eq!(rep_407["status"], 200);
+
+    let next_after_407 = handle_request(
+        serde_json::json!({
+            "method": "POST",
+            "path": "/proxies/next",
+            "body": {
+                "country": "JP",
+                "tag": "residential"
+            }
+        }),
+        &service,
+    );
+    assert_eq!(next_after_407["status"], 200);
+    let body_after: serde_json::Value =
+        serde_json::from_str(next_after_407["body"].as_str().unwrap_or("{}")).expect("json");
+    assert_eq!(
+        body_after["proxy"]["host"], "dc.oxylabs.io",
+        "After HTTP 407 quarantine, /proxies/next must immediately advance to healthy backup proxy"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

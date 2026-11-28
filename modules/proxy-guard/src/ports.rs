@@ -147,6 +147,13 @@ pub trait ProxyPoolManagementPort: Send + Sync {
     /// Records the success or failure outcome of forwarding through a proxy.
     fn record_proxy_result(&self, id: &str, success: bool);
 
+    /// Immediately quarantines a proxy after a hard authentication/quota failure (e.g. HTTP 407).
+    fn record_proxy_auth_failure(&self, id: &str) {
+        for _ in 0..3 {
+            self.record_proxy_result(id, false);
+        }
+    }
+
     /// Updates the rotation strategy (e.g. round_robin, random, sticky_session, lowest_failures).
     fn set_strategy(&self, strategy: ProxyRotationStrategy) -> Result<(), String>;
 
