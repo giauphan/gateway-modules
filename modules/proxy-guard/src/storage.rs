@@ -3,7 +3,7 @@
 //! Clean Architecture: Interface Adapters / Infrastructure Layer.
 //! Implements RuleRepositoryPort and MetricsStoragePort with atomic file replacement.
 
-use crate::domain::{DefaultRoute, FlowMetrics, Rule, UpstreamProxy};
+use crate::domain::{DefaultRoute, FlowMetrics, RequestLogEntry, Rule, UpstreamProxy};
 use crate::ports::{MetricsStoragePort, ProxyPoolStoragePort, RuleRepositoryPort};
 use crate::rules_engine::RulesEngine;
 use std::fs;
@@ -22,11 +22,13 @@ pub struct FileStorageAdapter {
     whitelist_cache: RwLock<Vec<String>>,
     default_route_cache: RwLock<DefaultRoute>,
     metrics_cache: RwLock<FlowMetrics>,
+    request_logs_cache: RwLock<Vec<RequestLogEntry>>,
     proxies_cache: RwLock<Vec<UpstreamProxy>>,
     rules_corrupted: AtomicBool,
     whitelist_corrupted: AtomicBool,
     default_route_corrupted: AtomicBool,
     metrics_corrupted: AtomicBool,
+    request_logs_corrupted: AtomicBool,
     proxies_corrupted: AtomicBool,
 }
 
@@ -41,11 +43,13 @@ impl FileStorageAdapter {
             whitelist_cache: RwLock::new(Vec::new()),
             default_route_cache: RwLock::new(DefaultRoute::ForwardUpstream),
             metrics_cache: RwLock::new(FlowMetrics::new(3.5)),
+            request_logs_cache: RwLock::new(Vec::new()),
             proxies_cache: RwLock::new(Vec::new()),
             rules_corrupted: AtomicBool::new(false),
             whitelist_corrupted: AtomicBool::new(false),
             default_route_corrupted: AtomicBool::new(false),
             metrics_corrupted: AtomicBool::new(false),
+            request_logs_corrupted: AtomicBool::new(false),
             proxies_corrupted: AtomicBool::new(false),
         };
 
@@ -67,6 +71,10 @@ impl FileStorageAdapter {
 
     fn metrics_file(&self) -> PathBuf {
         self.base_dir.join(".state").join("metrics.json")
+    }
+
+    fn request_logs_file(&self) -> PathBuf {
+        self.base_dir.join(".state").join("request_logs.json")
     }
 
     fn proxies_file(&self) -> PathBuf {
@@ -265,6 +273,32 @@ impl FileStorageAdapter {
                     metrics_path
                 );
                 self.metrics_corrupted.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let logs_path = self.request_logs_file();
+        match fs::read_to_string(&logs_path) {
+            Ok(data) => match serde_json::from_str::<Vec<RequestLogEntry>>(&data) {
+                Ok(loaded) => {
+                    if let Ok(mut lock) = self.request_logs_cache.write() {
+                        *lock = loaded;
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[proxy-guard] ERROR: Failed to parse request_logs file {:?}: {e}",
+                        logs_path
+                    );
+                    self.request_logs_corrupted.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!(
+                    "[proxy-guard] ERROR: Failed to read request_logs file {:?}: {e}",
+                    logs_path
+                );
+                self.request_logs_corrupted.store(true, Ordering::SeqCst);
             }
         }
 
@@ -509,6 +543,48 @@ impl MetricsStoragePort for FileStorageAdapter {
         self.atomic_write_file(&self.metrics_file(), &json)?;
         *lock = metrics.clone();
         Ok(())
+    }
+
+    fn load_request_logs(&self) -> Vec<RequestLogEntry> {
+        self.request_logs_cache
+            .read()
+            .map(|l| l.clone())
+            .unwrap_or_default()
+    }
+
+    fn save_request_logs(&self, logs: &[RequestLogEntry]) -> Result<(), String> {
+        if self.request_logs_corrupted.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Cannot overwrite unreadable/corrupted request_logs file {:?}; manual recovery required",
+                self.request_logs_file()
+            ));
+        }
+        let mut lock = self
+            .request_logs_cache
+            .write()
+            .map_err(|e| format!("Lock acquisition error: {e}"))?;
+        let json = serde_json::to_string_pretty(logs).map_err(|e| e.to_string())?;
+        self.atomic_write_file(&self.request_logs_file(), &json)?;
+        *lock = logs.to_vec();
+        Ok(())
+    }
+
+    fn reload_metrics_from_disk(&self) -> Option<FlowMetrics> {
+        let data = fs::read_to_string(self.metrics_file()).ok()?;
+        let loaded = serde_json::from_str::<FlowMetrics>(&data).ok()?;
+        if let Ok(mut lock) = self.metrics_cache.write() {
+            *lock = loaded.clone();
+        }
+        Some(loaded)
+    }
+
+    fn reload_request_logs_from_disk(&self) -> Option<Vec<RequestLogEntry>> {
+        let data = fs::read_to_string(self.request_logs_file()).ok()?;
+        let loaded = serde_json::from_str::<Vec<RequestLogEntry>>(&data).ok()?;
+        if let Ok(mut lock) = self.request_logs_cache.write() {
+            *lock = loaded.clone();
+        }
+        Some(loaded)
     }
 }
 

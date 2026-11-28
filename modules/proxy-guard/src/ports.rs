@@ -111,13 +111,35 @@ pub trait RuleRepositoryPort: Send + Sync {
     }
 }
 
-/// Outward Port: Storage abstraction for cumulative metrics.
+/// Outward Port: Storage abstraction for cumulative metrics and recent request audit logs.
 pub trait MetricsStoragePort: Send + Sync {
     /// Loads metrics from storage.
     fn load_metrics(&self) -> FlowMetrics;
 
     /// Persists metrics to storage.
     fn save_metrics(&self, metrics: &FlowMetrics) -> Result<(), String>;
+
+    /// Loads persisted recent request audit logs (up to 100 entries).
+    fn load_request_logs(&self) -> Vec<RequestLogEntry> {
+        Vec::new()
+    }
+
+    /// Persists recent request audit logs to storage.
+    fn save_request_logs(&self, _logs: &[RequestLogEntry]) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Reloads metrics directly from disk when backed by persistent file storage.
+    /// Returns `None` for in-memory adapters or when no persisted file exists yet.
+    fn reload_metrics_from_disk(&self) -> Option<FlowMetrics> {
+        None
+    }
+
+    /// Reloads request logs directly from disk when backed by persistent file storage.
+    /// Returns `None` for in-memory adapters or when no persisted file exists yet.
+    fn reload_request_logs_from_disk(&self) -> Option<Vec<RequestLogEntry>> {
+        None
+    }
 }
 
 /// Inbound Port: Managing upstream multi-proxy pool and rotation strategies.

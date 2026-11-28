@@ -221,11 +221,20 @@ impl MetricsPort for ProxyGuardService {
     }
 
     fn log_request(&self, entry: RequestLogEntry) {
-        if let Ok(mut logs) = self.request_logs.write() {
+        let snapshot: Option<Vec<RequestLogEntry>> = if let Ok(mut logs) = self.request_logs.write()
+        {
             if logs.len() >= 100 {
                 logs.pop_front();
             }
             logs.push_back(entry);
+            Some(logs.iter().cloned().collect())
+        } else {
+            None
+        };
+        if let Some(items) = snapshot {
+            if let Err(e) = self.metrics_repo.save_request_logs(&items) {
+                eprintln!("[proxy-guard] Warning: Failed to persist request logs: {e}");
+            }
         }
     }
 
@@ -241,6 +250,9 @@ impl MetricsPort for ProxyGuardService {
     fn clear_request_logs(&self) {
         if let Ok(mut logs) = self.request_logs.write() {
             logs.clear();
+        }
+        if let Err(e) = self.metrics_repo.save_request_logs(&[]) {
+            eprintln!("[proxy-guard] Warning: Failed to clear persisted request logs: {e}");
         }
     }
 

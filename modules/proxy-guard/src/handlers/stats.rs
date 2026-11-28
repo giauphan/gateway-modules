@@ -8,6 +8,7 @@ use crate::service::ProxyGuardService;
 use serde_json::{json, Value};
 
 pub fn handle_get_metrics(service: &ProxyGuardService) -> Value {
+    service.reload_live_state();
     let metrics = service.get_metrics();
     let total_bytes = metrics
         .bytes_saved
@@ -56,6 +57,7 @@ pub fn handle_get_logs(query_val: &Value, service: &ProxyGuardService) -> Value 
         })
         .unwrap_or(50);
 
+    service.reload_live_state();
     let logs = service.get_request_logs(limit);
     let metrics = service.get_metrics();
     let total = metrics.total_requests;

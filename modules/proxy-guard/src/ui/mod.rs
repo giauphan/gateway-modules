@@ -186,6 +186,7 @@ fn render_log_rows(service: &ProxyGuardService) -> (usize, String) {
 }
 
 pub fn render_dashboard_html(service: &ProxyGuardService) -> String {
+    service.reload_live_state();
     let now_secs = current_epoch_secs();
     let metrics = service.get_metrics();
     let proxies = service.list_proxies();

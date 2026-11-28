@@ -50,7 +50,7 @@ gateway-modules/
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`daily-news`** | **Daily News & Content Discovery Service** | `1.3.0` | `/custom/daily-news` | `news`, `content_discovery`, `chat_completions`, `models`, `redis` | [`modules/daily-news`](modules/daily-news) |
 | **`facebook-suite`** | **Meta Business Suite / Facebook Creator Studio Adapter** | `1.0.0` | `/custom/facebook` | `studio`, `composer`, `upload`, `publish`, `reels`, `stories`, `auto_translate` | [`modules/facebook-suite`](modules/facebook-suite) |
-| **`proxy-guard`** | **Proxy Guard & Traffic Optimizer** | `1.16.0` | `/custom/proxy-guard` | `traffic_optimization`, `adblock`, `proxy_interception`, `analytics_filtering`, `bandwidth_saving`, `mcp` | [`modules/proxy-guard`](modules/proxy-guard) |
+| **`proxy-guard`** | **Proxy Guard & Traffic Optimizer** | `1.16.1` | `/custom/proxy-guard` | `traffic_optimization`, `adblock`, `proxy_interception`, `analytics_filtering`, `bandwidth_saving`, `mcp` | [`modules/proxy-guard`](modules/proxy-guard) |
 
 ### Module Highlights: `proxy-guard`
 - **Native Rust Proxy Bandwidth Saver**: Cuts paid proxy traffic by 70%–95% per flow by intercepting heavy media, tracking beacons, ads, and telemetry at the early `HTTP CONNECT` stage (zero MITM, preserving client TLS JA3/JA4 fingerprints).
